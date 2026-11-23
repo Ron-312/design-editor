@@ -56,3 +56,39 @@ jobs:
             ${{ matrix.files }}
             app-${{ matrix.os }}.png
           retention-days: 14
+
+  # A v* tag publishes the tested installers; any other push only keeps them as CI artifacts.
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the tag matches package.json
+        run: |
+          version=$(node -p "require('./package.json').version")
+          if [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match package.json version ${version}"
+            exit 1
+          fi
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: installer-*
+          path: installers
+          merge-multiple: true
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > notes.md <<'NOTES'
+          ## Install
+
+          - **macOS:** open the `.dmg` for your Mac (`arm64` for Apple silicon, `x64` for Intel) and drag Design Editor to Applications. The app is not notarized yet, so the first time, right-click it and choose **Open**.
+          - **Windows:** run the `win-x64.exe` installer. Windows SmartScreen may warn about an unknown publisher; choose **More info → Run anyway**.
+
+          Then open a canvas folder made by `/design-pull` in Claude Code.
+          NOTES
+          gh release create "${GITHUB_REF_NAME}" installers/*.dmg installers/*.exe \
+            --title "Design Editor ${GITHUB_REF_NAME}" --notes-file notes.md --generate-notes --verify-tag
