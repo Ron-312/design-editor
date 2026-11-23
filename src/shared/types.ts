@@ -4,6 +4,12 @@ type Brand<T, B extends string> = T & { readonly [brand]: B }
 /** Server-owned element id, allocated once per session and never reused. Never written to disk. */
 export type EdId = Brand<string, 'EdId'>
 
+const ED_ID_FORMAT = /^[a-z][a-z0-9]*$/i
+
+export function isEdId(value: unknown): value is EdId {
+  return typeof value === 'string' && ED_ID_FORMAT.test(value)
+}
+
 /** A rule inside a `<helmet><style>` block (or a stylesheet on the plain-HTML branch). */
 export type RuleId = Brand<string, 'RuleId'>
 

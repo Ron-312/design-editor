@@ -4,6 +4,7 @@ import { findStoredPath } from '../shared/paths'
 import type { BoardIndex, ClientMessage, EditorState, ServerMessage } from '../shared/protocol'
 import { LEASE, type PushLock } from '../shared/sync'
 import type { CanvasLayout, EdId, EditOp, ProjectPath, StyleSource } from '../shared/types'
+import { parseClientMessage } from './client-message'
 import { UndoLog } from './edit/undo-log'
 import { contentHash, Writer } from './edit/writer'
 import { readCanvasLayout, readEditorState, syncedText, writeEditorState } from './editor-services'
@@ -43,14 +44,6 @@ function stylesOf(indexed: IndexedFile): Record<EdId, readonly StyleSource[]> {
 /** Background work has no caller to fail to: a failure is reported and the session carries on. */
 function inBackground(task: Promise<void>): void {
   task.catch((error: Error) => console.warn(`editor session: ${error.message}`))
-}
-
-function parseClientMessage(data: WebSocket.RawData): ClientMessage | null {
-  try {
-    return JSON.parse(data.toString()) as ClientMessage
-  } catch {
-    return null
-  }
 }
 
 /** The edit session behind the editor ws: one Writer and UndoLog for the project, gated by the push lock. */

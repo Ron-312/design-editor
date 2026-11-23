@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import MagicString from 'magic-string'
 import type { EditorState } from '../../shared/protocol'
-import type { EdId, ElementLocation } from '../../shared/types'
+import { isEdId, type EdId, type ElementLocation } from '../../shared/types'
 import type { IndexedFile } from '../source/source-index'
 
 export interface ServeOptions extends Pick<EditorState, 'hidden' | 'locked'> {
@@ -54,8 +54,9 @@ function probeOffset(text: string, elements: readonly LocatedElement[]): number 
 }
 
 function hideStyle(hidden: readonly EdId[]): string {
-  if (hidden.length === 0) return ''
-  const selectors = hidden.map((id) => `[data-ed-id="${id}"]`).join(',')
+  const ids = hidden.filter(isEdId)
+  if (ids.length === 0) return ''
+  const selectors = ids.map((id) => `[data-ed-id="${id}"]`).join(',')
   return `<style>${selectors}{display:none!important}</style>`
 }
 

@@ -659,6 +659,23 @@ describe('editor state and revert through the session', () => {
     expect(served.body).toMatch(new RegExp(`\\[data-ed-id="${h1}"\\][^{]*\\{display:\\s*none`))
   })
 
+  it('drops malformed messages and a malformed editor state, and keeps serving the client', async () => {
+    const { root, client, h1 } = await sessionOn()
+    const raw = (message: unknown) => client.send(message as ClientMessage)
+
+    raw({ type: 'saveEditorState', state: { hidden: ['x"],body{display:none}[x="'], locked: [], collapsed: [], boards: {} } })
+    raw({ type: 'saveEditorState', state: { hidden: 'e1' } })
+    raw({ type: 'op', opId: 'bad-1', op: { kind: 'setDecl', target: h1, payload: { prop: 'color' } } })
+    raw({ type: 'op', opId: 'bad-2', op: { kind: 'eval', target: [h1], payload: {} } })
+    raw({ type: 'resolvePending', file: HOME })
+    raw({ type: 'open' })
+    raw(null)
+
+    await acked(client, op('setDecl', [h1], { prop: 'font-size', value: '56px' }))
+    expect(existsSync(path.join(root, '.editor', 'state.json'))).toBe(false)
+    expect(client.messages.some((message) => 'opId' in message && message.opId.startsWith('bad-'))).toBe(false)
+  })
+
   it('revertFile writes the synced commit’s exact bytes as one undoable entry, not as an outside edit', async () => {
     const crlfWithBom = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(HOME_TEXT.replace(/\n/g, '\r\n'))])
     const { root, client, h1, firstCol } = await sessionOn(crlfWithBom)

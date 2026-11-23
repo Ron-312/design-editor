@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import dns from 'node:dns'
-import { mkdir, rm } from 'node:fs/promises'
+import { chmod, mkdir, rm } from 'node:fs/promises'
 import type { AddressInfo } from 'node:net'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -64,6 +64,8 @@ async function onPort<T>(port: number, start: () => Promise<T>): Promise<T> {
   }
 }
 
+const OWNER_ONLY = 0o600
+
 function serverJsonOf(root: string): string {
   return path.join(root, ...EDITOR_FILES.server.split('/'))
 }
@@ -71,7 +73,8 @@ function serverJsonOf(root: string): string {
 async function writeServerJson(root: string, info: ServerInfo & { readonly projectPort: number }): Promise<void> {
   const file = serverJsonOf(root)
   await mkdir(path.dirname(file), { recursive: true })
-  await atomicWrite(file, Buffer.from(`${JSON.stringify(info, null, 2)}\n`))
+  await atomicWrite(file, Buffer.from(`${JSON.stringify(info, null, 2)}\n`), { mode: OWNER_ONLY })
+  await chmod(file, OWNER_ONLY).catch(() => undefined)
 }
 
 async function prepare(root: string): Promise<{ probeScript: string; session: EditSession }> {
@@ -99,6 +102,7 @@ export async function startEditor(options: StartOptions): Promise<Editor> {
   let editorServer: EditorServer | undefined
   let watcher: ProjectWatcher | undefined
   let closing: Promise<void> | undefined
+  let wroteServerJson = false
   let markClosed!: () => void
   const closed = new Promise<void>((resolve) => (markClosed = resolve))
 
@@ -108,7 +112,7 @@ export async function startEditor(options: StartOptions): Promise<Editor> {
       await session?.close()
       await editorServer?.close()
       await projectServer?.close()
-      await rm(serverJsonOf(root), { force: true })
+      if (wroteServerJson) await rm(serverJsonOf(root), { force: true })
       markClosed()
     })())
 
@@ -153,6 +157,7 @@ export async function startEditor(options: StartOptions): Promise<Editor> {
       onOutsideChange: (file) => opened.outsideChange(file),
       onWarning: (message) => console.warn(message),
     })
+    wroteServerJson = true
     await writeServerJson(root, { port: options.port, projectPort, token, pid: process.pid, startedAt: Date.now() })
   } catch (error) {
     await close()

@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import dns from 'node:dns'
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import net from 'node:net'
 import { tmpdir } from 'node:os'
@@ -229,6 +229,26 @@ describe('startEditor', () => {
 
     await launch(root, port)
     expect(readServerJson(root).token).not.toBe(first.token)
+  })
+
+  it('keeps the running editor\'s server.json when a second start on the same port fails', async () => {
+    const root = makeProject()
+    const port = await freePortPair()
+    await launch(root, port)
+    const running = readServerJson(root)
+
+    await expect(startEditor({ projectDir: root, port, dev: false, uiDir })).rejects.toThrow(inUseMessage(port))
+
+    expect(readServerJson(root)).toEqual(running)
+  })
+
+  it.skipIf(ON_WINDOWS)('writes server.json readable by its owner only', async () => {
+    const root = makeProject()
+    const port = await freePortPair()
+
+    await launch(root, port)
+
+    expect(statSync(serverJsonOf(root)).mode & 0o777).toBe(0o600)
   })
 
   it('opens a project whose path has spaces and non-ASCII characters', async () => {

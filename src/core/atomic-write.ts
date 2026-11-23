@@ -26,6 +26,6 @@ export async function retryWhileLocked<T>(operation: () => Promise<T>): Promise<
 }
 
 /** Temp file in the target's directory, fsync, rename: a reader sees the old bytes or the new, never a mix. */
-export function atomicWrite(file: string, bytes: Buffer): Promise<void> {
-  return retryWhileLocked(() => writeFileAtomic(file, bytes))
+export function atomicWrite(file: string, bytes: Buffer, options: { readonly mode?: number } = {}): Promise<void> {
+  return retryWhileLocked(() => writeFileAtomic(file, bytes, options))
 }

@@ -168,3 +168,14 @@ describe('transformServedDocument injects the nonce probe', () => {
     expect(plantedIndex.ids).toContain(attrOf(support, 'data-ed-id'))
   })
 })
+
+describe('transformServedDocument hides layers', () => {
+  it('writes a hide rule for well-formed ids and drops any id that could break out of the selector or the <style>', () => {
+    const indexed = indexText(readFixtureText(HOME_FILE))
+    const [first] = indexed.ids
+    const hostile = ['x"],body{display:none}[x="', '</style><script>alert(1)</script>', 'e1 e2'] as EdId[]
+    const { html } = transformServedDocument(indexed, { probeScript: PROBE_SCRIPT, hidden: [first!, ...hostile], locked: [] })
+    expect(html).toContain(`<style>[data-ed-id="${first}"]{display:none!important}</style>`)
+    for (const id of hostile) expect(html).not.toContain(id)
+  })
+})

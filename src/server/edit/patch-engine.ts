@@ -3,14 +3,13 @@ import type { DefaultTreeAdapterTypes } from 'parse5'
 import type { EdId, EditOp, EditRecord, EditScope, OpOf, ReadOnlyReason, RuleId, TemplateNode } from '../../shared/types'
 import { dominantEol, lineLocator } from '../source/bytes'
 import type { IndexedFile } from '../source/source-index'
-import { hasHole, indexHelmetRules, type HelmetRule, type IndexedDeclaration } from '../source/style-index'
+import { hasHole, indexHelmetRules, parsesAsOneDeclaration, type HelmetRule, type IndexedDeclaration } from '../source/style-index'
 import { attrValue } from '../source/template-tree'
 import { ParsedSource, shapeMismatch, type Shape } from './shape-check'
 import { planStructuralOp, STRUCTURAL_KINDS, type StructuralContext, type StructuralKind } from './structural-ops'
 import {
   appendDeclarationSplice,
   attrValueOf,
-  escapeAttr,
   lastDeclaration,
   LIVE_VALUE,
   refuse,
@@ -50,6 +49,26 @@ const READ_ONLY: Readonly<Record<ReadOnlyReason, string>> = {
 }
 
 const INLINE_CHILDREN = 'this text has inline children; edit in source'
+
+const CSS_PROPERTY_NAME = /^(?:--[\w-]+|-?[a-z][a-z0-9-]*)$/i
+const RULE_VALUE_BREAKOUT = /[;{}]|<\/style/i
+
+function requireCssPropertyName(prop: string): void {
+  if (!CSS_PROPERTY_NAME.test(prop)) refuse(`${JSON.stringify(prop)} is not a CSS property name`)
+}
+
+function requireSingleDeclaration(prop: string, value: string): void {
+  if (!parsesAsOneDeclaration(prop, value)) refuse(`${JSON.stringify(value)} is not a single ${prop} value; edit in source`)
+}
+
+/** The value as it can sit inside a style attribute: CSS strings take the other quote, and no character reference may appear, since the style index reads the raw attribute. */
+function inlineStyleValue(value: string, quote: '"' | "'" | ''): string {
+  const attrQuote = quote || '"'
+  const otherQuote = attrQuote === '"' ? "'" : '"'
+  const written = value.includes(otherQuote) ? value : value.replaceAll(attrQuote, otherQuote)
+  if (written.includes(attrQuote) || written.includes('&')) refuse('this value has characters a style attribute cannot hold; edit in source')
+  return written
+}
 
 type DeclarationOp = OpOf<'setDecl'> | OpOf<'removeDecl'>
 
@@ -182,7 +201,10 @@ class Flush {
   private planDeclaration(op: DeclarationOp): void {
     const { prop, rule } = op.payload
     const after = op.kind === 'setDecl' ? op.payload.value : null
+    requireCssPropertyName(prop)
+    if (after !== null) requireSingleDeclaration(prop, after)
     if (rule) {
+      if (after !== null && RULE_VALUE_BREAKOUT.test(after)) refuse(`${JSON.stringify(after)} cannot be written into a rule; edit in source`)
       const before = this.patchDeclarations(op, this.ruleById(rule).declarations, null, (value) => value)
       return this.record(op, prop, before, after, { kind: 'rule', rule })
     }
@@ -197,12 +219,13 @@ class Flush {
     if (!style || !attr) {
       if (op.kind === 'removeDecl') refuse(`there is no ${op.payload.prop} declaration to remove`)
       const { prop, value, important } = op.payload
-      this.splices.push(setAttrSplice(this.text, location.startTag, undefined, 'style', `${prop}: ${value}${important ? ' !important' : ''}`))
+      const declaration = `${prop}: ${inlineStyleValue(value, '"')}${important ? ' !important' : ''}`
+      this.splices.push(setAttrSplice(this.text, location.startTag, undefined, 'style', declaration))
       return null
     }
     const styleValue = attrValueOf(this.text, attr)!
     const emptyAt = this.text.slice(styleValue.range.start, styleValue.range.end).trim() === '' ? styleValue.range.start : null
-    return this.patchDeclarations(op, style.declarations, emptyAt, (value) => escapeAttr(value, styleValue.quote))
+    return this.patchDeclarations(op, style.declarations, emptyAt, (value) => inlineStyleValue(value, styleValue.quote))
   }
 
   /** Splices one declaration list and returns the value it had. */
@@ -272,7 +295,8 @@ class Flush {
         refuse(element.childNodes.some((node) => 'value' in node && hasHole(node.value)) ? LIVE_VALUE : INLINE_CHILDREN)
       }
       const node = element.childNodes[0] as TextNode
-      this.splices.push(setTextSplice(this.text, node, op.payload.text))
+      const splice = setTextSplice(this.text, node, op.payload.text.replace(/\r\n?/g, '\n'), dominantEol(this.text))
+      if (splice) this.splices.push(splice)
       return node.value
     })
     this.record(op, null, sharedValue(before), op.payload.text, this.elementScope(op.target))

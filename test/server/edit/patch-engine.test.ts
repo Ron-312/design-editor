@@ -142,6 +142,41 @@ describe('setDecl on an inline style', () => {
   })
 })
 
+describe('values a style attribute must hold verbatim', () => {
+  it('writes the CSS strings of a value in single quotes inside a double-quoted style, so the re-index reads the same declaration', () => {
+    const { index, indexed, engine, text } = openHome()
+    const h1 = findId(indexed, /^<h1/)
+    const outcome = applied(engine.apply(indexed, [setDecl(h1, 'font-family', '"Inter", "Helvetica Neue", sans-serif')]))
+    expect(outcome.text).toBe(
+      replaceOnce(text, 'style="margin: 0; font-size: 48px"', 'style="margin: 0; font-size: 48px; font-family: \'Inter\', \'Helvetica Neue\', sans-serif"'),
+    )
+    const declarations = index.indexFile(HOME, outcome.text, outcome.offsets).inlineStyle(h1)!.declarations
+    expect(declarations.map(({ prop, value }) => [prop, value])).toEqual([
+      ['margin', '0'],
+      ['font-size', '48px'],
+      ['font-family', "'Inter', 'Helvetica Neue', sans-serif"],
+    ])
+  })
+
+  it('writes double-quoted CSS strings into a new style attribute without character references', () => {
+    const { indexed, engine, text } = open(canvas('<p class="a">x</p>'))
+    const outcome = applied(engine.apply(indexed, [setDecl(findId(indexed, /^<p/), 'font-family', '"Inter"')]))
+    expect(outcome.text).toBe(replaceOnce(text, '<p class="a">', '<p class="a" style="font-family: \'Inter\'">'))
+  })
+
+  it('refuses a value that holds both quote kinds or a character reference', () => {
+    const { indexed, engine } = openHome()
+    const h1 = findId(indexed, /^<h1/)
+    expect(engine.apply(indexed, [setDecl(h1, 'content', `"it's"`)]).ok).toBe(false)
+    expect(engine.apply(indexed, [setDecl(h1, 'content', '"a&amp;b"')]).ok).toBe(false)
+  })
+
+  it('refuses a value that would add a second declaration', () => {
+    const { indexed, engine } = openHome()
+    expect(engine.apply(indexed, [setDecl(findId(indexed, /^<h1/), 'color', 'red; background: blue')]).ok).toBe(false)
+  })
+})
+
 describe('removeDecl on an inline style', () => {
   it('removes a middle declaration and its separator only', () => {
     const { indexed, engine, text } = openHome()
@@ -272,6 +307,27 @@ describe('<helmet><style> rule target', () => {
   })
 })
 
+describe('injection into a <helmet><style> rule', () => {
+  const ruleOf = (indexed: IndexedFile) => indexed.findRule('.page', 0)!.id
+
+  it.each(['padding;color', 'padding:1px;color', 'pad ding', '}body{color'])('refuses the property name %j', (prop) => {
+    const { indexed, engine } = openHome()
+    expect(engine.apply(indexed, [setRuleDecl(findId(indexed, /^<main/), ruleOf(indexed), prop, '1px')]).ok).toBe(false)
+  })
+
+  it.each(['1px; color: red', '1px } body { color: red', '1px {', '"</StYlE><script>x()</script>"'])('refuses the value %j', (value) => {
+    const { indexed, engine } = openHome()
+    expect(engine.apply(indexed, [setRuleDecl(findId(indexed, /^<main/), ruleOf(indexed), 'padding', value)]).ok).toBe(false)
+  })
+
+  it('takes a custom property name', () => {
+    const { indexed, engine, text } = openHome()
+    const outcome = applied(engine.apply(indexed, [setRuleDecl(findId(indexed, /^<main/), ruleOf(indexed), '--gap', '4px')]))
+    expect(outcome.text).toContain('--gap: 4px')
+    expect(outcome.text.length).toBe(text.length + '; --gap: 4px'.length)
+  })
+})
+
 describe('multi-target setDecl', () => {
   it('writes each target\'s own inline style and yields one record for all of them', () => {
     const { indexed, engine, text } = openHome()
@@ -292,6 +348,17 @@ describe('setAttr', () => {
     const outcome = applied(engine.apply(indexed, [setAttr(img, 'alt', 'Logo')]))
     expect(outcome.text).toBe(replaceOnce(text, 'alt="Studio mark"', 'alt="Logo"'))
     expect(outcome.records[0]).toMatchObject({ target: [img], kind: 'setAttr', prop: 'alt', before: 'Studio mark', after: 'Logo' })
+  })
+
+  it.each(['onclick="x()" title', 'a b', 'x>', '"', "it's", 'a=b', 'a/b', ''])('refuses the attribute name %j', (name) => {
+    const { indexed, engine } = open(canvas('<p class="a">x</p>'))
+    expect(refusalOf(engine.apply(indexed, [setAttr(findId(indexed, /^<p/), name, 'v')]))).toMatch(/not an attribute name/)
+  })
+
+  it('takes data- and aria- attribute names', () => {
+    const { indexed, engine, text } = open(canvas('<p class="a">x</p>'))
+    const outcome = applied(engine.apply(indexed, [setAttr(findId(indexed, /^<p/), 'data-x:y.z', 'v')]))
+    expect(outcome.text).toBe(replaceOnce(text, '<p class="a">', '<p class="a" data-x:y.z="v">'))
   })
 
   it('adds an attribute the element does not have', () => {
@@ -327,6 +394,19 @@ describe('setText', () => {
     const { indexed, engine, text } = open(canvas('<p>old</p>'))
     const outcome = applied(engine.apply(indexed, [setText(findId(indexed, /^<p/), 'Salt & <b>\u00a0"x" > y\'s')]))
     expect(outcome.text).toBe(replaceOnce(text, '<p>old</p>', '<p>Salt &amp; &lt;b>&nbsp;"x" > y\'s</p>'))
+  })
+
+  it('keeps the CRLF line breaks of a multi-line text in a CRLF file and writes new ones as CRLF', () => {
+    const { indexed, engine, text } = open(canvas('<p>first line\nsecond line</p>').replace(/\n/g, '\r\n'))
+    const outcome = applied(engine.apply(indexed, [setText(findId(indexed, /^<p/), 'first line\nsecond line\nthird line')]))
+    expect(outcome.text).toBe(replaceOnce(text, 'second line</p>', 'second line\r\nthird line</p>'))
+  })
+
+  it('leaves a CRLF file byte-identical when the text does not change', () => {
+    const { indexed, engine, text } = open(canvas('<p>first line\nsecond line</p>').replace(/\n/g, '\r\n'))
+    const outcome = applied(engine.apply(indexed, [setText(findId(indexed, /^<p/), 'first line\nsecond line')]))
+    expect(outcome.text).toBe(text)
+    expect(outcome.offsets).toEqual(indexed.startOffsets())
   })
 
   it('records the source text before and the new text after', () => {

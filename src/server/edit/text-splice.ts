@@ -1,5 +1,6 @@
 import { parseFragment, type DefaultTreeAdapterTypes } from 'parse5'
 import type { EdId, SourceRange } from '../../shared/types'
+import type { Eol } from '../source/bytes'
 import type { IndexedDeclaration } from '../source/style-index'
 
 type TextNode = DefaultTreeAdapterTypes.TextNode
@@ -55,7 +56,10 @@ function attrInsertionPoint(text: string, startTag: SourceRange): number {
   return at
 }
 
+const HTML_ATTRIBUTE_NAME = /^[^\s"'<>/=\p{Cc}]+$/u
+
 export function setAttrSplice(text: string, startTag: SourceRange, attr: SourceRange | undefined, name: string, value: string): Splice {
+  if (!HTML_ATTRIBUTE_NAME.test(name)) refuse(`${JSON.stringify(name)} is not an attribute name`)
   if (!attr) {
     const at = attrInsertionPoint(text, startTag)
     return { start: at, end: at, content: ` ${name}="${escapeAttr(value, '"')}"` }
@@ -127,33 +131,41 @@ interface TextUnit {
 }
 
 const CHARACTER_REFERENCE = /&(?:#\d+;?|#x[0-9a-f]+;?|[a-z][a-z0-9]*;?)/iy
+const LINE_BREAK = /\r\n?/y
 
 function decodeReference(reference: string): string {
   const [node] = parseFragment(reference).childNodes
   return node && 'value' in node ? node.value : reference
 }
 
-/** The source text split into single characters and whole character references, each with what it spells. */
+function unitAt(text: string, at: number, end: number): TextUnit {
+  LINE_BREAK.lastIndex = at
+  const lineBreak = LINE_BREAK.exec(text)?.[0]
+  if (lineBreak) return { raw: { start: at, end: Math.min(end, at + lineBreak.length) }, decoded: '\n' }
+  CHARACTER_REFERENCE.lastIndex = at
+  const reference = CHARACTER_REFERENCE.exec(text)?.[0]
+  const unitEnd = Math.min(end, at + (reference?.length ?? 1))
+  const raw = text.slice(at, unitEnd)
+  return { raw: { start: at, end: unitEnd }, decoded: reference ? decodeReference(raw) : raw }
+}
+
+/** The source text split into single characters, line breaks and whole character references, each with what it spells as parse5 reads it. */
 function textUnits(text: string, range: SourceRange): TextUnit[] {
   const units: TextUnit[] = []
-  let at = range.start
-  while (at < range.end) {
-    CHARACTER_REFERENCE.lastIndex = at
-    const reference = CHARACTER_REFERENCE.exec(text)?.[0]
-    const end = Math.min(range.end, at + (reference?.length ?? 1))
-    const raw = text.slice(at, end)
-    units.push({ raw: { start: at, end }, decoded: reference ? decodeReference(raw) : raw })
-    at = end
+  for (let at = range.start; at < range.end; ) {
+    const unit = unitAt(text, at, range.end)
+    units.push(unit)
+    at = unit.raw.end
   }
   return units
 }
 
-function encodeText(text: string): string {
-  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/\u00a0/g, '&nbsp;')
+function encodeText(text: string, eol: Eol): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/\u00a0/g, '&nbsp;').replace(/\r\n?|\n/g, eol)
 }
 
-/** Splices only the span that differs from the source text node, so untouched entity spellings stay byte-identical. */
-export function setTextSplice(text: string, node: TextNode, next: string): Splice {
+/** Splices only the span that differs from the source text node, so untouched entity spellings and line breaks stay byte-identical; null when nothing differs. */
+export function setTextSplice(text: string, node: TextNode, next: string, eol: Eol): Splice | null {
   const location = node.sourceCodeLocation!
   const units = textUnits(text, { start: location.startOffset, end: location.endOffset })
   let head = 0
@@ -164,7 +176,8 @@ export function setTextSplice(text: string, node: TextNode, next: string): Splic
   while (tail > head && nextEnd - units[tail - 1]!.decoded.length >= nextStart && next.endsWith(units[tail - 1]!.decoded, nextEnd)) {
     nextEnd -= units[--tail]!.decoded.length
   }
+  if (head === tail && nextStart === nextEnd) return null
   const start = units[head]?.raw.start ?? location.endOffset
   const end = tail > head ? units[tail - 1]!.raw.end : start
-  return { start, end, content: encodeText(next.slice(nextStart, nextEnd)) }
+  return { start, end, content: encodeText(next.slice(nextStart, nextEnd), eol) }
 }

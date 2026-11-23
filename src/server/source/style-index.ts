@@ -45,6 +45,14 @@ function parseCss(css: string): Root | null {
   }
 }
 
+/** True when `prop: value` reads back as exactly that one declaration. */
+export function parsesAsOneDeclaration(prop: string, value: string): boolean {
+  const root = parseCss(`${prop}: ${value}`)
+  const [only, ...rest] = root?.nodes ?? []
+  if (!only || rest.length > 0 || only.type !== 'decl') return false
+  return only.prop === prop && (only.raws.value?.raw ?? only.value) === maskHoles(value).trim() && !only.important
+}
+
 function indexDeclaration(text: string, base: number, declaration: Declaration): IndexedDeclaration {
   const start = base + declaration.source!.start!.offset
   const valueStart = start + declaration.prop.length + declaration.raws.between!.length
