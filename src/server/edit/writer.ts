@@ -307,9 +307,9 @@ export class Writer {
     }
   }
 
-  /** Structural ops carry the flush's minted ids and warnings; the engine collects both per flush, not per op. */
+  /** Structural ops and insertHtml carry the flush's minted ids and warnings; the engine collects both per flush, not per op. */
   private acks(indexed: IndexedFile, pending: PendingOp, record: EditRecord, minted: readonly EdId[], flushWarnings: readonly string[]): ServerMessage[] {
-    const structural = STRUCTURAL_KINDS.has(pending.op.kind)
+    const structural = STRUCTURAL_KINDS.has(pending.op.kind) || pending.op.kind === 'insertHtml'
     const mintedIds = structural ? minted : []
     const warnings = structural ? flushWarnings : []
     const locations = locationsOf(indexed, [...record.target, ...mintedIds])

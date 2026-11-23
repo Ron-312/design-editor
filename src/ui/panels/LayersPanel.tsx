@@ -10,11 +10,13 @@ import {
 } from 'react'
 import { isVoidElement, nestingViolation } from '../../shared/content-model'
 import { applyStructural } from '../actions/layer.actions'
+import { expandableWithin, isExpandable } from '../actions/layers-panel.actions'
 import type { Platform } from '../actions/registry'
 import type { EditorState } from '../../shared/protocol'
-import type { EdId, TemplateNode } from '../../shared/types'
+import type { EdId, EditOp, TemplateNode } from '../../shared/types'
 import type { EditorContext } from '../plugin-api'
-import { Icon, type IconName } from './fields'
+import { Icon } from './fields'
+import { LAYOUT_PROPS, LayerTypeIcon, layerTypeOf, layoutOf, type LayerType, type Layout } from './layer-icons'
 
 export interface LayersPanelProps {
   readonly ctx: EditorContext
@@ -48,7 +50,7 @@ interface PendingDrag {
 }
 
 const DRAG_THRESHOLD = 4
-const TEXT_TAGS = new Set(['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'span', 'a', 'label', 'li', 'strong', 'em', 'small'])
+const LAYER_NAME = 'data-layer-name'
 
 function visibleRows(tree: TemplateNode, collapsed: readonly EdId[]): LayerRow[] {
   const rows: LayerRow[] = []
@@ -132,13 +134,43 @@ function toggled(edIds: readonly EdId[], edId: EdId): EdId[] {
   return edIds.includes(edId) ? edIds.filter((other) => other !== edId) : [...edIds, edId]
 }
 
-function iconFor(node: TemplateNode, depth: number): IconName {
-  if (depth === 0) return 'frame'
-  if (node.kind === 'sc-for') return 'grid'
-  if (node.kind === 'sc-if') return 'code'
-  if (node.kind === 'dc-import') return 'file'
-  if (node.tag === 'img' || node.tag === 'picture' || node.tag === 'svg') return 'image'
-  return TEXT_TAGS.has(node.tag) ? 'text' : 'box'
+/** Alt-click opens or closes the whole subtree, following the clicked layer's own state. */
+function withSubtreeToggled(collapsed: readonly EdId[], node: TemplateNode): EdId[] {
+  const subtree = expandableWithin(node)
+  const rest = collapsed.filter((edId) => !subtree.includes(edId))
+  return collapsed.includes(node.edId) ? rest : [...rest, ...subtree]
+}
+
+function canRename(node: TemplateNode, readOnly: boolean): boolean {
+  return !readOnly && node.readOnly !== 'dc-import'
+}
+
+/** An empty name drops the attribute, so the layer falls back to its id, class or tag. */
+function renameOp(edId: EdId, name: string): EditOp {
+  return name === ''
+    ? { target: [edId], kind: 'removeAttr', payload: { name: LAYER_NAME } }
+    : { target: [edId], kind: 'setAttr', payload: { name: LAYER_NAME, value: name } }
+}
+
+/** The live page decides flex and grid, so the panel reads each element's computed display. */
+function useLiveLayouts(ctx: EditorContext, tree: TemplateNode | undefined): ReadonlyMap<EdId, Layout | null> {
+  const [layouts, setLayouts] = useState<ReadonlyMap<EdId, Layout | null>>(new Map())
+  useEffect(() => {
+    if (!tree) return
+    let current = true
+    const elements = renderedNodes(tree).filter((node) => node.kind === 'element')
+    const reads = elements.map(async (node) => [node.edId, layoutOf((await ctx.read({ kind: 'computed', edId: node.edId, props: LAYOUT_PROPS })).values)] as const)
+    Promise.all(reads)
+      .then((entries) => {
+        if (current) setLayouts(new Map(entries))
+      })
+      // A reload rejects reads in flight; the reload's new index reads again.
+      .catch(() => {})
+    return () => {
+      current = false
+    }
+  }, [ctx, tree])
+  return layouts
 }
 
 function useUnrendered(ctx: EditorContext, tree: TemplateNode | undefined): ReadonlySet<EdId> {
@@ -165,6 +197,8 @@ export function LayersPanel({ ctx, platform, onEditorStateChange }: LayersPanelP
   const selectionKey = useSyncExternalStore(ctx.onChange, () => ctx.selection()?.edIds.join(' ') ?? '')
   const readOnly = useSyncExternalStore(ctx.onChange, ctx.readOnly)
   const unrendered = useUnrendered(ctx, index?.tree)
+  const layouts = useLiveLayouts(ctx, index?.tree)
+  const [renaming, setRenaming] = useState<EdId | null>(null)
   const [drag, setDrag] = useState<Drag | null>(null)
   const pending = useRef<PendingDrag | null>(null)
   const [query, setQuery] = useState('')
@@ -173,18 +207,6 @@ export function LayersPanel({ ctx, platform, onEditorStateChange }: LayersPanelP
   const selected = new Set(selectionKey.split(' '))
   const finding = query.trim().toLowerCase()
   const rows = !index ? [] : finding ? foundRows(index.tree, finding) : visibleRows(index.tree, editorState.collapsed)
-
-  useEffect(() => {
-    const focusSearch = (event: globalThis.KeyboardEvent) => {
-      const mod = platform === 'mac' ? event.metaKey : event.ctrlKey
-      if (!mod || event.shiftKey || event.altKey || event.key.toLowerCase() !== 'f') return
-      event.preventDefault()
-      search.current?.focus()
-      search.current?.select()
-    }
-    document.addEventListener('keydown', focusSearch)
-    return () => document.removeEventListener('keydown', focusSearch)
-  }, [platform])
 
   function onSearchKey(event: KeyboardEvent<HTMLInputElement>) {
     if (event.key !== 'Escape') return
@@ -200,7 +222,7 @@ export function LayersPanel({ ctx, platform, onEditorStateChange }: LayersPanelP
 
   function onPointerDown(event: PointerEvent<HTMLDivElement>) {
     const target = event.target as Element
-    if (event.button !== 0 || target.closest('button')) return
+    if (event.button !== 0 || target.closest('button, input')) return
     const id = target.closest<HTMLElement>('[role="treeitem"]')?.dataset.layerId
     const source = rows.find((row) => row.node.edId === id)
     if (!source || !canDrag(source, editorState, readOnly)) return
@@ -245,6 +267,22 @@ export function LayersPanel({ ctx, platform, onEditorStateChange }: LayersPanelP
     onEditorStateChange({ ...state, [key]: toggled(state[key], edId) })
   }
 
+  function toggleSubtree(node: TemplateNode) {
+    ctx.setEditorState({ collapsed: withSubtreeToggled(ctx.editorState().collapsed, node) })
+  }
+
+  function startRename(node: TemplateNode) {
+    if (canRename(node, readOnly)) setRenaming(node.edId)
+  }
+
+  /** `name` is null when the rename was cancelled; `moveOn` hands the field to the next layer that can take a name. */
+  function endRename(row: LayerRow, name: string | null, moveOn: boolean) {
+    const trimmed = name?.trim()
+    if (trimmed !== undefined && trimmed !== row.node.name) void ctx.apply(renameOp(row.node.edId, trimmed)).catch(() => {})
+    const next = moveOn ? rows.slice(rows.indexOf(row) + 1).find((candidate) => canRename(candidate.node, readOnly)) : undefined
+    setRenaming(next?.node.edId ?? null)
+  }
+
   return (
     <nav className="layers" aria-label="Layers">
       <style>{PANEL_CSS}</style>
@@ -285,8 +323,13 @@ export function LayersPanel({ ctx, platform, onEditorStateChange }: LayersPanelP
             collapsed={!finding && editorState.collapsed.includes(row.node.edId)}
             dropInvalid={drag !== null && parentRefusal(drag.source, row) !== null}
             dropZone={drag?.spot?.row === row ? drag.spot.zone : null}
+            layerType={layerTypeOf(row.node, row.depth === 0, layouts.get(row.node.edId) ?? null)}
+            renaming={renaming === row.node.edId}
             onSelect={select}
             onToggle={toggleIn}
+            onToggleSubtree={toggleSubtree}
+            onStartRename={startRename}
+            onEndRename={endRename}
           />
         ))}
       </div>
@@ -303,20 +346,39 @@ interface LayerRowViewProps {
   readonly collapsed: boolean
   readonly dropInvalid: boolean
   readonly dropZone: Zone | null
+  readonly layerType: LayerType
+  readonly renaming: boolean
   readonly onSelect: (edId: EdId, additive: boolean) => void
   readonly onToggle: (key: 'hidden' | 'locked' | 'collapsed', edId: EdId) => void
+  readonly onToggleSubtree: (node: TemplateNode) => void
+  readonly onStartRename: (node: TemplateNode) => void
+  readonly onEndRename: (row: LayerRow, name: string | null, moveOn: boolean) => void
 }
 
-function LayerRowView({ row, selected, dimmed, hidden, locked, collapsed, dropInvalid, dropZone, onSelect, onToggle }: LayerRowViewProps) {
+function LayerRowView(props: LayerRowViewProps) {
+  const { row, selected, dimmed, hidden, locked, collapsed, dropInvalid, dropZone, layerType, renaming } = props
+  const { onSelect, onToggle, onToggleSubtree, onStartRename, onEndRename } = props
   const { node, depth } = row
-  const expandable = node.kind !== 'dc-import' && node.children.length > 0
+  const expandable = isExpandable(node)
   const isRoot = depth === 0
+  const element = useRef<HTMLDivElement>(null)
 
   function toggle(key: 'hidden' | 'locked' | 'collapsed') {
     return (event: MouseEvent) => {
       event.stopPropagation()
       onToggle(key, node.edId)
     }
+  }
+
+  function toggleCollapsed(event: MouseEvent) {
+    event.stopPropagation()
+    if (event.altKey) onToggleSubtree(node)
+    else onToggle('collapsed', node.edId)
+  }
+
+  function endRename(name: string | null, moveOn: boolean) {
+    if (!moveOn) element.current?.focus()
+    onEndRename(row, name, moveOn)
   }
 
   function onKeyDown(event: KeyboardEvent) {
@@ -327,6 +389,7 @@ function LayerRowView({ row, selected, dimmed, hidden, locked, collapsed, dropIn
 
   return (
     <div
+      ref={element}
       role="treeitem"
       tabIndex={selected ? 0 : -1}
       data-layer-id={node.edId}
@@ -346,15 +409,19 @@ function LayerRowView({ row, selected, dimmed, hidden, locked, collapsed, dropIn
     >
       <span className="tw">
         {expandable && (
-          <button type="button" aria-label={collapsed ? 'Expand' : 'Collapse'} onClick={toggle('collapsed')}>
+          <button type="button" aria-label={collapsed ? 'Expand' : 'Collapse'} onClick={toggleCollapsed}>
             <Icon name={collapsed ? 'chev-r' : 'chev-d'} />
           </button>
         )}
       </span>
-      <span className="ic">
-        <Icon name={iconFor(node, depth)} />
-      </span>
-      <span className="nm">{node.name}</span>
+      <LayerTypeIcon type={layerType} />
+      {renaming ? (
+        <RenameField name={node.name} onEnd={endRename} />
+      ) : (
+        <span className="nm" onDoubleClick={() => onStartRename(node)}>
+          {node.name}
+        </span>
+      )}
       <span className="tg">{node.tag}</span>
       {!isRoot && (
         <span className="acts">
@@ -367,6 +434,51 @@ function LayerRowView({ row, selected, dimmed, hidden, locked, collapsed, dropIn
         </span>
       )}
     </div>
+  )
+}
+
+interface RenameFieldProps {
+  readonly name: string
+  readonly onEnd: (name: string | null, moveOn: boolean) => void
+}
+
+/** Enter commits, Escape cancels, Tab commits and renames the next layer; leaving the field commits. */
+function RenameField({ name, onEnd }: RenameFieldProps) {
+  const [value, setValue] = useState(name)
+  const field = useRef<HTMLInputElement>(null)
+  // Ending moves focus away, and the blur that follows must not end the rename a second time.
+  const ended = useRef(false)
+
+  useEffect(() => {
+    field.current?.focus()
+    field.current?.select()
+  }, [])
+
+  function end(committed: string | null, moveOn: boolean) {
+    if (ended.current) return
+    ended.current = true
+    onEnd(committed, moveOn)
+  }
+
+  function onKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key === 'Enter') end(value, false)
+    else if (event.key === 'Escape') end(null, false)
+    else if (event.key === 'Tab' && !event.shiftKey) end(value, true)
+    else return
+    event.preventDefault()
+  }
+
+  return (
+    <input
+      ref={field}
+      className="rename"
+      aria-label="Layer name"
+      spellCheck={false}
+      value={value}
+      onChange={(event) => setValue(event.target.value)}
+      onKeyDown={onKeyDown}
+      onBlur={() => end(value, false)}
+    />
   )
 }
 
@@ -393,6 +505,7 @@ const PANEL_CSS = `
 .layers .tw svg.i{width:12px;height:12px}
 .layers .ic{display:grid;color:var(--text-3)}
 .layers .nm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.layers .rename{flex:1;min-width:0;height:22px;font:inherit;color:var(--text);background:var(--field);border:1px solid var(--accent);border-radius:var(--r-xs);padding:0 4px;outline:none;user-select:text}
 .layers .tg{margin-left:4px;color:var(--text-3);font:10px/16px "JetBrains Mono",ui-monospace,monospace}
 .layers .acts{margin-left:auto;display:flex;gap:2px;color:var(--text-3)}
 .layers .acts button{width:20px;height:20px;display:grid;place-items:center;border-radius:var(--r-xs);opacity:0}

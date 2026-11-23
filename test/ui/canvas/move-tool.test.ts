@@ -20,10 +20,11 @@ import {
 
 const VIEW = { zoom: 2, panX: 10, panY: 20 }
 
-// root > card (absolute, left/top), badge (absolute, right/top %), rotated and bare (transformed),
+// root > card and card2 (absolute, left/top), badge (absolute, right/top %), rotated and bare (transformed),
 // row (flex) > a, b, cond (<sc-if>), unrendered, c; col (flex column) > d, e; plain (static, no transform)
 const tree = node('root', [
   node('card'),
+  node('card2'),
   node('badge'),
   node('rotated'),
   node('bare'),
@@ -35,6 +36,7 @@ const tree = node('root', [
 const rects = {
   root: [rect(0, 0, 1280, 900)],
   card: [rect(100, 50, 200, 100)],
+  card2: [rect(350, 200, 100, 50)],
   badge: [rect(1000, 90, 100, 60)],
   rotated: [rect(400, 600, 100, 100)],
   bare: [rect(600, 600, 100, 100)],
@@ -56,6 +58,7 @@ const computed = {
   row: { display: 'flex', 'flex-direction': 'row' },
   col: { display: 'flex', 'flex-direction': 'column' },
   card: { position: 'absolute', transform: 'none', left: '100px', top: '50px', right: '980px', bottom: '750px' },
+  card2: { position: 'absolute', transform: 'none', left: '350px', top: '200px', right: '830px', bottom: '650px' },
   badge: { position: 'absolute', transform: 'none', left: '1000px', top: '90px', right: '180px', bottom: '750px' },
   rotated: { position: 'static', transform: MATRIX },
   bare: { position: 'static', transform: MATRIX },
@@ -69,12 +72,14 @@ const computed = {
 
 const defaultStyles: Record<string, readonly StyleSource[]> = {
   card: inline({ left: '100px', top: '50px' }),
+  card2: inline({ left: '350px', top: '200px' }),
   badge: inline({ right: '20px', top: '10%' }),
   rotated: inline({ transform: 'translate(4px, 6px) rotate(-2deg)' }),
 }
 
 const snap = {
   card: { parent: rects.root[0]!, siblings: [rect(400, 300, 100, 100)] },
+  card2: { parent: rects.root[0]!, siblings: [] },
 }
 
 let move: CanvasTool
@@ -91,9 +96,13 @@ afterEach(() => {
 })
 
 async function selected(id: string, options: { styles?: Record<string, readonly StyleSource[]>; readOnly?: boolean } = {}): Promise<FakeContext> {
+  return selectedAll([id], options)
+}
+
+async function selectedAll(ids: readonly string[], options: { styles?: Record<string, readonly StyleSource[]>; readOnly?: boolean } = {}): Promise<FakeContext> {
   const fake = fakeContext(
     { tree, rects, computed, styles: options.styles ?? defaultStyles, snap },
-    { selection: [id], viewport: VIEW, readOnly: options.readOnly ?? false },
+    { selection: ids, viewport: VIEW, readOnly: options.readOnly ?? false },
   )
   move.onHover!(fake.ctx, at(0, 0))
   await settle()
@@ -239,14 +248,6 @@ describe('which presses the move tool claims', () => {
 
   it('claims nothing while the canvas is read-only', async () => {
     const fake = await selected('card', { readOnly: true })
-
-    expect(move.onPointerDown!(fake.ctx, at(150, 100))).toBe(false)
-  })
-
-  it('claims nothing with two elements selected', async () => {
-    const fake = await selected('card')
-    fake.select('card', 'badge')
-    await settle()
 
     expect(move.onPointerDown!(fake.ctx, at(150, 100))).toBe(false)
   })
@@ -483,86 +484,159 @@ describe('dragging a transformed element', () => {
   })
 })
 
-describe('arrow nudge', () => {
+describe('the action behind a drag', () => {
+  it('begins one action on press and sends every write of the drag under it', async () => {
+    const fake = await selected('card')
+
+    await drag(fake, [150, 100], [180, 115])
+
+    expect(fake.ctx.beginAction).toHaveBeenCalledTimes(1)
+    expect(fake.actionIds()).toEqual(['action-1', 'action-1'])
+  })
+
+  it('begins a fresh action for each drag', async () => {
+    const fake = await selected('card')
+
+    await drag(fake, [150, 100], [180, 100])
+    await settle()
+    await drag(fake, [150, 100], [160, 100])
+
+    expect(fake.actionIds()).toEqual(['action-1', 'action-2'])
+  })
+})
+
+describe('tracking several selected elements', () => {
+  it('claims a press between two selected elements, inside their union', async () => {
+    const fake = await selectedAll(['card', 'card2'])
+
+    expect(move.onPointerDown!(fake.ctx, at(325, 175))).toBe(true)
+    move.onPointerUp!(fake.ctx, at(325, 175))
+  })
+
+  it('leaves a press outside the union to selection', async () => {
+    const fake = await selectedAll(['card', 'card2'])
+
+    expect(move.onPointerDown!(fake.ctx, at(500, 100))).toBe(false)
+  })
+
+  it('claims a press the canvas hands over right after selecting, and moves by the whole drag that outran the hit', async () => {
+    const fake = await selectedAll([])
+
+    fake.select('card')
+    expect(move.onPointerDown!(fake.ctx, at(150, 100))).toBe(true)
+    move.onPointerMove!(fake.ctx, at(180, 115))
+    await settle()
+
+    expect(move.onPointerUp!(fake.ctx, at(180, 115))).toBe(true)
+    expect(fake.writes()).toEqual(['left: 130px', 'top: 65px'])
+  })
+})
+
+describe('moving several absolute elements together', () => {
+  it('writes each element’s left and top by the same delta', async () => {
+    const fake = await selectedAll(['card', 'card2'])
+
+    expect(await drag(fake, [150, 100], [180, 115])).toBe(true)
+
+    expect(fake.ops()).toHaveLength(4)
+    expect(fake.ops()).toEqual(
+      expect.arrayContaining([
+        { target: [edId('card')], kind: 'setDecl', payload: { prop: 'left', value: '130px' } },
+        { target: [edId('card')], kind: 'setDecl', payload: { prop: 'top', value: '65px' } },
+        { target: [edId('card2')], kind: 'setDecl', payload: { prop: 'left', value: '380px' } },
+        { target: [edId('card2')], kind: 'setDecl', payload: { prop: 'top', value: '215px' } },
+      ]),
+    )
+  })
+
+  it('sends every element’s writes under the one action begun at press, so they are one undo entry', async () => {
+    const fake = await selectedAll(['card', 'card2'])
+
+    await drag(fake, [150, 100], [180, 115])
+
+    expect(fake.ctx.beginAction).toHaveBeenCalledTimes(1)
+    expect(fake.actionIds()).toEqual(['action-1', 'action-1', 'action-1', 'action-1'])
+    expect(fake.undoEntries()).toBe(1)
+  })
+
+  it('moves them all when the press lands on one of several selected elements', async () => {
+    const fake = await selectedAll(['card', 'card2'])
+
+    expect(await drag(fake, [400, 225], [410, 230])).toBe(true)
+
+    expect([...fake.writes()].sort()).toEqual(['left: 110px', 'left: 360px', 'top: 205px', 'top: 55px'])
+  })
+
+  it('reads a drag plan for every selected element', async () => {
+    const fake = await selectedAll(['card', 'card2'])
+
+    await drag(fake, [150, 100], [180, 115])
+
+    expect(fake.reads('snapRects')).toEqual(
+      expect.arrayContaining([
+        { kind: 'snapRects', edId: edId('card') },
+        { kind: 'snapRects', edId: edId('card2') },
+      ]),
+    )
+  })
+
+  it('snaps the union rect, so its centre lands on the parent’s centre and the guide is drawn there', async () => {
+    const fake = await selectedAll(['card', 'card2'])
+
+    move.onPointerDown!(fake.ctx, at(150, 100))
+    await settle()
+    move.onPointerMove!(fake.ctx, at(512, 100))
+
+    expect(marks('data-snap-guide').map((mark) => [mark.getAttribute('data-snap-guide'), boxOf(mark)])).toEqual([
+      ['x', { left: 1290, top: 20, width: 1, height: 1800 }],
+    ])
+
+    move.onPointerUp!(fake.ctx, at(512, 100))
+
+    expect([...fake.writes()].sort()).toEqual(['left: 465px', 'left: 715px'])
+  })
+
+  it('writes nothing when Escape cancels the drag', async () => {
+    const fake = await selectedAll(['card', 'card2'])
+
+    move.onPointerDown!(fake.ctx, at(150, 100))
+    await settle()
+    move.onPointerMove!(fake.ctx, at(180, 115))
+    move.onCancel!(fake.ctx)
+
+    expect(move.onPointerUp!(fake.ctx, at(180, 115))).toBe(false)
+    expect(fake.ctx.apply).not.toHaveBeenCalled()
+    expect(layer(viewport, 'move')).toEqual([])
+  })
+})
+
+describe('a mixed selection', () => {
   it.each([
-    ['ArrowRight', {}, 'left: 101px'],
-    ['ArrowLeft', {}, 'left: 99px'],
-    ['ArrowDown', {}, 'top: 51px'],
-    ['ArrowUp', {}, 'top: 49px'],
-    ['ArrowRight', { shiftKey: true }, 'left: 110px'],
-    ['ArrowDown', { shiftKey: true }, 'top: 60px'],
-  ])('%s %o writes %s', async (key, init, write) => {
-    const fake = await selected('card')
+    ['a static element', 'plain', [950, 650]],
+    ['a flex child', 'a', [50, 325]],
+    ['a transformed element', 'rotated', [450, 650]],
+  ] as const)('refuses to move absolute elements together with %s, with a toast', async (_name, other, [x, y]) => {
+    const fake = await selectedAll(['card', other])
 
-    const event = keydown(key, init)
+    move.onPointerDown!(fake.ctx, at(x, y))
     await settle()
-
-    expect(event.defaultPrevented).toBe(true)
-    expect(fake.writes()).toEqual([write])
-  })
-
-  it('adds up nudges that land before the index catches up', async () => {
-    const fake = await selected('card')
-
-    keydown('ArrowRight')
-    await settle()
-    keydown('ArrowRight')
-    await settle()
-
-    expect(fake.writes()).toEqual(['left: 101px', 'left: 102px'])
-  })
-
-  it.each([
-    ['with Cmd', 'ArrowRight', { metaKey: true }],
-    ['with Ctrl', 'ArrowRight', { ctrlKey: true }],
-    ['with Alt', 'ArrowRight', { altKey: true }],
-    ['for a key that is not an arrow', 'a', {}],
-  ])('does nothing %s', async (_name, key, init) => {
-    const fake = await selected('card')
-
-    const event = keydown(key, init)
-    await settle()
-
-    expect(event.defaultPrevented).toBe(false)
-    expect(fake.ctx.apply).not.toHaveBeenCalled()
-  })
-
-  it('leaves arrows typed outside the canvas alone', async () => {
-    const fake = await selected('card')
-
-    const event = keydown('ArrowRight', {}, document.body)
-    await settle()
-
-    expect(event.defaultPrevented).toBe(false)
-    expect(fake.ctx.apply).not.toHaveBeenCalled()
-  })
-
-  it('does nothing while the canvas is read-only', async () => {
-    const fake = await selected('card', { readOnly: true })
-
-    keydown('ArrowRight')
+    move.onPointerMove!(fake.ctx, at(x + 30, y + 15))
+    move.onPointerUp!(fake.ctx, at(x + 30, y + 15))
     await settle()
 
     expect(fake.ctx.apply).not.toHaveBeenCalled()
+    expect(fake.ctx.toast).toHaveBeenCalledWith(expect.objectContaining({ message: expect.any(String) }))
   })
+})
 
-  it('does not nudge a flex child, whose place is its order', async () => {
-    const fake = await selected('a')
-
-    keydown('ArrowRight')
-    await settle()
-
-    expect(fake.ctx.apply).not.toHaveBeenCalled()
-  })
-
-  it('drops the nudge when a reload rejects the read', async () => {
+describe('arrow keys', () => {
+  it('leaves them to the action registry, so a keydown on the canvas writes nothing by itself', async () => {
     const fake = await selected('card')
-    fake.failReads('computed')
 
     const event = keydown('ArrowRight')
     await settle()
 
-    expect(event.defaultPrevented).toBe(true)
+    expect(event.defaultPrevented).toBe(false)
     expect(fake.ctx.apply).not.toHaveBeenCalled()
   })
 })

@@ -138,6 +138,11 @@ export function fakeContext(scene: Scene, options: ContextOptions = {}) {
     actionIds(): Array<string | undefined> {
       return ctx.apply.mock.calls.map(([, actionId]) => actionId)
     },
+    /** The undo entries the server would make: one per action id, and one per op sent without one. */
+    undoEntries(): number {
+      const ids = ctx.apply.mock.calls.map(([, actionId]) => actionId)
+      return new Set(ids.filter((id) => id !== undefined)).size + ids.filter((id) => id === undefined).length
+    },
     /** Each `setDecl` written, as `prop: value`. */
     writes(): string[] {
       return ctx.apply.mock.calls.flatMap(([op]) => (op.kind === 'setDecl' ? [`${op.payload.prop}: ${op.payload.value}`] : []))

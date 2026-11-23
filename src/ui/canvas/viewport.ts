@@ -25,6 +25,7 @@ const FIT_MARGIN = 24
 const EVEN_MARGIN: Insets = { top: FIT_MARGIN, right: FIT_MARGIN, bottom: FIT_MARGIN, left: FIT_MARGIN }
 /** Wheel delta that doubles (or halves) the zoom. */
 const WHEEL_DELTA_PER_DOUBLING = 200
+const ZOOM_STEP = 2
 
 function clampZoom(zoom: number): number {
   return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoom))
@@ -63,6 +64,12 @@ export function fitRect(rect: Rect, container: Size, insets: Insets = EVEN_MARGI
 /** The viewport at `zoom`, keeping the board point at the centre of `container` where it is. */
 export function zoomTo(viewport: Viewport, zoom: number, container: Size): Viewport {
   return zoomAt(viewport, clampZoom(zoom) / viewport.zoom, { x: container.width / 2, y: container.height / 2 })
+}
+
+/** Doubles or halves the zoom around the centre of `container`; at a zoom limit the view stays as it is. */
+export function stepZoom(viewport: Viewport, direction: 'in' | 'out', container: Size): Viewport {
+  const zoom = clampZoom(direction === 'in' ? viewport.zoom * ZOOM_STEP : viewport.zoom / ZOOM_STEP)
+  return zoom === viewport.zoom ? viewport : zoomTo(viewport, zoom, container)
 }
 
 export function wheelZoomFactor(deltaY: number): number {

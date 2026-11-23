@@ -138,6 +138,71 @@ describe('the zoom menu', () => {
   })
 })
 
+function typeInto(input: HTMLInputElement, text: string) {
+  const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+  act(() => {
+    input.focus()
+    setValue.call(input, text)
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+}
+
+function pressEnter(input: HTMLInputElement) {
+  act(() => {
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true }))
+  })
+}
+
+function zoomField(opened: HTMLElement): HTMLInputElement {
+  const field = opened.querySelector('input')
+  if (!field) throw new Error('the zoom menu has no field to type a percentage in')
+  return field
+}
+
+describe('a typed zoom percentage', () => {
+  it.each([
+    ['150', 1.5],
+    ['150%', 1.5],
+    [' 75 % ', 0.75],
+    ['12.5', 0.125],
+  ] as const)('typing %j and Enter zooms the canvas to %d and closes the menu', (typed, zoom) => {
+    const canvas = fakeCanvas()
+    const container = mount(<ZoomMenu zoom={1} canvas={canvas} />)
+    const field = zoomField(openZoomMenu(container))
+
+    typeInto(field, typed)
+    pressEnter(field)
+
+    expect(canvas.current.zoomTo).toHaveBeenCalledExactlyOnceWith(zoom)
+    expect(canvas.current.fitBoard).not.toHaveBeenCalled()
+    expect(canvas.current.fitSelection).not.toHaveBeenCalled()
+    expect(menu(container)).toBeNull()
+  })
+
+  it.each(['', 'abc', '0', '-50'])('ignores %j, which is not a zoom', (typed) => {
+    const canvas = fakeCanvas()
+    const container = mount(<ZoomMenu zoom={1} canvas={canvas} />)
+    const field = zoomField(openZoomMenu(container))
+
+    typeInto(field, typed)
+    pressEnter(field)
+
+    expect(canvas.current.zoomTo).not.toHaveBeenCalled()
+  })
+
+  it('does not zoom while the percentage is still being typed', () => {
+    const canvas = fakeCanvas()
+    const container = mount(<ZoomMenu zoom={1} canvas={canvas} />)
+    const field = zoomField(openZoomMenu(container))
+
+    typeInto(field, '3')
+    typeInto(field, '30')
+
+    expect(canvas.current.zoomTo).not.toHaveBeenCalled()
+    expect(menu(container)).not.toBeNull()
+  })
+})
+
 describe('the Push popover', () => {
   const dialog = (container: HTMLElement) => container.querySelector('[role="dialog"][aria-label="Push"]')
 

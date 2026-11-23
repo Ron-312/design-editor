@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BoardIndex, EditorState, ProbeRead, ProbeReadResult, Rect } from '../../../src/shared/protocol'
 import type { EdId, EditOp, ProjectPath, TemplateNode } from '../../../src/shared/types'
+import { createDefaultRegistry } from '../../../src/ui/actions/registry'
 import { LayersPanel } from '../../../src/ui/panels/LayersPanel'
 import type { AckMessage, EditorContext } from '../../../src/ui/plugin-api'
 import { createEditorStore, type EditorStore } from '../../../src/ui/store'
@@ -48,6 +49,19 @@ const renderedCount: Readonly<Record<string, number>> = {
   footer: 1,
 }
 
+/** What the live page computes where it is not the browser default: a flex row, a flex column and a grid. */
+const computedStyles: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+  header: { display: 'flex', 'flex-direction': 'row' },
+  hero: { display: 'flex', 'flex-direction': 'column' },
+  card: { display: 'grid' },
+}
+
+const DEFAULT_COMPUTED: Readonly<Record<string, string>> = { display: 'block', 'flex-direction': 'row' }
+
+function computedValues(id: EdId, props: readonly string[]): Record<string, string> {
+  return Object.fromEntries(props.map((prop) => [prop, computedStyles[id]?.[prop] ?? DEFAULT_COMPUTED[prop] ?? '']))
+}
+
 const box: Rect = { x: 0, y: 0, width: 100, height: 20 }
 
 function answer(read: ProbeRead): ProbeReadResult {
@@ -55,7 +69,7 @@ function answer(read: ProbeRead): ProbeReadResult {
     case 'rects':
       return { kind: 'rects', rects: Array.from({ length: renderedCount[read.edId] ?? 0 }, () => box) }
     case 'computed':
-      return { kind: 'computed', values: {} }
+      return { kind: 'computed', values: computedValues(read.edId, read.props) }
     case 'hitTest':
       return { kind: 'hitTest', edId: null }
     case 'snapRects':
@@ -105,7 +119,7 @@ function contextFor(store: EditorStore, editorState: EditorState) {
     setMode: (mode: 'select' | 'hand') => store.setMode(mode),
     fit: vi.fn(),
     cancelGesture: vi.fn(),
-    setEditorState: vi.fn(),
+    setEditorState: vi.fn<(patch: Partial<EditorState>) => void>(),
     undo: vi.fn(),
     redo: vi.fn(),
     read: async <R extends ProbeRead>(read: R) => answer(read) as Extract<ProbeReadResult, { kind: R['kind'] }>,
@@ -251,6 +265,7 @@ afterEach(() => {
     container.remove()
     mounted = null
   }
+  for (const viewport of document.querySelectorAll('[data-canvas-viewport]')) viewport.remove()
   Reflect.deleteProperty(document, 'elementFromPoint')
   vi.restoreAllMocks()
 })
@@ -362,16 +377,6 @@ describe('find layer', () => {
     await settle()
     expect(findInput().value).toBe('')
     expect(rowElements().length).toBeGreaterThan(1)
-  })
-
-  it('Cmd-F focuses the search box', async () => {
-    await mountPanel()
-
-    act(() => {
-      document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', metaKey: true, bubbles: true, cancelable: true }))
-    })
-
-    expect(document.activeElement).toBe(findInput())
   })
 })
 
@@ -508,5 +513,266 @@ describe('hide and lock are editor-only state', () => {
     expect(view.ctx.apply).not.toHaveBeenCalled()
     expect(view.onEditorStateChange).toHaveBeenNthCalledWith(1, editorStateWith({ locked: [edId('title'), edId('header')] }))
     expect(view.onEditorStateChange).toHaveBeenNthCalledWith(2, editorStateWith({ locked: [] }))
+  })
+})
+
+/** The element showing the layer's name; double-clicking it starts a rename. */
+function nameOf(id: string, name: string): HTMLElement {
+  const found = [...row(id).querySelectorAll<HTMLElement>('*')].find((element) => element.children.length === 0 && element.textContent === name)
+  if (!found) throw new Error(`the ${id} row does not show the name ${name}`)
+  return found
+}
+
+function nameField(id: string): HTMLInputElement | null {
+  return row(id).querySelector<HTMLInputElement>('input')
+}
+
+async function startRename(id: string, name: string): Promise<HTMLInputElement> {
+  act(() => {
+    nameOf(id, name).dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true, detail: 2 }))
+  })
+  await settle()
+  const field = nameField(id)
+  if (!field) throw new Error(`double-clicking the ${id} name opened no field`)
+  return field
+}
+
+function typeInto(input: HTMLInputElement, value: string) {
+  act(() => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, value)
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+}
+
+async function pressIn(target: HTMLElement, key: string, init: KeyboardEventInit = {}) {
+  act(() => {
+    target.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...init }))
+  })
+  await settle()
+}
+
+function sentOps(ctx: Mounted['ctx']): EditOp[] {
+  return ctx.apply.mock.calls.map(([op]) => op)
+}
+
+function isInLayersPanel(element: Element | null): boolean {
+  return element?.closest('nav[aria-label="Layers"]') != null
+}
+
+describe('rename a layer', () => {
+  it('double-clicking a name opens a focused field holding that name', async () => {
+    await mountPanel()
+
+    const field = await startRename('header', 'Top nav')
+
+    expect(field.value).toBe('Top nav')
+    expect(document.activeElement).toBe(field)
+  })
+
+  it('Enter writes the new name as data-layer-name and closes the field, keeping focus in the panel', async () => {
+    const view = await mountPanel()
+    const field = await startRename('header', 'Top nav')
+
+    typeInto(field, 'Site nav')
+    await pressIn(field, 'Enter')
+
+    expect(sentOps(view.ctx)).toEqual([{ target: [edId('header')], kind: 'setAttr', payload: { name: 'data-layer-name', value: 'Site nav' } }])
+    expect(nameField('header')).toBeNull()
+    expect(isInLayersPanel(document.activeElement)).toBe(true)
+  })
+
+  it('Escape closes the field, writes nothing and keeps the old name', async () => {
+    const view = await mountPanel()
+    const field = await startRename('hero', 'Hero')
+
+    typeInto(field, 'Something else')
+    await pressIn(field, 'Escape')
+
+    expect(view.ctx.apply).not.toHaveBeenCalled()
+    expect(nameField('hero')).toBeNull()
+    expect(nameOf('hero', 'Hero')).toBeTruthy()
+  })
+
+  it('Tab writes the name and moves on to renaming the next layer', async () => {
+    const view = await mountPanel()
+    const field = await startRename('header', 'Top nav')
+
+    typeInto(field, 'Site nav')
+    await pressIn(field, 'Tab')
+
+    expect(sentOps(view.ctx)).toEqual([{ target: [edId('header')], kind: 'setAttr', payload: { name: 'data-layer-name', value: 'Site nav' } }])
+    expect(nameField('header')).toBeNull()
+    const next = nameField('hero')
+    expect(next?.value).toBe('Hero')
+    expect(document.activeElement).toBe(next)
+  })
+
+  it('an empty name removes data-layer-name, so the layer falls back to its id, class or tag', async () => {
+    const view = await mountPanel()
+    const field = await startRename('lede', 'Lede')
+
+    typeInto(field, '')
+    await pressIn(field, 'Enter')
+
+    expect(sentOps(view.ctx)).toEqual([{ target: [edId('lede')], kind: 'removeAttr', payload: { name: 'data-layer-name' } }])
+  })
+})
+
+describe('collapse a whole subtree', () => {
+  function savedCollapsed(ctx: Mounted['ctx']): readonly EdId[] {
+    const patch = ctx.setEditorState.mock.calls.at(-1)?.[0]
+    if (!patch?.collapsed) throw new Error('the collapsed layers were not saved through setEditorState')
+    return patch.collapsed
+  }
+
+  function altClick(target: HTMLElement) {
+    act(() => {
+      target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, altKey: true }))
+    })
+  }
+
+  it('Alt-click on an open arrow collapses the layer and every layer inside it, and nothing outside', async () => {
+    const view = await mountPanel(editorStateWith({ collapsed: [edId('promo')] }))
+
+    altClick(button('cards', 'Collapse'))
+    await settle()
+
+    const collapsed = savedCollapsed(view.ctx)
+    expect(collapsed).toEqual(expect.arrayContaining([edId('promo'), edId('cards'), edId('card')]))
+    expect(collapsed).not.toContain(edId('hero'))
+    expect(collapsed).not.toContain(edId('root'))
+    expect(view.ctx.apply).not.toHaveBeenCalled()
+  })
+
+  it('Alt-click on a closed arrow expands the layer and every layer inside it, and nothing outside', async () => {
+    const view = await mountPanel(editorStateWith({ collapsed: [edId('hero'), edId('cards'), edId('card')] }))
+
+    altClick(button('cards', 'Expand'))
+    await settle()
+
+    const collapsed = savedCollapsed(view.ctx)
+    expect(collapsed).toContain(edId('hero'))
+    expect(collapsed).not.toContain(edId('cards'))
+    expect(collapsed).not.toContain(edId('card'))
+  })
+})
+
+describe('layer type icons', () => {
+  function typeOf(id: string): string | null {
+    return row(id).querySelector('[data-layer-type]')?.getAttribute('data-layer-type') ?? null
+  }
+
+  it('reads flex row, flex column and grid from the live computed display', async () => {
+    await mountPanel()
+
+    expect(typeOf('header')).toBe('flex-row')
+    expect(typeOf('hero')).toBe('flex-column')
+    expect(typeOf('card')).toBe('grid')
+  })
+
+  it('shows text and image layers by their element', async () => {
+    await mountPanel()
+
+    expect(typeOf('title')).toBe('text')
+    expect(typeOf('lede')).toBe('text')
+    expect(typeOf('cardTitle')).toBe('text')
+    expect(typeOf('photo')).toBe('image')
+  })
+
+  it('shows <sc-for> as a repeat, <sc-if> as a condition and <dc-import> as an import', async () => {
+    await mountPanel()
+
+    expect(typeOf('cards')).toBe('repeat')
+    expect(typeOf('promo')).toBe('condition')
+    expect(typeOf('footer')).toBe('import')
+  })
+
+  it('gives a block container none of the layout or content types', async () => {
+    await mountPanel()
+
+    expect(['flex-row', 'flex-column', 'grid', 'text', 'image', 'repeat', 'condition', 'import']).not.toContain(typeOf('banner'))
+  })
+})
+
+describe('layers-panel shortcuts go through the action registry', () => {
+  function searchBox(): HTMLInputElement {
+    const input = document.querySelector<HTMLInputElement>('input[aria-label="Find layer"]')
+    if (!input) throw new Error('no Find layer box')
+    return input
+  }
+
+  function canvasViewport(): HTMLElement {
+    const viewport = document.createElement('div')
+    viewport.setAttribute('data-canvas-viewport', '')
+    viewport.tabIndex = 0
+    document.body.append(viewport)
+    return viewport
+  }
+
+  /** Dispatches a real keydown at `target` and hands it to the default registry the way the app's document listener does. */
+  function fire(ctx: EditorContext, target: HTMLElement, init: KeyboardEventInit) {
+    const registry = createDefaultRegistry('mac')
+    const event = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init })
+    let handled = false
+    const listen = (dispatched: Event) => {
+      handled = registry.handleKeyDown(dispatched as KeyboardEvent, ctx)
+    }
+    document.addEventListener('keydown', listen)
+    act(() => {
+      target.dispatchEvent(event)
+    })
+    document.removeEventListener('keydown', listen)
+    return { event, handled }
+  }
+
+  const CMD_F = { key: 'f', code: 'KeyF', metaKey: true }
+
+  it('the panel no longer listens for Cmd-F on the document itself', async () => {
+    await mountPanel()
+    const event = new KeyboardEvent('keydown', { ...CMD_F, bubbles: true, cancelable: true })
+
+    act(() => {
+      document.body.dispatchEvent(event)
+    })
+
+    expect(document.activeElement).not.toBe(searchBox())
+    expect(event.defaultPrevented).toBe(false)
+  })
+
+  it('Cmd-F focuses layer search from the canvas', async () => {
+    const view = await mountPanel()
+    const viewport = canvasViewport()
+    viewport.focus()
+
+    const { handled } = fire(view.ctx, viewport, CMD_F)
+
+    expect(handled).toBe(true)
+    expect(document.activeElement).toBe(searchBox())
+  })
+
+  it('Cmd-F from inside the search box keeps it focused and selects what it holds', async () => {
+    const view = await mountPanel()
+    typeInto(searchBox(), 'hero')
+    searchBox().focus()
+    searchBox().setSelectionRange(4, 4)
+
+    const { handled } = fire(view.ctx, searchBox(), CMD_F)
+
+    expect(handled).toBe(true)
+    expect(document.activeElement).toBe(searchBox())
+    expect([searchBox().selectionStart, searchBox().selectionEnd]).toEqual([0, 4])
+  })
+
+  it('Delete removes the selection from a focused layer row', async () => {
+    const view = await mountPanel()
+    act(() => view.store.select([edId('hero')]))
+    await settle()
+    row('hero').focus()
+
+    const { handled } = fire(view.ctx, row('hero'), { key: 'Delete', code: 'Delete' })
+    await settle()
+
+    expect(handled).toBe(true)
+    expect(sentOps(view.ctx)).toEqual([{ target: [edId('hero')], kind: 'deleteNode', payload: {} }])
   })
 })

@@ -37,3 +37,35 @@ Records what each wave built and where it departed from the plan.
   deviated: choosing a notation in the menu writes nothing; it only sets the notation the next write uses.
   deviated: the picker writes modern comma-free notation even when the authored value used legacy commas.
   deviated: oklch is written with 4 decimals for L and C and 2 for H, and isOutsideSrgb allows 0.001 slack per channel.
+
+## Wave 5 (2026-11-23)
+- t6 M8 layer commands: Backspace delete, ungroup alias, toggles via setEditorState, Frame selection, z-order — Backspace deletes like Delete, Mod+Backspace ungroups, toggles go through setEditorState, Frame selection sends one styled wrapNode with an inferred auto layout (new infer-layout.ts), and the z-order keys move absolute layers in the DOM or write z-index for flex/grid items, with per-platform keys via kbdByPlatform.
+  deviated: per-platform kbd uses Ron's new EditorAction.kbdByPlatform field in plugin-api.ts and registry.ts; only the Windows override is spelled out and macOS falls back to kbd.
+- t7 M8 command palette (Mod-K, Mod-/) — palette.open action, fuzzy matching over actions and layers in palette.ts, and an overlay dialog slot with combobox and listbox.
+  deviated: the QWERTZ assertion needed a fix in registry.ts mayMatchCode, made by Ron rather than this task.
+- t8 M8 layer copy / cut / paste and Copy as CSS / HTML — clipboard events handled by an overlay slot, with source-HTML slicing, a private MIME and paste-target rules in clipboard.ts, plus Copy as CSS and Copy as HTML actions. writer.ts acks now count insertHtml as structural so pasted layers get selected.
+- t10 M9 multi-selection tracking, group move and arrow nudges as hold actions — move.tool tracks every selected box and moves several absolute elements together under one action id; arrow and Shift+arrow nudges are hold actions in nudge.actions.ts.
+  deviated: a flex-child reorder is sent without the press's actionId (still one undo entry).
+  deviated: selectedBox() keeps its single-element meaning for resize.tool; the union rect is internal to move.tool.
+  deviated: the mixed-selection toast fires on drag release and on the nudge keypress; the plan gives no timing.
+- t13 M9 align / distribute and flip — align.ts maths, align.actions.ts (Alt-A/H/D/W/V/S, Alt-Shift-H/V) and flip.actions.ts (Shift-H/V, negating authored scale).
+  deviated: when() checks only the synchronous part; an align that does not apply shows the disabledReason toast from run.
+  deviated: no same-parent check on aligned siblings; board-px deltas apply to each element's own anchored inset.
+  deviated: a single absolute element aligns to its own bounds as a silent no-op.
+- t15 M10 appearance, stroke, shadows and effects — shadows.ts, radius.ts and effects.ts plus Appearance, Stroke and Effects controls in style.section (independent corners and sides, shadow list, layer and background blur, blend mode).
+  deviated: multi-property split and join build ops in style.section and call ctx.apply directly, skipping the override-warning check, since Declaration.remove takes no actionId.
+  deviated: shadow length inputs use a local LengthInput without arrow-key stepping, since TextInput is not exported.
+  deviated: unparseable box-shadow shows raw text with a remove button only.
+  deviated: new shadow layer defaults to 0 4px 12px rgb(0 0 0 / 25%).
+- t16 M10 text controls and M11 image fit sections — text-layout.ts, a Text section (alignment, case, decoration, italic, wrap style, resizing, max lines) and an Image section (object-fit, object-position).
+  deviated: Auto width also removes an authored height.
+  deviated: the max-lines flex/grid warning is a toast, not an inline note.
+  deviated: case, decoration and wrap style are mutually exclusive toggles; Max lines uses its own input without arrow stepping.
+- t18 M11 layers panel: rename, collapse all, type icons, Mod-F in the registry — layers-panel.actions.ts (Mod+F find, Alt+L collapse all), layer-icons.tsx type icons, double-click rename with Enter, Escape and Tab, and Alt-click subtree collapse.
+  deviated: Collapse all leaves the artboard root expanded.
+  deviated: blur commits a rename and Shift-Tab does not move backwards.
+  deviated: dc-import rows cannot be renamed; root rows show the frame icon.
+- t19 M11 zoom keys, outline mode and the preview-width control — stepZoom, zoom and outline actions, a zoom percentage field in TopBar, an outline overlay slot and a preview-width slot with presets and a custom field.
+  deviated: the board's own width is read from data-board-width on BoardSwitcher tabs (boardWidthOf), since neither BoardIndex nor EditorContext carries it.
+  deviated: the 'Edits apply to all widths' bar floats over the canvas with fixed positioning, not as a row above the board.
+  deviated: outline mode is a module-level flag in view.actions.ts, not editor state.

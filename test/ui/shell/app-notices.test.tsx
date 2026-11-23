@@ -33,6 +33,7 @@ vi.mock('../../../src/ui/probe-client', () => ({
       onMessage: (_listener: (message: ProbeToEditor) => void) => () => {},
       previewDecl: () => {},
       scrollTo: () => {},
+      setEditorStyles: () => {},
       beginTextEdit: () => 'text-1',
       endTextEdit: () => {},
       dispose: () => {},

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Rect } from '../../../src/shared/protocol'
 import type { Viewport } from '../../../src/ui/plugin-api'
-import { boardToScreen, fitRect, panBy, screenToBoard, zoomAt } from '../../../src/ui/canvas/viewport'
+import { boardToScreen, fitRect, panBy, screenToBoard, stepZoom, zoomAt, zoomTo } from '../../../src/ui/canvas/viewport'
 
 const container = { width: 800, height: 600 }
 
@@ -74,5 +74,57 @@ describe('fit', () => {
     expect(bounds.right).toBeLessThanOrEqual(container.width)
     expect((bounds.left + bounds.right) / 2).toBeCloseTo(container.width / 2)
     expect((bounds.top + bounds.bottom) / 2).toBeCloseTo(container.height / 2)
+  })
+})
+
+describe('zoom around the centre of the view', () => {
+  const centre = { x: container.width / 2, y: container.height / 2 }
+  const offset = { zoom: 1.5, panX: 30, panY: -20 }
+
+  function expectCentreKept(before: Viewport, after: Viewport) {
+    const pointBefore = screenToBoard(before, centre)
+    const pointAfter = screenToBoard(after, centre)
+    expect(pointAfter.x).toBeCloseTo(pointBefore.x)
+    expect(pointAfter.y).toBeCloseTo(pointBefore.y)
+  }
+
+  it('zooms to a level and keeps the board point at the centre where it is', () => {
+    const after = zoomTo(offset, 1, container)
+
+    expect(after.zoom).toBe(1)
+    expectCentreKept(offset, after)
+  })
+
+  it('doubles the zoom on a step in, keeping the board point at the centre', () => {
+    const after = stepZoom(offset, 'in', container)
+
+    expect(after.zoom).toBeCloseTo(3)
+    expectCentreKept(offset, after)
+  })
+
+  it('halves the zoom on a step out, keeping the board point at the centre', () => {
+    const after = stepZoom(offset, 'out', container)
+
+    expect(after.zoom).toBeCloseTo(0.75)
+    expectCentreKept(offset, after)
+  })
+
+  it('takes a step in and a step out back to the same view', () => {
+    const back = stepZoom(stepZoom(offset, 'in', container), 'out', container)
+
+    expect(back.zoom).toBeCloseTo(offset.zoom)
+    expect(back.panX).toBeCloseTo(offset.panX)
+    expect(back.panY).toBeCloseTo(offset.panY)
+  })
+
+  it.each(['in', 'out'] as const)('stops at the zoom limit when stepping %s, and the view stays put there', (direction) => {
+    let viewport: Viewport = { zoom: 1, panX: 0, panY: 0 }
+    for (let i = 0; i < 40; i++) viewport = stepZoom(viewport, direction, container)
+
+    const atLimit = stepZoom(viewport, direction, container)
+
+    expect(Number.isFinite(viewport.zoom)).toBe(true)
+    expect(viewport.zoom).toBeGreaterThan(0)
+    expect(atLimit).toEqual(viewport)
   })
 })

@@ -80,6 +80,8 @@ export interface EditorAction {
   readonly label: string
   /** `Mod` is Cmd on macOS and Ctrl on Windows, e.g. `Mod+Shift+'`; every alias binds, menus show the first. */
   readonly kbd?: string | readonly string[]
+  /** Replaces `kbd` on a platform it names, for a chord that differs between macOS and Windows. */
+  readonly kbdByPlatform?: Readonly<Partial<Record<Platform, string | readonly string[]>>>
   /** Defaults to `'global'`; a list applies wherever any of its scopes does. */
   readonly scope?: ActionScope | readonly ActionScope[]
   /** Also fires from a text field. */

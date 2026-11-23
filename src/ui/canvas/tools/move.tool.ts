@@ -19,7 +19,7 @@ export interface Slot {
   readonly rect: Rect
 }
 
-/** The single selected element's first rendered rect, cached so a press can be claimed synchronously. */
+/** A selected element's first rendered rect, cached so a press can be claimed synchronously. */
 export interface SelectedBox {
   readonly edId: EdId
   readonly rect: Rect
@@ -39,11 +39,24 @@ interface DragPlan {
   readonly axis: Axis
 }
 
+/** The selection moved as one: its union rect snaps, and each element writes its own offsets. */
+interface GroupPlan {
+  readonly plans: readonly DragPlan[]
+  readonly self: Rect
+  readonly targets: SnapTargets
+}
+
+/** Several elements move together only when every one is absolutely positioned. */
+const MIXED = 'mixed'
+
+type SelectionPlan = GroupPlan | typeof MIXED | null
+
 interface Press {
   readonly ctx: EditorContext
+  readonly actionId: string
   readonly from: Point
   readonly fromBoard: Point
-  plan: DragPlan | null
+  plan: SelectionPlan
   dragging: boolean
   last: CanvasPointer
 }
@@ -59,14 +72,8 @@ const OFFSET_VALUE = /^(-?\d*\.?\d+)(px|%)?$/
 const TRANSLATE = /translate\(\s*(-?\d*\.?\d+)px\s*(?:,\s*(-?\d*\.?\d+)px\s*)?\)/
 const SELF_PROPS = ['position', 'transform', 'top', 'right', 'bottom', 'left', 'margin-top', 'margin-right', 'margin-bottom', 'margin-left']
 const PARENT_PROPS = ['display', 'flex-direction']
-const NUDGES: Readonly<Record<string, Point>> = {
-  ArrowUp: { x: 0, y: -1 },
-  ArrowDown: { x: 0, y: 1 },
-  ArrowLeft: { x: -1, y: 0 },
-  ArrowRight: { x: 1, y: 0 },
-}
-const BIG_NUDGE = 10
 const LAYER = 'move'
+const MIXED_MOVE = 'Only absolutely positioned elements move together'
 
 export function moveModeOf({ position, transform, parentDisplay }: LayoutContext): MoveMode | null {
   if (position === 'absolute' || position === 'fixed') return 'offset'
@@ -160,27 +167,34 @@ export function lineBox(box: ScreenBox): ScreenBox {
   return { ...box, width: Math.max(box.width, 1), height: Math.max(box.height, 1) }
 }
 
-// ── The selected element, tracked for every tool ──────────────────────────────
+// ── The selection, tracked for every tool ─────────────────────────────────────
 
 let trackedCtx: EditorContext | null = null
 let stopTracking: Unsubscribe | null = null
 let trackedSelection: readonly EdId[] | null = null
-let selected: SelectedBox | null = null
+let measuredSelection: readonly EdId[] | null = null
+let selectedBoxes: readonly SelectedBox[] = []
 const selectedListeners = new Set<(ctx: EditorContext, box: SelectedBox | null) => void>()
 
 function notifySelected(ctx: EditorContext): void {
-  for (const listener of selectedListeners) listener(ctx, selected)
+  for (const listener of selectedListeners) listener(ctx, selectedBox())
+}
+
+async function firstRectOf(ctx: EditorContext, edId: EdId): Promise<Rect | undefined> {
+  const { rects } = await ctx.read({ kind: 'rects', edId }).catch(() => ({ rects: [] as Rect[] }))
+  return rects[0]
 }
 
 export async function remeasureSelection(ctx: EditorContext): Promise<void> {
   const edIds = ctx.selection()?.edIds ?? []
-  const [edId] = edIds
-  if (edIds.length !== 1 || !edId) selected = null
-  else {
-    const { rects } = await ctx.read({ kind: 'rects', edId }).catch(() => ({ rects: [] as Rect[] }))
-    if (ctx.selection()?.edIds !== edIds) return
-    selected = rects[0] ? { edId, rect: rects[0] } : null
-  }
+  const rects = await Promise.all(edIds.map((edId) => firstRectOf(ctx, edId)))
+  if (ctx.selection()?.edIds !== edIds) return
+  const boxes = edIds.flatMap((edId, i) => {
+    const rect = rects[i]
+    return rect ? [{ edId, rect }] : []
+  })
+  measuredSelection = edIds
+  selectedBoxes = boxes.length === edIds.length ? boxes : []
   notifySelected(ctx)
 }
 
@@ -200,8 +214,22 @@ export function trackSelection(ctx: EditorContext): void {
   selectionMayHaveChanged(ctx)
 }
 
+/** The selected element's box when exactly one is selected and measured. */
 export function selectedBox(): SelectedBox | null {
-  return selected
+  return selectedBoxes.length === 1 ? selectedBoxes[0]! : null
+}
+
+function unionOf(rects: readonly Rect[]): Rect {
+  const left = Math.min(...rects.map((rect) => rect.x))
+  const top = Math.min(...rects.map((rect) => rect.y))
+  const right = Math.max(...rects.map((rect) => rect.x + rect.width))
+  const bottom = Math.max(...rects.map((rect) => rect.y + rect.height))
+  return { x: left, y: top, width: right - left, height: bottom - top }
+}
+
+/** Null while any selected element cannot be measured. */
+function selectionUnion(): Rect | null {
+  return selectedBoxes.length > 0 ? unionOf(selectedBoxes.map((box) => box.rect)) : null
 }
 
 export function onSelectedBox(listener: (ctx: EditorContext, box: SelectedBox | null) => void): void {
@@ -239,10 +267,10 @@ function authoredValue(ctx: EditorContext, edId: EdId, prop: string): string | n
   return null
 }
 
-function writeDecl(ctx: EditorContext, edId: EdId, prop: string, value: string): void {
+function writeDecl(ctx: EditorContext, edId: EdId, prop: string, value: string, actionId: string): void {
   unflushed.set(`${edId} ${prop}`, value)
   // The ws client reports a refused op with its own toast.
-  ctx.apply({ target: [edId], kind: 'setDecl', payload: { prop, value } }).catch(() => {})
+  ctx.apply({ target: [edId], kind: 'setDecl', payload: { prop, value } }, actionId).catch(() => {})
 }
 
 // ── Reading the layout once per gesture ───────────────────────────────────────
@@ -302,26 +330,61 @@ async function readDragPlan(ctx: EditorContext, edId: EdId): Promise<DragPlan | 
   }
 }
 
+function sameRect(a: Rect, b: Rect): boolean {
+  return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height
+}
+
+/** Snaps to the first element's parent and every element's siblings, except the selected elements themselves. */
+function groupOf(plans: readonly DragPlan[]): GroupPlan {
+  const selves = plans.map((plan) => plan.self)
+  const isSelected = (rect: Rect) => selves.some((self) => sameRect(self, rect))
+  return {
+    plans,
+    self: unionOf(selves),
+    targets: { parent: plans[0]!.targets.parent, siblings: plans.flatMap((plan) => plan.targets.siblings).filter((rect) => !isSelected(rect)) },
+  }
+}
+
+async function readSelectionPlan(ctx: EditorContext, edIds: readonly EdId[]): Promise<SelectionPlan> {
+  const plans = await Promise.all(edIds.map((edId) => readDragPlan(ctx, edId)))
+  const [only] = plans
+  if (plans.length === 1) return only ? groupOf([only]) : null
+  const offsets = plans.filter((plan): plan is DragPlan => plan?.mode === 'offset')
+  return offsets.length === plans.length ? groupOf(offsets) : MIXED
+}
+
+function refuseMixedMove(ctx: EditorContext): void {
+  ctx.toast({ message: MIXED_MOVE, tone: 'info' })
+}
+
 // ── Committing a move ─────────────────────────────────────────────────────────
 
 /** Writes the inset the element is anchored by, so a `right`-anchored element stays right-anchored. */
-function shiftInset(ctx: EditorContext, plan: DragPlan, axis: Axis, delta: number): void {
+function shiftInset(ctx: EditorContext, plan: DragPlan, axis: Axis, delta: number, actionId: string): void {
   const [start, end] = axis === 'x' ? ['left', 'right'] : ['top', 'bottom']
   const anchoredAtEnd = authoredValue(ctx, plan.edId, start!) === null && authoredValue(ctx, plan.edId, end!) !== null
   const prop = anchoredAtEnd ? end! : start!
   const authored = authoredValue(ctx, plan.edId, prop)
   const base = authored !== null && OFFSET_VALUE.test(authored.trim()) ? authored : (plan.computed[prop] ?? '0')
   const size = sizeOf(plan.containing, axis)
-  writeDecl(ctx, plan.edId, prop, shiftedOffset(base, anchoredAtEnd ? -delta : delta, size))
+  writeDecl(ctx, plan.edId, prop, shiftedOffset(base, anchoredAtEnd ? -delta : delta, size), actionId)
 }
 
-function commitShift(ctx: EditorContext, plan: DragPlan, delta: Point): void {
+function commitShift(ctx: EditorContext, plan: DragPlan, delta: Point, actionId: string): void {
   if (plan.mode === 'translate') {
-    writeDecl(ctx, plan.edId, 'transform', translatedTransform(authoredValue(ctx, plan.edId, 'transform') ?? '', delta))
+    writeDecl(ctx, plan.edId, 'transform', translatedTransform(authoredValue(ctx, plan.edId, 'transform') ?? '', delta), actionId)
     return
   }
-  if (delta.x !== 0) shiftInset(ctx, plan, 'x', delta.x)
-  if (delta.y !== 0) shiftInset(ctx, plan, 'y', delta.y)
+  if (delta.x !== 0) shiftInset(ctx, plan, 'x', delta.x, actionId)
+  if (delta.y !== 0) shiftInset(ctx, plan, 'y', delta.y, actionId)
+}
+
+function commitGroupShift(ctx: EditorContext, group: GroupPlan, delta: Point, actionId: string): void {
+  for (const plan of group.plans) commitShift(ctx, plan, delta, actionId)
+}
+
+function reordersInPlace(group: GroupPlan): boolean {
+  return group.plans[0]!.mode === 'reorder'
 }
 
 function applyReorder(ctx: EditorContext, op: EditOp): void {
@@ -332,11 +395,14 @@ function applyReorder(ctx: EditorContext, op: EditOp): void {
 
 let press: Press | null = null
 
-function movedBy(press: Press, plan: DragPlan): Move {
+function shifted(rect: Rect, delta: Point): Rect {
+  return { ...rect, x: rect.x + delta.x, y: rect.y + delta.y }
+}
+
+function movedBy(press: Press, group: GroupPlan): Move {
   const delta = { x: Math.round(press.last.boardX - press.fromBoard.x), y: Math.round(press.last.boardY - press.fromBoard.y) }
   if (press.last.ctrlKey) return { delta, guides: [] }
-  const moved = { ...plan.self, x: plan.self.x + delta.x, y: plan.self.y + delta.y }
-  const snap = snapMove(moved, plan.targets, press.ctx.viewport().zoom)
+  const snap = snapMove(shifted(group.self, delta), group.targets, press.ctx.viewport().zoom)
   return { delta: { x: Math.round(delta.x + snap.dx), y: Math.round(delta.y + snap.dy) }, guides: snap.guides }
 }
 
@@ -367,25 +433,29 @@ function insertionLineMark(ctx: EditorContext, plan: DragPlan, before: EdId | nu
   return overlayMark({ 'data-insertion-line': '' }, thick, { background: 'var(--sel)' })
 }
 
+function ghostMark(ctx: EditorContext, rect: Rect): HTMLElement {
+  return overlayMark({ 'data-move-ghost': '' }, screenBoxOf(ctx.viewport(), rect), { border: '1px dashed var(--sel)' })
+}
+
 function drawDrag(press: Press): void {
-  const plan = press.plan
-  if (!plan) return
+  const group = press.plan
+  if (!group || group === MIXED) return
   const { ctx } = press
-  if (plan.mode === 'reorder') {
-    const op = reorderOf(press, plan)
-    const line = op && insertionLineMark(ctx, plan, op.payload.before)
+  const [first] = group.plans
+  if (reordersInPlace(group)) {
+    const op = reorderOf(press, first!)
+    const line = op && insertionLineMark(ctx, first!, op.payload.before)
     drawLayer(LAYER, line ? [line] : [])
     return
   }
-  const { delta, guides } = movedBy(press, plan)
-  const moved = { ...plan.self, x: plan.self.x + delta.x, y: plan.self.y + delta.y }
-  const ghost = overlayMark({ 'data-move-ghost': '' }, screenBoxOf(ctx.viewport(), moved), { border: '1px dashed var(--sel)' })
-  drawLayer(LAYER, [ghost, ...guides.map((guide) => guideMark(ctx, guide))])
+  const { delta, guides } = movedBy(press, group)
+  const ghosts = group.plans.map((plan) => ghostMark(ctx, shifted(plan.self, delta)))
+  drawLayer(LAYER, [...ghosts, ...guides.map((guide) => guideMark(ctx, guide))])
 }
 
-function commitDrag(press: Press, plan: DragPlan): void {
-  if (plan.mode !== 'reorder') return commitShift(press.ctx, plan, movedBy(press, plan).delta)
-  const op = reorderOf(press, plan)
+function commitDrag(press: Press, group: GroupPlan): void {
+  if (!reordersInPlace(group)) return commitGroupShift(press.ctx, group, movedBy(press, group).delta, press.actionId)
+  const op = reorderOf(press, group.plans[0]!)
   if (op) applyReorder(press.ctx, op)
 }
 
@@ -393,16 +463,24 @@ function containsPoint(rect: Rect, x: number, y: number): boolean {
   return x >= rect.x && x <= rect.x + rect.width && y >= rect.y && y <= rect.y + rect.height
 }
 
+function pressLandsOn(plan: SelectionPlan, at: Point): boolean {
+  return plan === null || plan === MIXED || containsPoint(plan.self, at.x, at.y)
+}
+
+/** A press right after the selection changed comes before its measurement, so it is claimed and checked once the plan lands. */
 function onPointerDown(ctx: EditorContext, pointer: CanvasPointer): boolean {
   trackSelection(ctx)
-  listenForNudges()
-  const box = selectedBox()
-  if (ctx.readOnly() || pointer.modKey || pointer.shiftKey || !box || !containsPoint(box.rect, pointer.boardX, pointer.boardY)) return false
-  const current: Press = { ctx, from: pointer, fromBoard: { x: pointer.boardX, y: pointer.boardY }, plan: null, dragging: false, last: pointer }
+  const edIds = ctx.selection()?.edIds ?? []
+  if (ctx.readOnly() || pointer.modKey || pointer.shiftKey || edIds.length === 0) return false
+  const measuring = edIds !== measuredSelection
+  const union = selectionUnion()
+  if (!measuring && !(union && containsPoint(union, pointer.boardX, pointer.boardY))) return false
+  const fromBoard = { x: pointer.boardX, y: pointer.boardY }
+  const current: Press = { ctx, actionId: ctx.beginAction(), from: pointer, fromBoard, plan: null, dragging: false, last: pointer }
   press = current
-  readDragPlan(ctx, box.edId)
+  readSelectionPlan(ctx, edIds)
     .then((plan) => {
-      current.plan = plan
+      current.plan = !measuring || pressLandsOn(plan, fromBoard) ? plan : null
       if (press === current && current.dragging) drawDrag(current)
     })
     // A reload rejects reads in flight; the press then does nothing.
@@ -424,6 +502,10 @@ function onPointerUp(_ctx: EditorContext, pointer: CanvasPointer): boolean {
   press = null
   drawLayer(LAYER, [])
   if (!finished?.dragging || !finished.plan) return false
+  if (finished.plan === MIXED) {
+    refuseMixedMove(finished.ctx)
+    return true
+  }
   finished.last = pointer
   commitDrag(finished, finished.plan)
   void remeasureSelection(finished.ctx)
@@ -437,39 +519,17 @@ function onCancel(): void {
 
 function onHover(ctx: EditorContext): boolean {
   trackSelection(ctx)
-  listenForNudges()
   void remeasureSelection(ctx)
   return false
 }
 
 // ── Arrow nudge ───────────────────────────────────────────────────────────────
 
-let listeningForNudges = false
-
-function isOnCanvas(target: EventTarget | null): boolean {
-  return target instanceof Element && target.closest('[data-canvas-viewport]') !== null
-}
-
-async function nudge(ctx: EditorContext, edId: EdId, delta: Point): Promise<void> {
-  const plan = await readDragPlan(ctx, edId)
-  if (plan && plan.mode !== 'reorder') commitShift(ctx, plan, delta)
-}
-
-function nudgeOnArrow(event: KeyboardEvent): void {
-  const step = NUDGES[event.key]
-  const ctx = trackedCtx
-  const box = selectedBox()
-  if (!step || !ctx || !box || event.metaKey || event.ctrlKey || event.altKey || !isOnCanvas(event.target) || ctx.readOnly()) return
-  event.preventDefault()
-  const scale = event.shiftKey ? BIG_NUDGE : 1
-  // A reload rejects the reads; the nudge is then dropped.
-  nudge(ctx, box.edId, { x: step.x * scale, y: step.y * scale }).catch(() => {})
-}
-
-function listenForNudges(): void {
-  if (listeningForNudges) return
-  listeningForNudges = true
-  document.addEventListener('keydown', nudgeOnArrow)
+/** Moves the selection by a board px step; a flex child keeps its place, since its place is its order. */
+export async function nudgeSelection(ctx: EditorContext, delta: Point, actionId: string): Promise<void> {
+  const group = await readSelectionPlan(ctx, ctx.selection()?.edIds ?? [])
+  if (group === MIXED) return refuseMixedMove(ctx)
+  if (group && !reordersInPlace(group)) commitGroupShift(ctx, group, delta, actionId)
 }
 
 export const tool: CanvasTool = {

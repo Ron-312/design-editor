@@ -59,9 +59,10 @@ const US_PUNCTUATION: Readonly<Record<string, string>> = {
   Backquote: '`',
 }
 
-function aliasesOf(action: EditorAction): readonly string[] {
-  if (action.kbd === undefined) return []
-  return typeof action.kbd === 'string' ? [action.kbd] : action.kbd
+function aliasesOf(action: EditorAction, platform: Platform): readonly string[] {
+  const kbd = action.kbdByPlatform?.[platform] ?? action.kbd
+  if (kbd === undefined) return []
+  return typeof kbd === 'string' ? [kbd] : kbd
 }
 
 function scopesOf(action: EditorAction): readonly ActionScope[] {
@@ -111,10 +112,13 @@ function matchesCode(chord: Chord, event: KeyboardEvent): boolean {
   return chord.key === usCharacterOf(event.code) && sameModifiers(chord, event)
 }
 
-/** Letters and digits follow the layout's label, so only a composed or symbol character retries on its key's position. */
+const isAsciiPunctuation = (key: string) => /^[!-/:-@[-`{-~]$/.test(key)
+
+/** Letters, digits and unshifted punctuation follow the layout's label; only a composed, shifted or non-Latin character retries on its key's position. */
 function mayMatchCode(event: KeyboardEvent): boolean {
   const modified = event.metaKey || event.ctrlKey || event.altKey || event.shiftKey
-  return modified && !isNamedKey(event.key) && !isAsciiLetterOrDigit(event.key)
+  if (!modified || isNamedKey(event.key) || isAsciiLetterOrDigit(event.key)) return false
+  return event.altKey || event.shiftKey || !isAsciiPunctuation(event.key)
 }
 
 function isAltGraph(event: KeyboardEvent, platform: Platform): boolean {
@@ -153,7 +157,7 @@ function appliesAt(action: EditorAction, focused: Element | null): boolean {
 export function createActionRegistry(modules: Record<string, ActionModule>, platform: Platform): ActionRegistry {
   const actions = Object.values(modules).flatMap((module) => module.actions)
   const byId = new Map(actions.map((entry) => [entry.id, entry]))
-  const bindings: Binding[] = actions.flatMap((action) => aliasesOf(action).map((kbd) => ({ action, chord: parseKbd(kbd, platform) })))
+  const bindings: Binding[] = actions.flatMap((action) => aliasesOf(action, platform).map((kbd) => ({ action, chord: parseKbd(kbd, platform) })))
   let textEditing = false
   let held: HeldAction | null = null
 
@@ -192,7 +196,7 @@ export function createActionRegistry(modules: Record<string, ActionModule>, plat
     get: (id) => byId.get(id),
     shortcutOf: (id) => {
       const action = byId.get(id)
-      return action && aliasesOf(action)[0]
+      return action && aliasesOf(action, platform)[0]
     },
     handleKeyDown,
     handleKeyUp(event) {

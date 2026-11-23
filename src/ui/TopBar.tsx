@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react'
+import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from 'react'
 import type { Board, CanvasLayout, ProjectPath } from '../shared/types'
 import type { CanvasCommands } from './canvas/CanvasView'
 import { fileName } from './DiffPanel'
@@ -35,7 +35,7 @@ export function SyncStrip({ step, edits }: { readonly step: SyncStep; readonly e
 }
 
 /** Open state for a popover that closes on Escape or a press anywhere outside `anchor`. */
-function usePopover(anchor: RefObject<HTMLElement | null>) {
+export function usePopover(anchor: RefObject<HTMLElement | null>) {
   const [open, setOpen] = useState(false)
   useEffect(() => {
     if (!open) return
@@ -80,6 +80,7 @@ export function BoardSwitcher({ layout, current, onOpen }: BoardSwitcherProps) {
             aria-selected={board.path === current}
             aria-label={fileName(board.path)}
             data-board={board.path}
+            data-board-width={board.w}
             {...(isPage ? { 'data-page': '' } : {})}
             title={`${fileName(board.path)} · ${board.w} × ${board.h}${isPage ? ' · page' : ''}`}
             onClick={() => onOpen(board.path)}
@@ -93,9 +94,25 @@ export function BoardSwitcher({ layout, current, onOpen }: BoardSwitcherProps) {
   )
 }
 
+/** The authored width of `board`, as the board switcher shows it. */
+export function boardWidthOf(board: ProjectPath): number | undefined {
+  const tab = [...document.querySelectorAll<HTMLElement>('[data-board-switcher] [data-board]')].find((candidate) => candidate.dataset.board === board)
+  return tab ? Number(tab.dataset.boardWidth) : undefined
+}
+
 const ZOOM_PRESETS = [0.5, 1, 2] as const
 
-function MenuItem({ label, kbd, onPick }: { readonly label: string; readonly kbd?: string; readonly onPick: () => void }) {
+/** A text field at the top of a menu. */
+export const MENU_FIELD: CSSProperties = { height: 28, marginBottom: 4, padding: '0 8px', borderRadius: 'var(--r-sm)', background: 'var(--field)', color: 'var(--text)' }
+
+/** `150`, `150%` and ` 75 % ` as a zoom factor; null for anything that is not a positive percentage. */
+function parseZoomPercent(typed: string): number | null {
+  const match = /^\s*(\d+(?:\.\d+)?)\s*%?\s*$/.exec(typed)
+  const percent = match ? Number(match[1]) : 0
+  return percent > 0 ? percent / 100 : null
+}
+
+export function MenuItem({ label, kbd, onPick }: { readonly label: string; readonly kbd?: string; readonly onPick: () => void }) {
   return (
     <button type="button" role="menuitem" className="mi" onClick={onPick}>
       {label}
@@ -120,6 +137,12 @@ export function ZoomMenu({ zoom, canvas }: ZoomMenuProps) {
     }
   }
 
+  function zoomToTyped(event: ReactKeyboardEvent<HTMLInputElement>) {
+    if (event.key !== 'Enter') return
+    const typed = parseZoomPercent(event.currentTarget.value)
+    if (typed !== null) pick((commands) => commands.zoomTo(typed))()
+  }
+
   return (
     <div className="anchor" ref={anchor}>
       <button type="button" className="zoom" aria-label="Zoom" aria-haspopup="menu" aria-expanded={popover.open} onClick={popover.toggle}>
@@ -128,6 +151,7 @@ export function ZoomMenu({ zoom, canvas }: ZoomMenuProps) {
       </button>
       {popover.open && (
         <div className="menu" role="menu" aria-label="Zoom">
+          <input style={MENU_FIELD} aria-label="Zoom percentage" defaultValue={`${Math.round(zoom * 100)}%`} onKeyDown={zoomToTyped} />
           <MenuItem label="Zoom in" onPick={pick((commands) => commands.zoomTo(zoom * 2))} />
           <MenuItem label="Zoom out" onPick={pick((commands) => commands.zoomTo(zoom / 2))} />
           <div className="msep" />
