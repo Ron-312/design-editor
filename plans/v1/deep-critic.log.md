@@ -144,3 +144,51 @@ This file is the audit trail of what deep-critic changed in the plan and why.
 ### Skipped
 - The Edit op line contradicts the canvas rule — nit
 - The probe nonce does nothing — nit
+
+## Round 1 — critic v9, 7/10 (2026-11-23)
+**Critic:** plans/v1/critic.v9.md
+### Folded in
+- [major] The Claude Code ↔ edsync data contract is undefined — new `ingest` verb and a "Hand-off contract" paragraph: snapshot dir in the default scratchpad via `--remote-dir`, `classify` prints the exact `files` map; `base.json` holds synced-commit hashes only; CLI tests add ingest and partial-publish re-run (merged with the remote-bytes decision) (§Pull / push, §Testing)
+- [major] The throwaway copy of Test Site has no recipe, and asset URLs are per artifact — copy recipe (Design `type_url`, server-side asset copy, `/_blob` id rewrite via `edsync rewrite-blobs`, id map in `06`) added after the Testing safety rule, referenced from M0 and M6 (merged with the copy-assets decision) (§Pull / push, §M0, §M6)
+- [minor] The kill bar and re-scope need Ron, but there is no default while he is away — kill bar applied mechanically at M0's exit; shrink applied without waiting, recorded in `06` for Ron to confirm (merged with the kill-bar decision) (§Goals)
+- [minor] git merge-file --diff-algorithm needs Git ≥ 2.44, and the startup check sets no minimum — Git >= 2.44 required, checked at editor startup and every `edsync` verb, no Myers fallback (merged with the Git-version decision) (§Cross-platform)
+- [minor] Origin: null plus Access-Control-Allow-Origin: * lets any web page read the project origin — project documents served only under a per-launch 128-bit `/project/<secret>/` prefix, `Referrer-Policy: no-referrer`, `/_blob/<id>` the only root exception; Local Network Access defence in depth (merged with the project-origin decision) (§Architecture: Scripts and trust)
+- [minor] Inline text editing uses contenteditable on React-owned runtime DOM — in-place edit kept; probe `MutationObserver` cancels on any foreign mutation with a toast; checked on an interactive artboard (merged with the text-surface decision) (§M2)
+- [minor] Fixed ports and one editor per project are an unstated decision — one editor at a time, `EADDRINUSE` exits with a clear message and `--port`, project port = editor+1, all allowlists built from the bound ports (merged with the port-policy decision) (§Stack)
+- Publish shape (decision) — push sends every changed artboard in one publish call; M0 checks whether one refused file rejects the whole call (§Pull / push: Two guards, §M0)
+### Decisions adopted — Ron to confirm
+- Kill-bar default while Ron is away → **Treat git diffs and offline as mattering, auto-apply the written shrink if M0 finds snapping or Alt-measure built in, stop only if nothing survives** — spike practice maps findings to a verdict mechanically; the shrink only removes scope and is reversible  (critic's recommendation, verified)
+- How remote bytes reach edsync → **Skill reads remote files into the default scratchpad folder and passes it as `--remote-dir`; new `ingest` verb does pull steps 1-4** — a save there needs no prompt, so unattended pulls do not stall; flags plus JSON output is the standard CLI composition and keeps byte decisions in the tested CLI  (critic's recommendation, verified)
+- Publish shape → **One publish call carries every changed artboard, with an M0 check of whether one refused file rejects the whole call** — multi-file changes go as one atomic unit, as in Git and SVN; the existing recovery covers a partial publish  (critic's recommendation, verified)
+- The throwaway copy's assets → **Copy assets server-side (`from_url` + `asset_ids`) and rewrite each `/_blob` id, map recorded in `06`; keeping original ids only as an observed M0 shortcut** — asset urls belong to one artifact; copy-then-rewrite is the established cross-container pattern  (critic's recommendation, verified)
+- Minimum Git version → **Require Git >= 2.44, checked at editor startup and every edsync verb, refuse with an upgrade hint** — `--diff-algorithm` first shipped in 2.44; current Apple, Homebrew and Git for Windows builds are newer; a Myers fallback would be an untested second merge path  (critic's recommendation, verified)
+- Project-origin read exposure → **Per-launch secret path prefix for project documents on 5301; `Origin: null` never an allow; Local Network Access only an extra layer** — any page can send `Origin: null` and ACAO is `*`; a capability URL closes the read without breaking the opaque-origin sandbox  (critic's recommendation, verified)
+- Text-editing surface → **Keep in-place `contenteditable="plaintext-only"` plus a probe MutationObserver that cancels on a runtime re-render** — in-place DOM text gives exact fonts, wrapping and native IME; `plaintext-only` is Baseline since March 2025; an overlay is the canvas-text pattern  (critic's recommendation, verified)
+- Port policy → **One editor at a time; fail loudly on `EADDRINUSE`, no auto-pick; derive every host/origin from the bound ports** — the port pair is a security boundary; Vite's `strictPort` exists because silent port moves cause origin mismatches  (critic's recommendation, verified)
+### Skipped
+- Version-history statements contradict each other — nit
+- The watcher's ignore list is not stated — nit
+
+## Round 2 — critic v10, 7/10 (2026-11-23)
+**Critic:** plans/v1/critic.v10.md
+### Folded in
+- [major] Interactive artboards: state the editor cannot reach and reloads that reset it — M1 Interact toggle with a "page reset" notice; Non-goal for holding state across edits (merged with decision r2d1) (§M1, Non-goals)
+- [major] "Works without a network" is not true for canvases that use Google Fonts — offline claim narrowed to "except Google Fonts" in Goals, pull step 3 and M0, with a font-not-loaded banner (merged with decision r2d2) (§Goals, Pull step 3, M0)
+- [major] The usable loop (pull → edit → push) arrives last — build order M0, M1, M2, M6, M3, M4, M5; cut line now "v1 ships once M0–M2 and M6 are green" (merged with decision r2d3) (§Milestones, Effort)
+- [minor] The multi-artboard canvas is an unmade decision — one artboard at a time is the v1 design, the M0 layout check is record-only, multi-board view first in Next (merged with decision r2d4) (§M0 fallbacks, M0 Design canvas branch, Next)
+- [minor] Which tree the Layers panel shows on a canvas is undefined — Layers rows come from SourceIndex's template tree on canvases (merged with decision r2d5) (§M1)
+- [minor] The asset and support.js fetch skips the scratchpad hand-off — new `edsync cache --from <dir>` verb in the verb list, hand-off contract, pull step 3, push step 3 and the CLI tests (merged with decision r2d8) (§Pull / push, Testing)
+- [minor] The kill-bar shrink rule is ambiguous and drops the likely differentiators — per-feature subtraction; M1, M2, M6 always kept (merged with decision r2d6) (§Goals, Kill bar)
+### Decisions adopted — Ron to confirm
+- Interactive artboards in v1 → **Interact toggle (held `I` or switch), "page reset" notice, style-only undo without a reload; about ½ day in M1** — a canvas/preview toggle is the established answer (Framer Preview, Drupal Experience Builder overlay issue) and the plan already has the event shield; this overrides the concern patch's "no separate no-reload path" for style-only undo  (critic's recommendation, verified)
+- Google Fonts when offline → **Narrow the offline claim to "except Google Fonts" with a banner; caching css2/woff2 is Next** — the Design type's one allowed network use; detection keys off the `<link>` error and `FontFace.status`, since `document.fonts.check()` returns true for a family with no `@font-face`  (critic's recommendation, verified)
+- Milestone order → **Build M0, M1, M2, M6, M3, M4, M5 (walking skeleton)** — front-loads the only external integration at no extra days  (critic's recommendation, verified)
+- Canvas view in v1 → **One artboard at a time at `boards[path]` w×h with a board switcher; multi-board lazily mounted iframes first in Next** — each artboard is its own runtime and iframe; one mounted frame keeps probe routing and hit-testing simple  (critic's recommendation, verified)
+- Layers tree source on canvases → **SourceIndex's template tree, not the live DOM** — matches the per-template-node id model; follows Onlook's AST-authoritative mapping  (critic's recommendation, verified)
+- Kill-bar shrink rule → **Per-feature subtraction at M0's exit; M1/M2/M6 always kept; stop only if no differentiator survives** — Shape Up scope hammering; unambiguous to apply while Ron is away  (critic's recommendation, verified)
+- Probe channel hardening → **MessageChannel port handed over at probe boot; text commits only for editor-opened sessions** — project scripts share the probe's window, so origin/source checks cannot tell forged messages apart; a private port can (MDN, WHATWG web messaging)  (critic's recommendation, verified)
+- Asset cache fetch path → **Fetch into the Artifact tool's scratchpad, then `edsync cache --from <dir>` copies into `.editor/cache/` and reports missing transitive `/_blob` ids** — a save outside the default folder prompts per file; staging-then-move is the package-manager pattern  (critic's recommendation, verified)
+### Skipped
+- Canvas scripts forging probe postMessages (r2c7) — the "considered and rejected" note rejects the MessageChannel port that decision r2d7 adopts this same round; recording both would contradict the plan, so the decision stands and the note was not added
+- [nit] The probe's CSP nonce does nothing — nit
+- [nit] The M0 partial-publish question is already answered by the tool contract — nit

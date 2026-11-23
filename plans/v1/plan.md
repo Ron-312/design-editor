@@ -29,7 +29,7 @@ scope follows these gaps:
   padding on the canvas, Hug / Fill / Fixed) (M3, M4).
 - **Tokens:** pick a design-system token instead of typing a raw value (M5).
 - **Source control and offline:** edits are minimal splices into local files, so `git diff` shows only
-  what changed, there is per-file revert and undo, and it works without a network. Claude Design's own
+  what changed, there is per-file revert and undo, and it works without a network, except for Google Fonts: the Design type's one allowed outside request is a `css2` `<link>` in `<helmet>`, and pull step 3 does not cache it. Offline, the page falls back to another font and wraps differently, so the editor shows a banner ("offline: Inter not loaded, layout may differ; sizes tuned now may be off") and keeps editing. The probe detects it from that `<link>` failing to load (its `error` event, or a null `sheet`) and from any `FontFace.status === "error"`, not from `document.fonts.check()`, which returns true for a family with no `@font-face`. Caching the `css2` and `woff2` files at pull and rewriting the links in served bytes only is Next. (decided: deep-critic r2) Claude Design's own
   Artifact version history covers whole-page rollback, so it is not a reason for this editor: Artifact
   versions are whole-snapshot history, so what git adds is line-level diffs, per-file revert and offline
   editing (M0 records what version history actually offers).
@@ -46,16 +46,16 @@ gap/padding handles, Hug / Fill / Fixed, and binding a token. Not documented eit
 snapping to siblings, Alt-measure, gap/padding drag handles. The built-in editor is documented to have
 drag, resize, align, layout guides (Shift+G) and no version history.
 
-Kill bar, fixed before M0 runs: go ahead only if M0 finds snapping and Alt-measure missing from the
-built-in editor and git line diffs and offline editing matter to Ron. If M0 finds snapping or measure
-already built in, re-scope with Ron before M1: shrink v1 to "git-sync + precision tools" (M1-M3 plus
-whatever precision tools are still missing), and move Auto Layout panels (M4) and tokens (M5) to Next.
-If nothing on the list of things this editor adds survives, stop the project and tell Ron.
-(decided: Ron, deep-critic r3; amended deep-critic r4)
+Kill bar, fixed before M0 runs and applied mechanically at M0's exit, with no pause for an answer: git line
+diffs and offline editing count as mattering to Ron (Goals 2 and 4, his stated requirement). If M0 finds
+snapping and Alt-measure both missing from the built-in editor, go ahead as planned. If M0 finds any of the editor's differentiators already built in, subtract per feature, not by block: each such feature (snapping, Alt-measure, Auto Layout handles, Hug / Fill / Fixed, token binding) moves to Non-goals, and only the milestone work that built it is dropped, so M4 and M5 stay for whatever M0 finds still missing; a milestone whose features are all built in moves to Next, without waiting for Ron. M1, M2 and M6 are always kept: they are the read, write-back and git-sync base that Goals 2 and 4 rest on. The shrink only removes scope, so Ron can widen it again on return. Stop the project and tell Ron only if none of snapping, Alt-measure, Auto Layout handles, Hug / Fill / Fixed, token binding, git line diffs or offline editing survives. M0's exit note in `06` records which branch was
+taken and why, and Ron confirms or reverses it when he is back.
+(decided: Ron, deep-critic r3; amended deep-critic r4; no-wait default, Claude, Ron AFK 2026-11-23; decided: deep-critic r1; decided: deep-critic r2)
 
 ## Non-goals (v1)
 
-- Multiplayer, comments, prototyping/interactions, animation.
+- Multiplayer, comments, authoring prototype interactions, animation (reaching an artboard's existing states is in scope: see M1 Interact toggle).
+- Editing state-dependent screens without help: an element that shows only after a click or in a false `<sc-if>` branch can be edited after the Interact toggle opens it, but each write that reloads resets that state, so v1 does not hold the state across edits. (decided: deep-critic r2)
 - React/JSX or other framework sources. v1 targets Design canvases (`*.dc.html`, inline `style`
   primary); plain HTML + CSS (+ inline `<style>`) is the fallback branch only (Appendix A). Script-generated DOM is
   shown but read-only.
@@ -70,7 +70,7 @@ If nothing on the list of things this editor adds survives, stop the project and
 | Part | Choice | Why |
 |---|---|---|
 | Language | TypeScript everywhere, Node ≥ 22.12 (22 LTS; 20 is end-of-life) | One language for server and UI. (decided: Claude, Ron AFK 2026-11-23) |
-| Server | Node HTTP + `ws` WebSocket, bound explicitly to `127.0.0.1` (never a wildcard or `localhost`, which avoids the Windows firewall prompt and the `::1` mismatch; `dns.setDefaultResultOrder('ipv4first')` at startup) on two ports (editor 5300, project 5301; the second port is the default project origin, `*.localhost` is never used) (decided: Claude, Ron AFK 2026-11-23) | Serves editor + project, receives edit ops. Rejects any HTTP request or ws upgrade whose `Host` or `Origin` is not the editor's own (except read-only project fetches, see Scripts and trust); the ws URL carries a random per-launch token, injected into the editor page only (never into `/project/*`). Project scripts run in a sandboxed frame on a second origin, a second port (see Scripts and trust). |
+| Server | Node HTTP + `ws` WebSocket, bound explicitly to `127.0.0.1` (never a wildcard or `localhost`, which avoids the Windows firewall prompt and the `::1` mismatch; `dns.setDefaultResultOrder('ipv4first')` at startup) on two ports (editor 5300, project 5301; the second port is the default project origin, `*.localhost` is never used). Port policy: one editor at a time, with no auto-pick of a free pair (the pair is a security boundary and `.editor/server.json` names exactly one editor). If either port is taken (`EADDRINUSE`), startup exits with "port 5300 is in use by another editor or program; close it or pass `--port`", never falling back to another port; the editor port may be set with `--port`, and the project port is always editor port + 1. Every Host/Origin allowlist entry, `frame-ancestors`, `connect-src` and the `server.json` port are built from the ports actually bound, so the 5300/5301 elsewhere in this plan are the defaults only (decided: Claude, Ron AFK 2026-11-23; decided: deep-critic r1) | Serves editor + project, receives edit ops. Rejects any HTTP request or ws upgrade whose `Host` or `Origin` is not the editor's own (except read-only project fetches, see Scripts and trust); the ws URL carries a random per-launch token, injected into the editor page only (never into `/project/*`). Project scripts run in a sandboxed frame on a second origin, a second port (see Scripts and trust). |
 | HTML parse | `parse5` with `sourceCodeLocationInfo` | Exact offsets per element/attribute (R05) |
 | CSS parse | `postcss` ≥ 8.4.29 (keeps `raws`) + `postcss-selector-parser`, `specificity` | Byte-faithful rule edits (R03, R05). Ranges come from `node.source.start.offset` / `end.offset`, not line/column conversion (R05's "line/column only" is wrong, R09 B12). (decided: Claude, Ron AFK 2026-11-23) |
 | Splicing | `magic-string` | Edits against original offsets, minimal diff (R05) |
@@ -159,13 +159,21 @@ check against it (Playwright shot of the editor next to the mockup, at the M1 an
   into each page that answers the overlay's reads (`getBoundingClientRect`, `matches()`,
   `getComputedStyle`, the `document.styleSheets` walk) and applies optimistic edits and the
   structural-op handling below over postMessage; the overlay's reads are async, so the probe batches
-  them once per frame (about +1 day, in M1). The editor sends with target `'*'` (an opaque origin cannot
-  be targeted) and accepts a message only when `e.source === iframe.contentWindow` and
-  `e.origin === 'null'`, validating every payload against a schema; the probe accepts only
-  `e.source === parent`. Assets and `support.js` are served with `Access-Control-Allow-Origin: *`, since
+  them once per frame (about +1 day, in M1). The editor sends a single handshake with target `'*'` (an opaque origin cannot be targeted) on each iframe `load`, transferring one port of a fresh `MessageChannel`. The probe is the first script in `<head>`, ahead of every project script. It accepts the handshake once, only when `e.source === parent`, calls `stopImmediatePropagation()` so later listeners never see the port, and keeps the port and the native `addEventListener`/`MessagePort` methods in its closure. From then on the editor ignores every `window` `message` event except that handshake, and every probe-to-editor payload travels over the port, validated against a schema. Project scripts share the probe's window, so the old `e.source`/`e.origin === 'null'` checks cannot tell their forged messages from the probe's, and a port they never receive can (the HTML spec's port-as-capability model). The editor also accepts a text commit only for an edit session it opened itself, so a forged commit for a node the user is not editing is dropped. (decided: deep-critic r2) Assets and `support.js` are served with `Access-Control-Allow-Origin: *`, since
   an opaque-origin frame fetches them cross-origin, and its CORS-mode loads (an `@font-face`, for
   example) send `Origin: null`. So the exact Host check always applies, but on the `127.0.0.1:5301`
   project origin the Origin check lets GET/HEAD of static files through with `Origin` absent or `null`.
+  Any web page can also produce `Origin: null` (from its own sandboxed iframe), and with
+  `Access-Control-Allow-Origin: *` it could otherwise guess project paths and read the canvases, so on
+  5301 `null` is never an allow on its own. The gate is a capability URL instead: the project's documents
+  (`.dc.html`, `canvas.json`, `support.js` and their relative siblings) are served only under a random
+  per-launch prefix (`/project/<secret>/...`, at least 128 bits, generated at launch and distinct from the
+  ws/API token), the editor puts it only in the iframe `src`, and relative URLs keep resolving. A request
+  outside the prefix gets a 404 that looks like any missing file, except root-absolute `/_blob/<id>`
+  (already an unguessable id). Project responses carry `Referrer-Policy: no-referrer`, so the prefix does
+  not leak through a Referer header, and it is never logged or written to `.editor/`. Chrome Local
+  Network Access is an extra layer only (Chrome-only, and a prompt the user can grant), not the control.
+  (decided: Claude, Ron AFK 2026-11-23; decided: deep-critic r1)
   `null` is never accepted on the editor origin, the API or the ws, which keep the strict allowlist and
   the token. (decided: deep-critic r1) The token is never injected into `/project/*`.
   (decided: deep-critic r4)
@@ -225,7 +233,7 @@ check against it (Playwright shot of the editor next to the mockup, at the M1 an
   counter is never rewound, so no id is handed out twice. Redo does the same from a map captured at undo
   time, so the stored ids hold throughout the M5 golden sequence. The ack returns the restored ids; on a
   canvas undo writes the file, the iframe reloads and selection and scroll are restored by edId (the
-  plain-HTML in-place re-sync is in Appendix A). (decided: deep-critic r1) Only an
+  plain-HTML in-place re-sync is in Appendix A). (decided: deep-critic r1) An entry that touched only inline `style` declarations is the exception: undo re-applies the pre-image declarations as an optimistic preview (the `setDecl` path) after writing the file, skips the reload, and the ack-vs-live check still guards it. (decided: deep-critic r2) Only an
   outside edit falls back to reconcile plus reload. (decided: deep-critic r2) Byte-identical undo holds by construction,
   and no op kind needs its own inverse. If the watcher sees an outside change to a file (hash differs
   from the entry's post-write hash), that file's undo/redo entries are dropped so undo never clobbers
@@ -245,17 +253,40 @@ Two project skills in `.claude/skills/`. They run inside Claude Code because the
 connection is a Claude tool, not something a shell script can call.
 
 The skills hold no logic. They make the Artifact tool calls and otherwise only run `git` and the
-**`edsync` Node CLI** (`node tools/edsync.mjs <verb>`; verbs `lock`, `classify`, `merge`, `check`,
-`commit`, `unlock`, `shots`). The CLI does every deterministic step below: the lock, the per-file
+**`edsync` Node CLI** (`node tools/edsync.mjs <verb>`; verbs `ingest`, `lock`, `classify`, `merge`,
+`check`, `commit`, `unlock`, `shots`, `rewrite-blobs`, `cache`). The CLI does every deterministic step below: the lock, the per-file
 classification (it prints a JSON plan: upload / write-remote / merge / conflict / stop), `git merge-file`
 and its exit codes, the shape check, the synced commit and `base.json`. It is unit-tested against
 throwaway git repos (see Testing). No bash-isms in the skills, so they run the same in PowerShell, cmd
 and zsh. (decided: Claude, Ron AFK 2026-11-23; critic v8)
 
+**Hand-off contract.** Remote bytes reach the CLI through a snapshot directory. The skill reads every
+`project/*` file plus `canvas.json` in one Artifact `read` with `paths` into the tool's default
+scratchpad folder (a save there needs no prompt; an `out_dir` into the project would ask Ron on every
+save, which stalls an unattended pull), then passes that folder to the CLI. Pull steps 1-4 are
+`edsync ingest --remote-dir <dir> --slug <slug>`: it places the files in `projects/<slug>/`, runs
+`git init` plus config, attributes and exclude, prints the `/_blob` ids and `support.js` the skill must
+fetch into `.editor/cache/`, and writes `base.json`. Blobs and `support.js` use the same hand-off: the skill fetches them into the Artifact tool's default scratchpad (an `out_dir` into `.editor/cache/` would prompt once per file), then runs `edsync cache --from <dir>`, which copies them into `.editor/cache/` keyed by id and type release, scans fetched CSS/JS for further `/_blob/<id>` and `url()` references, and prints the ids still missing; the skill fetches those and repeats until it prints none. (decided: deep-critic r2) Push step 3 is `edsync classify --remote-dir <dir>`;
+besides the plan it prints the exact Artifact `files` map to publish (keys `project/<path>`, `root` =
+`projects/<slug>`, artboard files only), which the skill sends in one publish call (see Two guards). The
+folder is read-only input; nothing in it is kept. The skill never decides which bytes move.
+(decided: Claude, Ron AFK 2026-11-23; decided: deep-critic r1)
+
 **Testing safety rule:** every automated and manual push test targets a throwaway Artifact copy created
 for that test (a new private Design artifact published from pulled files), never one of Ron's real
 canvases. Ron's "Test Site" canvas is only ever read (pulled), never pushed to. (decided: Ron's rule,
 recorded by Claude, Ron AFK 2026-11-23)
+
+**Throwaway copy's assets (the copy recipe):** asset urls belong to one artifact, so the copy is made
+from the Design `type_url` (so it gets a real `canvas.json` and `project/ds/*` installed the way the
+type's install step says), the pulled files are published to it, every `/_blob/<id>` that Test Site's
+files reference is copied server-side (Artifact `from_url` = Test Site with `asset_ids`), and each
+`/_blob/<old>` in the copy's files is rewritten to the url the copy returns, then republished. The
+rewrite is an `edsync` step (`edsync rewrite-blobs --map map.json`) so M6 tests can make fresh copies.
+The steps and the old-to-new id map are recorded in `research/06-project-format.md`; the copy's bytes
+differ from Test Site's by exactly those ids, so the byte-exact round-trip is judged on the copy against
+itself. If M0 observes that the original ids render across artifacts, the rewrite can be skipped for
+M0's checks only; copy-and-rewrite stays the default. (decided: deep-critic r1)
 
 v1 has no pull/push buttons in the editor. Driving Claude Code from the editor would make the localhost
 server spawn a session with write and publish rights, a new attack surface (cross-origin,
@@ -272,13 +303,19 @@ button can be added after v1 by running `claude -p "/design-push"` without chang
      writes `* -text` to `.git/info/attributes` (git never converts a project byte, whatever the user's
      global config) and `.editor/` to `.git/info/exclude`. Both files live in `.git/`, so the canvas
      folder gains no file that push would have to special-case. (decided: Claude, Ron AFK 2026-11-23)
-  3. Downloads every `/_blob/<id>` the project references, plus `support.js`, through the Artifact tool into
-     `.editor/cache/` (keyed by id and type release). The serving layer answers `/_blob/*` and
+  3. Fetches every `/_blob/<id>` the project references, plus `support.js`, through the Artifact tool into
+     its default scratchpad folder (a save there needs no prompt, same as the snapshot), then runs
+     `edsync cache --from <dir>`, which copies them into `.editor/cache/` (keyed by id and type release). A blob can be
+     a `.css` or `.js` file that references further `/_blob` ids or `url()` assets, so the verb scans each file it
+     copies and prints the ids still missing; the skill fetches that next round and re-runs the verb until it prints
+     none. Fetching straight into `.editor/cache/` was rejected: a save outside the tool's default folder asks
+     Ron per file, which stalls an unattended pull. (decided: deep-critic r2) The serving layer answers `/_blob/*` and
      `./support.js` from there, because the localhost server holds no claude.ai credentials and cannot
      fetch them itself. `.editor/cache/` is git-ignored and `/design-push` never sends it. The cost is a
      slower pull and a runtime pinned to the pulled release until the next pull, so offline editing works
-     after a pull and needs the network only for pull and push. (decided: deep-critic r3)
-  4. Writes `.editor/base.json` (remote version + per-file hashes).
+     after a pull and needs the network only for pull and push, Google Fonts excepted (not cached in v1; see
+     Goals, Source control and offline). (decided: deep-critic r3; Google Fonts exception, deep-critic r2)
+  4. Writes `.editor/base.json` (per-file hashes of the synced commit).
   5. Starts the editor on it.
 
   Re-running `/design-pull` on an existing `projects/<slug>/` is a refresh, never a re-initialise (steps
@@ -315,8 +352,7 @@ button can be added after v1 by running `claude -p "/design-push"` without chang
      change: uploads it. Remote-only change: writes the remote bytes into `projects/<slug>/` (an outside
      edit for the editor: reconcile plus reload, see below). Unchanged on both sides: nothing. An
      artboard added or removed on the remote only is carried across the same way (the remote
-     `canvas.json` arrives with it, so `boards` and `order` stay consistent). Push step 3 also downloads,
-     into `.editor/cache/`, any `/_blob` id referenced by a remote-only file it writes and missing from
+     `canvas.json` arrives with it, so `boards` and `order` stay consistent). Push step 3 also fetches, by the same two-step route as pull step 3 (scratchpad, then `edsync cache`), any `/_blob` id referenced by a remote-only file it writes and missing from
      the cache, before step 5, so a remote-only artboard never renders with missing assets. (decided:
      deep-critic r2) An artboard added or
      removed locally only stops the push with "add/remove artboards in Claude Design" and nothing is
@@ -344,7 +380,7 @@ button can be added after v1 by running `claude -p "/design-push"` without chang
      moves made in Claude Design never conflict with editor changes. Key-level JSON merge is deferred to
      Next, to be built only if root resizing becomes a must-have. (decided: deep-critic r3)
   5. Commits the synced state (what both sides now hold, including remote-only files written in step 3)
-     as the new "synced" commit and rewrites `base.json` (remote version plus per-file hashes) from
+     as the new "synced" commit and rewrites `base.json` (per-file hashes) from
      exactly those bytes, on every push, including a push with no local change that only brings remote
      edits in. So after every push the working tree, the baseline and the remote agree, the next push
      three-way merges against what both sides last agreed on, and a remote-only edit is never uploaded
@@ -362,6 +398,11 @@ button can be added after v1 by running `claude -p "/design-push"` without chang
   push does not retry: it deletes the lock, reports the refusal, and the user re-runs `/design-push`, which
   re-reads the remote and re-classifies from step 2. That is safe at any point, because step 5 alone
   advances the synced commit and bytes already identical on both sides classify as unchanged. (decided: deep-critic r1)
+  Push publishes once: a single Artifact call carries every changed artboard (`root` = `projects/<slug>`,
+  the one `files` map `edsync classify` printed), never one call per artboard, so a refusal cannot leave
+  some artboards published and others not, and the 255-file ceiling is far above a canvas. If M0 shows
+  that a refusal of one file does not reject the whole call, the recovery above still holds (re-run; the
+  files that landed classify as unchanged) and the CLI tests add a partial-publish case. (decided: deep-critic r1)
 
   The skill reads the working files once, after the editor's ready ack, hashes them, and sends, commits
   and records in `base.json` exactly those bytes. On finish or abort, push deletes the lock. While
@@ -398,8 +439,11 @@ Edge; Safari stays unsupported for the editor). From R11; all rules below are
 - **Git.** Project repos are created with `core.autocrlf=false`, `core.longpaths=true` and
   `* -text` in `.git/info/attributes` (pull step 2). The editor repo commits a `.gitattributes` of
   `* text=auto eol=lf` with `test/fixtures/** -text`, so golden fixtures stay byte-stable under any
-  `autocrlf`. `git --version` is checked at startup with an install hint; every call is
-  `execFile('git', [...])` with `GIT_TERMINAL_PROMPT=0`.
+  `autocrlf`. Git >= 2.44 is required, because `git merge-file --diff-algorithm` (push step 4) first
+  shipped in 2.44. `git --version` is checked at editor startup and at the start of every `edsync` verb;
+  an older Git stops with the found version and an upgrade hint (`brew install git` on macOS, Git for
+  Windows on Windows), with no Myers fallback, so there is one merge path to test. (decided: deep-critic
+  r1) Every call is `execFile('git', [...])` with `GIT_TERMINAL_PROMPT=0`.
 - **Paths.** Ids, URLs, `base.json` and the edit record use project-relative `/` paths; native paths
   exist only at the fs boundary. File lookups are case-insensitive (stored spelling kept); Windows-
   reserved names (`CON`, `NUL`, `COM1`, trailing dot or space, `<>:"|?*`) are rejected at pull.
@@ -422,6 +466,8 @@ Edge; Safari stays unsupported for the editor). From R11; all rules below are
 
 Each milestone ends with tests green and a commit.
 
+**Build order: M0 → M1 → M2 → M6 → M3 → M4 → M5** (a walking skeleton). The pull, edit, push loop is the plan's one external integration (lease lock with a live editor, ingest, the publish `files` map, two pushes in a row), so it is proven end to end on the thinnest editor (read-only canvas plus write-back) before the richer editing UI is built: one edit goes from Claude Design to the editor and back before any manipulation tool exists. M6 needs only M0–M2 (the server, the PatchEngine and the editor lock endpoints), so the reorder adds no days. M3–M5 then land on a loop that already works, and their e2e runs on it. M6's "after M2" position is also what keeps it ahead of any cut. Milestone numbers are unchanged. (decided: deep-critic r2)
+
 ### M0 — Spike: what a project looks like (1 day, time-boxed, with a two-hour gate)
 - Pull one real design artifact by hand. Also find out where design-system projects will live after
   2026-12-14 and with what API (the open question for v2). Record the file layout,
@@ -434,10 +480,12 @@ Each milestone ends with tests green and a commit.
   `support.js` loads at run time (the type's runtime bundle, read through the Artifact tool's `read` on
   the type URL) through the Artifact tool into `.editor/cache/` (keyed by id and type release), the serving layer answers
   `/_blob/*` and `./support.js` from there, and push never sends the cache. This is what makes "works
-  without a network" true; the runtime stays pinned to the pulled release until the next pull. M0 also
+  without a network" true for everything except Google Fonts (Goals, Source control and offline); the runtime stays pinned to the pulled release until the next pull. M0 also
   checks whether `support.js` waits for a host-page postMessage that the editor's iframe parent will not
   answer, and records the type release the cache was built from. (decided: deep-critic r2) Is the page an ordinary HTML artifact or a typed Design artifact
   whose content lives in data files?
+- Also check: when one file in a multi-file publish is refused, is the whole call rejected or do the
+  other files land? Record the answer in `research/06-project-format.md`. (decided: deep-critic r1)
 - Also measure the built-in editor's Save footprint: change one property on one element in Claude
   Design, Save, pull, and diff against the previous pull. Record in `06` the lines touched and whether
   anything was reformatted or re-serialised beyond the edit. The push merge (a line-based
@@ -454,6 +502,11 @@ Each milestone ends with tests green and a commit.
   a throwaway copy of Test Site; Test Site itself is only pulled (Testing safety rule). Also confirm in
   code, on LF, CRLF and BOM inputs, that parse5 attribute ranges and PostCSS `source.start.offset`
   slice to the expected text (R09 D6, R11 #2). (decided: Claude, Ron AFK 2026-11-23)
+  - **Copy recipe (asset ids are per artifact):** the copy is made by the recipe under "Throwaway
+    copy's assets" (Pull / push): created from the Design `type_url`, the pulled files published, then
+    checked for whether the original's `/_blob/<id>` images and fonts render in it; if not, the assets
+    are copied server-side and the ids rewritten. Record the steps and the id map in `06`; M6 reuses
+    the same recipe. (decided: deep-critic r1)
 - **Gate (first two hours, go/no-go):** check only that the runtime runs under the serving layer, that
   `data-ed-id` survives template expansion, and that a publish → read round-trip is byte-exact. If any
   fails, stop and apply that check's fallback below (or re-plan before M1); do not spend the rest of the
@@ -476,8 +529,9 @@ Each milestone ends with tests green and a commit.
     `<helmet><style>`, `{{hole}}` lookups, `<sc-for>`/`<sc-if>`/`<dc-import>`, and inline `style` as
     "what the properties panel edits") → M0 reads one real canvas first and writes `06` with the
     answers to: does `data-ed-id` survive the runtime's template expansion; does the runtime
-    (`support.js`, served from the type's fixed files) run under the serving layer; how a canvas is laid
-    out from `canvas.json` boards. Architecture, M1 and M2 are written for this branch now, from the
+    (`support.js`, served from the type's fixed files) run under the serving layer; whether `canvas.json`
+    `boards`, `order`, `pages` and `expand` read as documented (recorded only, not a gate; see Canvas view
+    below). Architecture, M1 and M2 are written for this branch now, from the
     type's documented format, and each answer has a fallback fixed before M0 runs. Inline `style` is the
     primary write target, with `<helmet><style>` secondary. The cascade resolver, `RuleLocator`,
     `SharedCounter` and the three-step write-target policy are **plain-HTML fallback only** (Appendix A), built only if
@@ -507,8 +561,14 @@ Each milestone ends with tests green and a commit.
       would no longer hold. Only an artboard whose markup has none of those could be previewed statically
       (`{{hole}}` filled from its `data-props` defaults), and that is not enough to carry v1; rebuilding
       the evaluator is out of scope. (decided: deep-critic r1)
-    - layout from `canvas.json` unclear → open one artboard at a time at its `$preview` size; the
-      multi-board canvas view moves to Next.
+    - Canvas view in v1 (decided for v1, not a fallback): the editor opens **one artboard at a time**, in a
+      single iframe, at its `boards[path]` `w`×`h` from `canvas.json` (a PAGE artboard is `w` wide and
+      scrolls), with a board switcher that follows `order` and `pages`. Each artboard is its own runtime in
+      its own sandboxed iframe, so one mounted frame keeps probe routing, reload and restore, hit-testing,
+      snap rects and the reload scope to a single board. The "layout from `canvas.json` unclear" check is
+      dropped from M0 (`SKILL.md` documents `boards`, `order`, `pages` and `expand`): M0 only checks that
+      they read as documented and records any difference in `06`; it does not gate this choice. The
+      multi-board canvas is first in Next. (decided: Claude, Ron AFK 2026-11-23; decided: deep-critic r2)
   - **Plain HTML/CSS files** (and what publish writes back matches what was pulled) → proceed to M1,
     with any asset rule recorded.
   - **Anything else** (JSX, a bundled app, data files with no editable markup) → stop; re-plan before M1.
@@ -519,10 +579,11 @@ Each milestone ends with tests green and a commit.
 
 ### M1 — Read-only canvas (2–3 days, including the probe's batched async reads)
 - Server, SourceIndex, serving transform with `data-ed-id`, editor shell with three panels.
-- Zoom/pan (Cmd-wheel, pinch, Space-drag, Shift-1 / Shift-2), transparent event shield (R01).
+- Zoom/pan (Cmd-wheel, pinch, Space-drag, Shift-1 / Shift-2), transparent event shield (R01), and a board switcher (one artboard mounted at a time; selection and zoom are kept per board).
+- **Interact toggle.** Interactive artboards (a clicked tab, an open menu, an `<sc-if>` branch) have states the shield would otherwise make unreachable. A held key (`I`) or a toolbar switch makes the shield pass pointer events through to the design and pauses selection and hover, so Ron can click the design into the state he wants and then edit what shows. Reloads (structural op, text commit, undo/redo of a structural entry) reset the runtime's `state`; when a restored edId is no longer rendered, the editor shows a "page reset to its first state" notice instead of failing silently. Non-initial states are not forced open (no `hint-placeholder-val` rendering), so the preview still equals the disk. About ½ day in M1; the style-only undo that avoids a reload is in M2 (see Undo). (decided: deep-critic r2; flagged for Ron's confirmation)
 - Hover outline + one shared hit-test. Click / double-click / Cmd-click / Shift-click / Tab /
   Shift-Tab / Enter / Shift-Enter selection rules (R01).
-- Layers panel = DOM tree, names from `data-layer-name` → id → class → tag; two-way selection sync (R04).
+- Layers panel: on a canvas the tree is `SourceIndex`'s template tree inside `<x-dc>`, not the live DOM, which the runtime reshapes on every render: one row per template node (so an `<sc-for>` is one row and its repeats share it, matching the shared-id rule), `<sc-for>`/`<sc-if>` as labelled rows, a `<dc-import>` as one read-only leaf, and nodes not currently rendered shown dimmed. It matches the per-template-node selection and id model, so the tree keeps its shape when runtime state changes, and M5 drag-reorder, hide and lock act on source nodes. Plain-HTML pages (Appendix A) use the DOM tree. Names come from `data-layer-name` → id → class → tag; two-way selection sync (R04). (decided: deep-critic r2, Claude, Ron AFK 2026-11-23)
 - Properties panel shows authored values + the selector chip with `file:line` (read-only for now).
 - **Exit:** open a pulled project, click anything, and see its layer and the rule it comes from.
   - CI is green on `windows-latest` and `macos-latest`; on both, `server.address().address` is
@@ -549,7 +610,15 @@ Each milestone ends with tests green and a commit.
   `CSS.supports('text-box', 'trim-both cap alphabetic')` holds in the iframe, else with a warning
   (R08 C1). (decided: Claude, Ron AFK 2026-11-23)
 - Double-click text editing, only on elements whose children are a single text node, using
-  `contenteditable="plaintext-only"` (no `<br>`/`<div>` on Enter, plain paste). `setText` diffs the
+  `contenteditable="plaintext-only"` (no `<br>`/`<div>` on Enter, plain paste). The edit happens in place
+  in the iframe, not in an overlay `<textarea>` (which would have to copy font metrics, wrapping and the
+  iframe's zoom and transforms and would still look slightly off). The runtime may re-render during an
+  edit, so the probe watches the edited node with a `MutationObserver`: if the node is detached or
+  changes by anything other than the user's typing (a timer, `setState` or a hover handler), the edit is
+  cancelled, the typed text is discarded and never merged, and a "page redrew, edit cancelled" toast
+  shows. Commit reads the text only while the node is still connected; the file is untouched until
+  commit, so a cancel loses only the unsaved keystrokes. M2 checks this on an interactive artboard.
+  (decided: deep-critic r1, Claude, Ron AFK 2026-11-23) `setText` diffs the
   **source** text node (never the rendered text) against the new text and splices only the changed span, encoding just `&`, `<` and non-breaking spaces in
   the new characters, so untouched entity spellings stay byte-identical. Elements with inline children
   (`<b>`, `<br>`, several text nodes) are not text-editable in M2: the editor shows a "edit in source"
@@ -637,8 +706,8 @@ Each milestone ends with tests green and a commit.
 - The `edsync` CLI with its vitest suite (see Testing), the editor's `/push/begin`, `/push/end`,
   `/health` and `/shutdown` endpoints, then `/design-pull` and `/design-push` as thin skills over them,
   for the Artifact-backed design found in M0. (decided: Claude, Ron AFK 2026-11-23)
-- **Where it runs:** a throwaway copy of "Test Site" (a new private Design artifact published from its
-  pulled files), never Test Site itself. (decided: deep-critic r1) Test Site is only ever pulled; no
+- **Where it runs:** a throwaway copy of "Test Site" (a new private Design artifact made by the M0 copy
+  recipe, recorded in 06), never Test Site itself. (decided: deep-critic r1) Test Site is only ever pulled; no
   test pushes to it or to any other real canvas (Testing safety rule). (decided: Claude, Ron AFK 2026-11-23)
 - **Exit:** full loop on the throwaway copy, a real project in shape:
   - a pull, an edit and a push show up in Claude Design;
@@ -688,6 +757,7 @@ applies. In order (decided: Claude, Ron AFK 2026-11-23):
 
 ## Next (after v1)
 One line each on why it waits (decided: Claude, Ron AFK 2026-11-23):
+- **Multi-board canvas view** (several artboards side by side, each its own iframe mounted only near the viewport by the editor's own visibility test, since native `loading="lazy"` is unreliable under a zoom/pan transform, with per-iframe probe routing and cross-board hit-testing and snap rects): first item in Next, since v1 is one artboard at a time (M0 fallbacks, Canvas view). (decided: deep-critic r2)
 - **Rulers and guides** (R07 #4): board `guides` live in `canvas.json`, which v1 never writes.
 - **Jujutsu-style whole-project op log** (R09 D2): snapshot undo already gives byte-exact per-file
   undo, and making outside edits ordinary undoable ops would reverse the decided "drop that file's
@@ -730,7 +800,10 @@ One line each on why it waits (decided: Claude, Ron AFK 2026-11-23):
 - **`edsync` CLI tests** (vitest, throwaway git repos, a fake remote): one-sided change on each side,
   both-sided clean merge, both-sided conflict, edit vs remove, local artboard add (stop), remote
   artboard add (write + blob fetch), dirty-tree pull refusal, two pushes in a row, a lapsed lease after
-  publish (sync still recorded), mismatched line endings, and a negative `git merge-file` exit.
+  publish (sync still recorded), mismatched line endings, a negative `git merge-file` exit, `ingest`
+  into a fresh project, a partial publish re-run, `rewrite-blobs` on a copy, `edsync cache` copying from a
+  scratch dir, keying by id and release, and reporting `/_blob` ids referenced by fetched CSS/JS until none
+  are missing, and a Git older than 2.44 refused.
   (decided: Claude, Ron AFK 2026-11-23; critic v8)
 - **CI:** GitHub Actions matrix `windows-latest` + `macos-latest` × `autocrlf` false / true runs all
   of the above plus Playwright on every PR (see Cross-platform). Windows-only jobs: the locked-file
@@ -798,7 +871,9 @@ Updated for the 2026-11-23 additions (decided: Claude, Ron AFK 2026-11-23):
 | M7 Beyond Figma | 7½ |
 | **Total with M7** | **21–23** |
 
-**Cut line: v1 ships at the end of M6.** Cross-platform work is never cut (Ron's requirement). Inside
+**Cut line: v1 ships once M0, M1, M2 and M6 are green; M3, M4 and M5 are built after them (see Build
+order) and are cut from the bottom (M5 first) without reopening M6.** (decided: deep-critic r2)
+Cross-platform work is never cut (Ron's requirement). Inside
 v1, cut in this order: M5 layer actions, then multi-edit, then text-box trim, each to Next, before
 touching M2's quality bar. M7 sits below the cut line and is cut from the bottom of its list
 (PNG export first, palette last).
