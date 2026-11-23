@@ -1,10 +1,10 @@
 /// <reference types="vite/client" />
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import type { BoardIndex } from '../../shared/protocol'
-import type { EdId, ProjectPath, ReadOnlyReason, TemplateNode } from '../../shared/types'
+import type { EdId, ProjectPath, ReadOnlyReason, StyleSource, TemplateNode } from '../../shared/types'
 import { findNode } from '../canvas/selection'
 import type { EditorContext, PanelSection, Selection } from '../plugin-api'
-import { Icon, PanelStateContext, labelOf, type PanelState, type RuleSource, type StyleTarget, type Token } from './fields'
+import { Icon, PanelStateContext, labelOf, type PanelState, type StyleTarget, type Token } from './fields'
 
 export type { Token } from './fields'
 
@@ -113,18 +113,18 @@ function fileName(file: ProjectPath): string {
   return file.split('/').at(-1) ?? file
 }
 
-function whereOf(source: RuleSource): string {
+function whereOf(source: StyleSource): string {
   return `${fileName(source.file)}:${source.line}`
 }
 
 /** The inline style of each element, plus every `<helmet><style>` rule all the selected elements share. */
-function targetsOf(index: BoardIndex, edIds: readonly EdId[]): RuleSource[] {
-  const [first, ...rest] = edIds.map((edId) => (index.styles[edId] ?? []) as readonly RuleSource[])
-  const shared = (source: RuleSource) => rest.every((sources) => sources.some((other) => other.target === source.target))
+function targetsOf(index: BoardIndex, edIds: readonly EdId[]): StyleSource[] {
+  const [first, ...rest] = edIds.map((edId) => index.styles[edId] ?? [])
+  const shared = (source: StyleSource) => rest.every((sources) => sources.some((other) => other.target === source.target))
   return (first ?? []).filter((source) => source.target !== 'inline' && shared(source))
 }
 
-function chipText(index: BoardIndex, selection: Selection, target: StyleTarget, rules: readonly RuleSource[]): readonly [string, string] {
+function chipText(index: BoardIndex, selection: Selection, target: StyleTarget, rules: readonly StyleSource[]): readonly [string, string] {
   const rule = rules.find((source) => source.target === target)
   if (rule) return [labelOf(rule), whereOf(rule)]
   if (selection.edIds.length > 1) return ['style', `${selection.edIds.length} layers`]

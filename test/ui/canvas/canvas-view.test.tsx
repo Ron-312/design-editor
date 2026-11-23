@@ -883,6 +883,17 @@ describe('canvas tools', () => {
     expect(ctx.viewport()).toEqual({ zoom: 2, panX: 10, panY: 20 })
   })
 
+  it('selects on a press a tool claimed but released without using it, as a click', async () => {
+    const onPointerUp = vi.fn<PointerHandler>(() => false)
+    const pressOnly: CanvasTool = { id: 'press-only', priority: 5, onPointerDown: () => true, onPointerUp }
+    const view = await openHome({ tools: [pressOnly] })
+
+    await clickAt(view, at.label)
+
+    expect(onPointerUp).toHaveBeenCalled()
+    expect(view.store.getState().view.selection).toEqual(ids('card'))
+  })
+
   it('falls through to selection when no tool claims the gesture', async () => {
     const declining = tool('declining', 5, false)
     const view = await openHome({ tools: [declining.entry] })

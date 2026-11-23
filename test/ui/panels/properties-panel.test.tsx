@@ -44,7 +44,7 @@ function inline(line: number, declarations: AuthoredDeclaration[]): StyleSource 
 }
 
 /** The server sends `<helmet><style>` rules with their selector. */
-function rule(id: RuleId, selector: string, line: number, declarations: AuthoredDeclaration[]): StyleSource & { selector: string } {
+function rule(id: RuleId, selector: string, line: number, declarations: AuthoredDeclaration[]): StyleSource {
   return { target: id, file: board, line, declarations, selector }
 }
 
@@ -408,6 +408,15 @@ describe('colour field', () => {
       kind: 'setDecl',
       payload: { prop: 'background-color', value: '#1a73e880' },
     })
+  })
+
+  it('writes nothing when the alpha field is emptied', async () => {
+    const view = await mountPanel()
+
+    await commit(alphaInput('background-color'), '')
+    await commit(alphaInput('background-color'), ' % ')
+
+    expect(view.ctx.apply).not.toHaveBeenCalled()
   })
 
   it('keeps an oklch() colour in oklch when the alpha changes', async () => {

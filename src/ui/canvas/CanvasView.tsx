@@ -335,10 +335,14 @@ export function CanvasView({ store, ws, layout, editorState, platform, tools = D
     if (event.buttons === 0 && !claimingTool('onHover', pointer)) void hoverAt(pointer)
   }
 
+  /** A tool that claimed the press but turns down its release never dragged, so the press is a click. */
   function onPointerUp(event: ReactPointerEvent<HTMLDivElement>): void {
     const current = gesture.current
     gesture.current = null
-    if (current?.kind === 'tool') current.tool.onPointerUp?.(ctx, pointerAt(event))
+    if (current?.kind !== 'tool') return
+    const pointer = pointerAt(event)
+    const used = current.tool.onPointerUp?.(ctx, pointer) ?? true
+    if (!used) void selectAt(pointer)
   }
 
   function onDoubleClick(event: ReactMouseEvent<HTMLDivElement>): void {

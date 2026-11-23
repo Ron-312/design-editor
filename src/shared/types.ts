@@ -52,6 +52,8 @@ export interface StyleSource {
   readonly file: ProjectPath
   readonly line: number
   readonly declarations: readonly AuthoredDeclaration[]
+  /** The rule's selectorText; absent on an inline style. */
+  readonly selector?: string
 }
 
 export type TemplateNodeKind = 'element' | 'sc-for' | 'sc-if' | 'dc-import'

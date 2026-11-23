@@ -106,9 +106,6 @@ export interface Token {
 /** Where edits land: the element's inline `style`, or the `<helmet><style>` rule picked in the selector chip. */
 export type StyleTarget = 'inline' | RuleId
 
-/** The server sends `<helmet><style>` rules with their selector. */
-export type RuleSource = StyleSource & { readonly selector?: string }
-
 export interface PanelState {
   readonly ctx: EditorContext
   readonly edIds: readonly EdId[]
@@ -126,7 +123,7 @@ export function usePanelState(): PanelState {
   return state
 }
 
-export function labelOf(source: RuleSource): string {
+export function labelOf(source: StyleSource): string {
   return source.target === 'inline' ? 'style' : (source.selector ?? source.target)
 }
 
@@ -137,7 +134,7 @@ function declarationIn(sources: readonly StyleSource[] | undefined, target: Styl
 const PX_LENGTH = /^-?(?:\d+\.?\d*|\.\d+)px$/
 
 /** The authored declaration the live value came from instead of the written one. */
-function rivalOf(sources: readonly RuleSource[], target: StyleTarget, prop: string, live: string): RuleSource | null {
+function rivalOf(sources: readonly StyleSource[], target: StyleTarget, prop: string, live: string): StyleSource | null {
   const beats = (entry: AuthoredDeclaration) => entry.prop === prop && (entry.important || entry.value === live)
   return sources.find((source) => source.target !== target && source.declarations.some(beats)) ?? null
 }
@@ -395,8 +392,11 @@ export function TextField({ prop, label }: { readonly prop: string; readonly lab
   )
 }
 
+/** Null, meaning no change, for anything but a number: an emptied field included. */
 function parsePercent(text: string): number | null {
-  const percent = Number(text.replace(/%$/, ''))
+  const digits = text.trim().replace(/%$/, '').trim()
+  if (digits === '') return null
+  const percent = Number(digits)
   return Number.isFinite(percent) ? Math.min(Math.max(percent, 0), 100) / 100 : null
 }
 
