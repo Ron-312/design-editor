@@ -29,3 +29,18 @@ Records what each wave built and where it departed from the plan.
   deviated: textEditable is false for script and style even with a single text node.
   deviated: readOnly 'artboard-root' is not set on the x-dc root row; the plan does not tie it to the SourceIndex.
 - t11 M1 canvas: viewport, shield, overlay, selection, board switcher — CanvasView.tsx, viewport.ts, overlay.ts, selection.ts in src/ui/canvas/.
+
+## Wave 4 (2026-11-23)
+- t4 Core git, atomic write, push lock; edsync ingest and cache — core/git.ts (runGit, gitOutput, git version check), core/atomic-write.ts (retry while locked), core/push-lock.ts (lease lock with nonce), edsync/cache.ts (cache fetched blobs and support.js, rewrite /_blob ids) and edsync/ingest.ts (fresh-project import with git init and base.json).
+  deviated: on an existing clean project, ingest only checks it is synced and prints the fetch list; writing remote changes and advancing the commit belongs to the push classify/merge/commit steps (t9).
+  deviated: stale push-lock takeover is compare-and-delete then a second exclusive create, not an atomic swap; the nonce re-check before each write still applies.
+  deviated: an empty or unparseable lock file is treated as held, never stale.
+  deviated: ingest does not call ensureSupportedGit; the CLI entry (t9) must do it before every verb.
+  deviated: cacheFetched rescans every cached blob each round so `missing` stays correct across interleaved rounds; support.js is not scanned.
+- t5 M2/M5 PatchEngine: style, attr, text and structural ops — patch-engine.ts, text-splice.ts, structural-ops.ts, shape-check.ts and shared/content-model.ts; each flush plans all ops as splices against the original text, applies them in one pass, and re-checks the shape tree.
+- t6 M1 project origin: 5301 listener, serve transform, probe — serve-transform.ts, blob-cache.ts, project-server.ts and the probe (probe.ts, bundle.ts) on the project port.
+  deviated: support.js is served from .editor/cache/support.js but edsync cache writes it to .editor/cache/<release>/support.js; not reconciled yet.
+  deviated: hide is an injected style rule after the probe; `locked` is accepted but changes nothing in the served bytes.
+  deviated: hit-testing treats `top` and `deeper` the same (id'd ancestor under `within`); only `deepest` is used today.
+  deviated: adds a realpath containment check and blocks every dot-segment, beyond what the tests ask.
+  deviated: the probe bundle is built with vite build() since vite is the only declared bundler dependency.
