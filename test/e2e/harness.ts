@@ -211,9 +211,25 @@ export function computedStyleOf(element: Locator, props: readonly string[]): Pro
   }, props)
 }
 
+/**
+ * The on-page box of an element inside the artboard frame. Edge's `boundingBox()` leaves out the
+ * frame's zoom transform, so the box is built from the frame's own box and the element's rect in it.
+ */
+export async function screenBoxOf(element: Locator): Promise<{ x: number; y: number; width: number; height: number }> {
+  const frame = element.page().locator('[aria-label="Canvas"] iframe')
+  const frameBox = await frame.boundingBox()
+  const cssWidth = await frame.evaluate((node: HTMLIFrameElement) => node.offsetWidth)
+  const rect = await element.evaluate((node) => {
+    const { x, y, width, height } = node.getBoundingClientRect()
+    return { x, y, width, height }
+  })
+  if (!frameBox || cssWidth === 0 || (rect.width === 0 && rect.height === 0)) throw new Error('the element is not rendered on the canvas')
+  const scale = frameBox.width / cssWidth
+  return { x: frameBox.x + rect.x * scale, y: frameBox.y + rect.y * scale, width: rect.width * scale, height: rect.height * scale }
+}
+
 async function pointOn(element: Locator): Promise<{ x: number; y: number }> {
-  const box = await element.boundingBox()
-  if (!box) throw new Error('the element is not rendered on the canvas')
+  const box = await screenBoxOf(element)
   return { x: box.x + Math.min(box.width / 2, 24), y: box.y + box.height / 2 }
 }
 

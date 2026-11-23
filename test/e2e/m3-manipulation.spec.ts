@@ -9,6 +9,7 @@ import {
   goOffline,
   layerRowOf,
   openEditor,
+  screenBoxOf,
   selectOnCanvas,
   test,
   type E2eProject,
@@ -47,10 +48,8 @@ function markWithTop(top: string): string {
   return MARK_STYLE.replace('top: 24px', `top: ${top}`)
 }
 
-async function boxOf(element: Locator) {
-  const box = await element.boundingBox()
-  if (!box) throw new Error('the element is not rendered')
-  return box
+function boxOf(element: Locator) {
+  return screenBoxOf(element)
 }
 
 async function centreOf(element: Locator): Promise<Point> {
@@ -75,7 +74,9 @@ async function grab(page: Page, at: Point): Promise<Drag> {
 async function grabHandle(page: Page, name: string): Promise<Drag> {
   const handle = page.locator(`[data-resize-handle="${name}"]`)
   await expect(handle).toBeVisible()
-  return grab(page, await centreOf(handle))
+  const box = await handle.boundingBox()
+  if (!box) throw new Error(`the ${name} handle is not rendered`)
+  return grab(page, { x: box.x + box.width / 2, y: box.y + box.height / 2 })
 }
 
 async function hover(page: Page, element: Locator): Promise<void> {
