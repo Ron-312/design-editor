@@ -20,6 +20,17 @@ import { FieldWarning, NumberField, PanelStateContext, useDeclaration, usePanelS
 const CONTAINER_PROPS = ['display', 'flex-direction', 'justify-content', 'align-items']
 const ITEM_PROPS = ['flex-grow', 'flex-basis', 'align-self', 'position']
 const PARENT_PROPS = ['display', 'flex-direction', 'position']
+/** What an element that is not rendered (inside a false `<sc-if>` or an empty `<sc-for>`) reads as: the CSS initial values. */
+const INITIAL_VALUES: Readonly<Record<string, string>> = {
+  display: 'inline',
+  'flex-direction': 'row',
+  'justify-content': 'normal',
+  'align-items': 'normal',
+  'flex-grow': '0',
+  'flex-basis': 'auto',
+  'align-self': 'auto',
+  position: 'static',
+}
 const SIZING_MODES: readonly (readonly [SizingMode, string])[] = [
   ['hug', 'Hug'],
   ['fill', 'Fill'],
@@ -48,7 +59,7 @@ function useComputedStyle(edId: EdId | null, props: readonly string[]): Readonly
     if (!edId) return
     let current = true
     void ctx.read({ kind: 'computed', edId, props }).then((result) => {
-      if (current) setValues(result.values)
+      if (current) setValues({ ...INITIAL_VALUES, ...Object.fromEntries(Object.entries(result.values).filter(([, value]) => value !== '')) })
     })
     return () => {
       current = false

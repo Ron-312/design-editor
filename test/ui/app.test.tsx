@@ -350,6 +350,19 @@ describe('editor shell', () => {
     expect(text(container.querySelector('[data-selector-chip]'))).toBe('style · home.dc.html:47')
   })
 
+  it('keeps the editor up when the selected flex container is not rendered and its computed read comes back empty', async () => {
+    const { container, socket, store } = await openHome()
+    const flexHeader = { ...homeIndex, styles: { ...homeIndex.styles, [edId('header')]: [inlineAt(home, 47, 'display', 'flex')] } }
+    await receive(socket, { type: 'index', index: flexHeader })
+
+    act(() => store.select([edId('header')]))
+    await settle()
+
+    expect(container.querySelector('nav[aria-label="Layers"] [role="tree"]')).not.toBeNull()
+    expect(container.querySelector('[role="radio"][aria-label="Horizontal"]')?.getAttribute('aria-checked')).toBe('true')
+    expect(container.querySelector('[role="alert"]')).toBeNull()
+  })
+
   it('saves a layer hidden in the layers panel through saveEditorState', async () => {
     const { container, socket } = await openHome()
     const headerRow = container.querySelector('[role="treeitem"][data-layer-id="header"]')!

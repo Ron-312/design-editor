@@ -4,6 +4,7 @@ import type { CanvasLayout, EdId, EditRecord, ProjectPath } from '../shared/type
 import { createDefaultRegistry, type Platform } from './actions/registry'
 import { canvasContext, CanvasView } from './canvas/CanvasView'
 import { describeEdit, DiffPanel, fileName } from './DiffPanel'
+import { ErrorBoundary } from './ErrorBoundary'
 import { LayersPanel } from './panels/LayersPanel'
 import { PropertiesPanel, type Token } from './panels/PropertiesPanel'
 import type { ProbeClient } from './probe-client'
@@ -240,8 +241,10 @@ export function App({ store, ws, platform, projectName }: AppProps) {
             Changes{state.records.length > 0 && <span className="n">{state.records.length}</span>}
           </LeftTabButton>
         </div>
-        {panelCtx && leftTab === 'layers' && <LayersPanel ctx={panelCtx} onEditorStateChange={changeEditorState} />}
-        {leftTab === 'changes' && <DiffPanel records={state.records} onRevertFile={(file) => ws.send({ type: 'revertFile', file })} />}
+        <ErrorBoundary area="left panel">
+          {panelCtx && leftTab === 'layers' && <LayersPanel ctx={panelCtx} onEditorStateChange={changeEditorState} />}
+          {leftTab === 'changes' && <DiffPanel records={state.records} onRevertFile={(file) => ws.send({ type: 'revertFile', file })} />}
+        </ErrorBoundary>
       </aside>
 
       <main className="center">
@@ -255,9 +258,11 @@ export function App({ store, ws, platform, projectName }: AppProps) {
             ))}
           </div>
         )}
-        {session && editorState && (
-          <CanvasView store={store} ws={ws} layout={session.layout} editorState={editorState} platform={platform} onProbe={setProbe} />
-        )}
+        <ErrorBoundary area="canvas">
+          {session && editorState && (
+            <CanvasView store={store} ws={ws} layout={session.layout} editorState={editorState} platform={platform} onProbe={setProbe} />
+          )}
+        </ErrorBoundary>
         <div className="toasts">
           {state.toasts.map((toast) => (
             <NoticeToast key={toast.id} store={store} toast={toast} />
@@ -266,7 +271,13 @@ export function App({ store, ws, platform, projectName }: AppProps) {
         </div>
       </main>
 
-      {panelCtx ? <PropertiesPanel ctx={panelCtx} tokens={NO_TOKENS} /> : <aside className="props" aria-label="Properties" />}
+      {panelCtx ? (
+        <ErrorBoundary area="properties panel">
+          <PropertiesPanel ctx={panelCtx} tokens={NO_TOKENS} />
+        </ErrorBoundary>
+      ) : (
+        <aside className="props" aria-label="Properties" />
+      )}
     </div>
   )
 }

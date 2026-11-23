@@ -126,6 +126,10 @@ html.light .theme-ico .moon{display:block}
 .banner{display:flex;align-items:center;gap:8px;min-height:32px;padding:6px 12px;background:color-mix(in srgb,var(--warn) 14%,var(--panel));border-bottom:1px solid var(--line);color:var(--text)}
 .banner svg.i{width:14px;height:14px;color:var(--warn)}
 
+/* ============ Crashed area ============ */
+.crashed{display:grid;align-content:start;gap:8px;padding:16px 12px;background:var(--panel);color:var(--text-2);min-width:0;overflow-wrap:anywhere}
+.crashed button{justify-self:start;height:28px;padding:0 10px;border-radius:var(--r-sm);background:var(--field);color:var(--text);font-weight:600}
+
 /* ============ Toasts ============ */
 .toasts{position:absolute;right:16px;bottom:16px;display:grid;gap:8px;justify-items:end;pointer-events:none}
 .toast{pointer-events:auto;width:344px;padding:12px;border-radius:var(--r-lg);background:var(--panel);box-shadow:var(--pop-shadow);display:grid;grid-template-columns:24px 1fr auto;gap:0 12px;align-items:center}
