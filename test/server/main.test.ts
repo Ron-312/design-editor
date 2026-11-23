@@ -301,6 +301,24 @@ describe('startEditor', () => {
   })
 })
 
+describe('startEditor shutdown', () => {
+  it('closes itself on a token-guarded POST /shutdown, settling closed and removing server.json', async () => {
+    const root = await makeProject()
+    const port = await freePortPair()
+    const editor = await launch(root, port)
+    let closed = false
+    void editor.closed.then(() => (closed = true))
+
+    expect((await request(port, HTTP_ROUTES.shutdown, { method: 'POST', token: readServerJson(root).token })).status).toBe(200)
+    await editor.closed
+
+    expect(closed).toBe(true)
+    expect(existsSync(serverJsonOf(root))).toBe(false)
+    expect(await isFree(port)).toBe(true)
+    expect(await isFree(port + 1)).toBe(true)
+  })
+})
+
 describe('scripts/start.mjs', () => {
   it('runs the editor with the given args and shuts down on a token-guarded POST /shutdown', async () => {
     const root = await makeProject()

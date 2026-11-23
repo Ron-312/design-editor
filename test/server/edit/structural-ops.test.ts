@@ -207,6 +207,27 @@ describe('moveNode selector warning', () => {
   })
 })
 
+describe('moveNode selector warning for id selectors', () => {
+  function warningsForMovingLead(style: string): readonly string[] {
+    const { indexed, engine } = open(
+      canvas(
+        `<helmet><style>${style}</style></helmet>\n` +
+          '<section class="one">\n  <div id="lead" class="a">a</div>\n  <div class="b">b</div>\n</section>\n<section class="two"></section>',
+      ),
+    )
+    return applied(engine.apply(indexed, [moveNode(findId(indexed, /^<div id="lead"/), findId(indexed, /^<section class="two"/), null)]))
+      .warnings
+  }
+
+  it('warns when the moved node’s id can match a positional selector', () => {
+    expect(warningsForMovingLead('#lead:first-child { color: red; }')).toEqual([expect.stringContaining('#lead:first-child')])
+  })
+
+  it('does not warn when the positional selector names another id', () => {
+    expect(warningsForMovingLead('#other:first-child { color: red; } div#other.a:first-child { margin: 0; }')).toEqual([])
+  })
+})
+
 describe('duplicateNode', () => {
   it('puts the copy on the next line with the same indentation', () => {
     const { indexed, engine, text } = openHome()

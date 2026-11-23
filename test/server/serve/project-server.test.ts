@@ -548,3 +548,25 @@ describe('project listener: documents, blobs and support.js', () => {
     expect(first).not.toBe(second)
   })
 })
+
+describe('project listener: a failure while serving', () => {
+  it('answers 500 with the security headers and no detail, and keeps serving', async () => {
+    let failing = true
+    const sourceIndex = new SourceIndex()
+    const { projectPort, server } = await start({
+      indexFor: (file, text) => {
+        if (failing) throw new Error(`index blew up at ${EDITOR_TOKEN}`)
+        return sourceIndex.indexFile(file, text)
+      },
+    })
+
+    const failed = await request(projectPort, `${server.prefix}home.dc.html`)
+    failing = false
+    const served = await request(projectPort, `${server.prefix}home.dc.html`)
+
+    expect(failed.status).toBe(500)
+    expect(failed.body.toString('utf8')).toBe('Internal error\n')
+    expect(failed.headers['content-security-policy']).toBe(served.headers['content-security-policy'])
+    expect(served.status).toBe(200)
+  })
+})

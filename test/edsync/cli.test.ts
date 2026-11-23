@@ -247,6 +247,42 @@ describe('edsync lock through a slow editor', () => {
   }, 20_000)
 })
 
+describe('edsync lock through an editor that also refuses to end the push', () => {
+  beforeEach(async () => {
+    await space.pull()
+  })
+
+  it('still reports the slow begin, not the refused end, when the editor answers too late', async () => {
+    const ended: string[] = []
+    const editor = http.createServer((request, response) => {
+      request.resume()
+      request.on('end', () => {
+        if (request.url === HTTP_ROUTES.health) return response.end(JSON.stringify({ ok: true, pid: 1 }))
+        if (request.url === HTTP_ROUTES.pushEnd) {
+          ended.push(request.url)
+          response.statusCode = 409
+          return response.end('not the editor’s push lock\n')
+        }
+        setTimeout(() => response.end(JSON.stringify({ nonce: 'late' })), LEASE.pushBeginTimeoutMs + 1_000)
+      })
+    })
+    await new Promise<void>((resolve) => editor.listen(0, '127.0.0.1', resolve))
+    try {
+      writeServerJson((editor.address() as net.AddressInfo).port)
+
+      const run = await space.edsync('lock', '--slug', SLUG)
+
+      expect(run.exitCode).toBe(1)
+      expect(run.stderr).toMatch(/did not flush its edits within 5 s: retry \/design-push/)
+      expect(run.stderr).not.toMatch(/kept the push lock/)
+      expect(ended).toHaveLength(1)
+    } finally {
+      editor.closeAllConnections()
+      await new Promise<void>((resolve) => editor.close(() => resolve()))
+    }
+  }, 20_000)
+})
+
 describe('edsync unlock', () => {
   beforeEach(async () => {
     await space.pull()
@@ -281,6 +317,73 @@ describe('the other verbs', () => {
 
   it('refuses a verb it does not know', async () => {
     expect((await space.edsync('publish', '--slug', SLUG)).exitCode).not.toBe(0)
+  })
+})
+
+describe('edsync merge', () => {
+  const base = 'one\ntwo\nthree\nfour\nfive\n'
+
+  function writeInputs(ours: string, theirs: string): string[] {
+    const files = { 'ours.html': ours, 'base.html': base, 'theirs.html': theirs }
+    for (const [name, text] of Object.entries(files)) writeFileSync(path.join(space.cwd, name), text)
+    return ['--ours', 'ours.html', '--base', 'base.html', '--theirs', 'theirs.html']
+  }
+
+  it('prints the clean three-way merge of files named relative to the working directory and exits 0', async () => {
+    const run = await space.edsync('merge', ...writeInputs('ONE\ntwo\nthree\nfour\nfive\n', 'one\ntwo\nthree\nfour\nFIVE\n'))
+
+    expect(run.exitCode).toBe(0)
+    expect(JSON.parse(run.stdout)).toEqual({ kind: 'clean', merged: 'ONE\ntwo\nthree\nfour\nFIVE\n' })
+  })
+
+  it('prints the conflict with its hunk, ours before theirs, and exits 2', async () => {
+    const run = await space.edsync('merge', ...writeInputs('one\nTWO editor\nthree\nfour\nfive\n', 'one\nTWO remote\nthree\nfour\nfive\n'))
+
+    expect(run.exitCode).toBe(2)
+    const output = JSON.parse(run.stdout) as { kind: string; conflicts: number; hunks: string }
+    expect(output).toMatchObject({ kind: 'conflict', conflicts: 1 })
+    expect(output.hunks.indexOf('TWO editor')).toBeLessThan(output.hunks.indexOf('TWO remote'))
+  })
+
+  it('fails naming the flag when an input is missing', async () => {
+    writeInputs(base, base)
+
+    const run = await space.edsync('merge', '--ours', 'ours.html', '--base', 'base.html')
+
+    expect(run.exitCode).toBe(1)
+    expect(run.stderr).toContain('--theirs is required')
+  })
+})
+
+describe('edsync check', () => {
+  const page = (body: string) => `<!doctype html>\n<html>\n<body>\n${body}\n</body>\n</html>\n`
+
+  it('exits 0 and reports intact when every <x-dc> and data-dc-script block is closed', async () => {
+    writeFileSync(path.join(space.cwd, 'whole.dc.html'), page('<x-dc>\n<p>hi</p>\n<script data-dc-script>\nclass C {}\n</script>\n</x-dc>'))
+
+    const run = await space.edsync('check', '--file', 'whole.dc.html')
+
+    expect(run.exitCode).toBe(0)
+    expect(JSON.parse(run.stdout)).toEqual({ file: 'whole.dc.html', intact: true })
+  })
+
+  it.each([
+    ['an <x-dc> without its end tag', '<x-dc>\n<p>hi</p>'],
+    ['a data-dc-script block without its end tag', '<x-dc>\n<script data-dc-script>\nclass C {}\n</x-dc>'],
+  ])('exits 2 and reports not intact for %s', async (_label, body) => {
+    writeFileSync(path.join(space.cwd, 'broken.dc.html'), page(body))
+
+    const run = await space.edsync('check', '--file', 'broken.dc.html')
+
+    expect(run.exitCode).toBe(2)
+    expect(JSON.parse(run.stdout)).toEqual({ file: 'broken.dc.html', intact: false })
+  })
+
+  it('fails when the file does not exist', async () => {
+    const run = await space.edsync('check', '--file', 'missing.dc.html')
+
+    expect(run.exitCode).toBe(1)
+    expect(run.stderr).toMatch(/ENOENT/)
   })
 })
 

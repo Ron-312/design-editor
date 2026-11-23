@@ -200,6 +200,20 @@ describe('watchProject: chokidar setup', () => {
   })
 })
 
+describe('watchProject: unreadable files', () => {
+  it('warns with the path when a changed file cannot be read, and reports nothing for it', async () => {
+    const root = makeProject()
+    const { reports, warnings } = await startWatching(root)
+    const folder = path.join(root, 'project', 'not a file')
+    mkdirSync(folder)
+
+    latestChokidar().emit('change', folder)
+
+    await vi.waitFor(() => expect(warnings).toEqual([expect.stringContaining(`could not read ${folder}: `)]), { timeout: 3_000, interval: 25 })
+    expect(reports).toEqual([])
+  })
+})
+
 describe('watchProject: outside changes and the own-write filter', () => {
   it('reports nothing at startup', async () => {
     const { reports } = await startWatching(makeProject())

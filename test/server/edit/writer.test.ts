@@ -392,6 +392,23 @@ describe('an outside change', () => {
   })
 })
 
+describe('a step that fails', () => {
+  it('rejects that step only: the steps queued after it still run', async () => {
+    const { writer, messages, current, nativeOf, diskText } = await openSession({ 'home.dc.html': HOME_TEXT })
+    const h1 = findId(current(HOME), /^<h1/)
+    rmSync(nativeOf(HOME))
+
+    const failed = writer.outsideChange(HOME)
+    const opId = submit(writer, setDecl(h1, 'font-size', '56px'))
+    const flushed = writer.flush()
+
+    await expect(failed).rejects.toMatchObject({ code: 'ENOENT' })
+    await flushed
+    await ackFor(messages, opId)
+    expect(diskText(HOME)).toBe(replaceOnce(HOME_TEXT, H1_STYLE, 'style="margin: 0; font-size: 56px"'))
+  })
+})
+
 /** PowerShell opens the file with FileShare.Read only, so a rename onto it fails until the handle closes. */
 function holdOpenWithoutShareDelete(file: string, ms: number) {
   const script = [

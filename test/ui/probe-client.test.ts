@@ -200,3 +200,107 @@ describe('reads', () => {
     await expect(supports).resolves.toEqual(supportsResult)
   })
 })
+
+describe('reads that fail', () => {
+  const rectsRead: ProbeRead = { kind: 'rects', edId: edId('e1') }
+
+  async function sentRead(probe: FakeProbe) {
+    await vi.waitFor(() => expect(probe.received.some((message) => message.type === 'read')).toBe(true))
+    return probe.received.find((message) => message.type === 'read')!
+  }
+
+  it('rejects a read the probe answers with a different kind or no result', async () => {
+    const probe = loadAndAttach()
+
+    const mismatched = client.read(rectsRead)
+    const unanswered = client.read({ kind: 'supports', condition: 'display: grid' })
+    const request = await sentRead(probe)
+    probe.send({ type: 'readResult', id: request.id, results: [{ kind: 'supports', supported: true }] })
+
+    await expect(mismatched).rejects.toThrow("probe answered a 'rects' read with supports")
+    await expect(unanswered).rejects.toThrow("probe answered a 'supports' read with nothing")
+  })
+
+  it('holds reads made before the iframe loads and sends them with the handshake', async () => {
+    const rects = client.read(rectsRead)
+    await Promise.resolve()
+
+    const probe = loadAndAttach()
+    const request = await sentRead(probe)
+    probe.send({ type: 'readResult', id: request.id, results: [{ kind: 'rects', rects: [] }] })
+
+    await expect(rects).resolves.toEqual({ kind: 'rects', rects: [] })
+  })
+
+  it('still delivers a result for a read id it never sent', async () => {
+    const probe = loadAndAttach()
+    const stray: ProbeToEditor = { type: 'readResult', id: 999, results: [] }
+
+    probe.send(stray)
+
+    expect(await untilSentinelDelivered(probe)).toEqual([stray])
+  })
+
+  it('rejects reads still in flight when the frame reloads', async () => {
+    const probe = loadAndAttach()
+    const rects = client.read(rectsRead)
+    await sentRead(probe)
+
+    frame.load()
+    openPorts.push(frame.lastTransferredPort())
+
+    await expect(rects).rejects.toThrow('the frame reloaded before the probe answered')
+  })
+
+  it('rejects reads still in flight when the client is disposed', async () => {
+    const probe = loadAndAttach()
+    const rects = client.read(rectsRead)
+    await sentRead(probe)
+
+    client.dispose()
+
+    await expect(rects).rejects.toThrow('the probe client was disposed')
+  })
+})
+
+describe('editor-to-probe commands', () => {
+  it('posts preview declarations and scroll requests over the port', async () => {
+    const probe = loadAndAttach()
+
+    client.previewDecl([edId('e1'), edId('e2')], 'color', 'red')
+    client.previewDecl([edId('e1')], 'color', null)
+    client.scrollTo(12, 340)
+
+    await vi.waitFor(() => expect(probe.received).toHaveLength(3))
+    expect(probe.received).toEqual([
+      { type: 'previewDecl', edIds: ['e1', 'e2'], prop: 'color', value: 'red' },
+      { type: 'previewDecl', edIds: ['e1'], prop: 'color', value: null },
+      { type: 'scrollTo', x: 12, y: 340 },
+    ])
+  })
+
+  it('delivers a cancel only for a session the editor opened, and ends that session', async () => {
+    const probe = loadAndAttach()
+    const session = client.beginTextEdit(edId('e1'))
+    const cancelled: ProbeToEditor = { type: 'textCancelled', session, reason: 'redrawn' }
+
+    probe.send({ type: 'textCancelled', session: 'forged', reason: 'escape' })
+    probe.send(cancelled)
+    probe.send({ type: 'textCommit', session, edId: edId('e1'), text: 'after cancel' })
+
+    expect(await untilSentinelDelivered(probe)).toEqual([cancelled])
+  })
+})
+
+describe('onMessage', () => {
+  it('stops calling a listener once it unsubscribes', async () => {
+    const probe = loadAndAttach()
+    const removed = vi.fn<(message: ProbeToEditor) => void>()
+    const unsubscribe = client.onMessage(removed)
+
+    unsubscribe()
+
+    await untilSentinelDelivered(probe)
+    expect(removed).not.toHaveBeenCalled()
+  })
+})
