@@ -157,13 +157,14 @@ export function LayersPanel({ ctx, onEditorStateChange }: LayersPanelProps) {
     const source = rows.find((row) => row.node.edId === id)
     if (!source || !canDrag(source, editorState, readOnly)) return
     pending.current = { source, x: event.clientX, y: event.clientY }
-    event.currentTarget.setPointerCapture(event.pointerId)
   }
 
   function onPointerMove(event: PointerEvent<HTMLDivElement>) {
     const start = pending.current
     if (!start) return
     if (!drag && Math.hypot(event.clientX - start.x, event.clientY - start.y) < DRAG_THRESHOLD) return
+    // Capturing on pointerdown would retarget the click to the tree and a plain click would not select its row.
+    if (!drag) event.currentTarget.setPointerCapture(event.pointerId)
     setDrag({ source: start.source, spot: rowAtPoint(event.clientX, event.clientY) })
   }
 

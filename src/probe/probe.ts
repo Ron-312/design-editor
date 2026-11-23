@@ -152,6 +152,8 @@ function listenWhileEditing(edit: TextEdit): void {
   listen.call(edit.element, 'beforeinput', () => (edit.typing = true), options)
   listen.call(edit.element, 'input', () => (edit.typedText = edit.element.textContent ?? ''), options)
   listen.call(edit.element, 'keydown', (event) => (event as KeyboardEvent).key === 'Escape' && cancelTextEdit(edit, 'escape'), options)
+  // Clicking anywhere outside the edited node, the editor's shield included, takes focus from it and ends the edit.
+  listen.call(edit.element, 'blur', () => commitTextEdit(edit), options)
 }
 
 function beginTextEdit(session: string, edId: EdId): void {
@@ -174,13 +176,15 @@ function beginTextEdit(session: string, edId: EdId): void {
 }
 
 /** Commit reads the text only while the node is still connected; pending records are checked first. */
-function endTextEdit(session: string): void {
-  const edit = textEdit
-  if (!edit || edit.session !== session) return
+function commitTextEdit(edit: TextEdit): void {
   checkTextEdit(edit, edit.observer.takeRecords())
   if (textEdit !== edit) return
   finishTextEdit(edit)
-  post({ type: 'textCommit', session, edId: edit.edId, text: edit.element.textContent ?? '' })
+  post({ type: 'textCommit', session: edit.session, edId: edit.edId, text: edit.element.textContent ?? '' })
+}
+
+function endTextEdit(session: string): void {
+  if (textEdit?.session === session) commitTextEdit(textEdit)
 }
 
 function onEditorMessage(message: EditorToProbe): void {

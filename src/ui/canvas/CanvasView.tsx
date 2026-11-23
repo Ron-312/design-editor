@@ -55,6 +55,8 @@ export interface CanvasViewProps {
   readonly editorState: EditorState
   readonly platform: Platform
   readonly tools?: readonly CanvasTool[]
+  /** Hands the shell the probe of the mounted artboard, null while none is loaded. */
+  readonly onProbe?: (probe: ProbeClient | null) => void
 }
 
 type ToolHandler = 'onPointerDown' | 'onPointerMove' | 'onPointerUp' | 'onDoubleClick' | 'onHover'
@@ -95,7 +97,7 @@ function previewedValues(probe: ProbeClient | null, op: EditOp): ResolvedValues 
   return {}
 }
 
-function canvasContext(store: EditorStore, ws: WsClient, probe: ProbeClient | null, editorState: EditorState): EditorContext {
+export function canvasContext(store: EditorStore, ws: WsClient, probe: ProbeClient | null, editorState: EditorState): EditorContext {
   return {
     index: () => store.getState().index,
     selection: () => {
@@ -150,7 +152,7 @@ async function restoreAfterLoad(probe: ProbeClient, store: EditorStore): Promise
   if (perElement.some((rects) => rects.length === 0)) store.toast({ message: PAGE_RESET, tone: 'info' })
 }
 
-export function CanvasView({ store, ws, layout, editorState, platform, tools = DEFAULT_TOOLS }: CanvasViewProps) {
+export function CanvasView({ store, ws, layout, editorState, platform, tools = DEFAULT_TOOLS, onProbe }: CanvasViewProps) {
   const state = useSyncExternalStore(store.subscribe, store.getState)
   const [probe, setProbe] = useState<ProbeClient | null>(null)
   const [renderCount, setRenderCount] = useState(0)
@@ -210,13 +212,15 @@ export function CanvasView({ store, ws, layout, editorState, platform, tools = D
         }
       })
       setProbe(client)
+      onProbe?.(client)
       return () => {
         stop()
         client.dispose()
         setProbe(null)
+        onProbe?.(null)
       }
     },
-    [store, ws],
+    [store, ws, onProbe],
   )
 
   useEffect(() => {

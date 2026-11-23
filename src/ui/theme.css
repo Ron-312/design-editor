@@ -1,0 +1,139 @@
+/* ============ Tokens: B Warm studio, dark first (warm charcoal) ============ */
+:root{
+  --chrome:#1f1c1a;          /* top bar */
+  --panel:#23201d;
+  --raised:#2c2825;
+  --field:#2e2a26;
+  --field-hover:#36312c;
+  --seg-on:#453e37;
+  --line:#383230;
+  --line-strong:#4a433d;
+  --text:#efe8e1;            /* 14.9:1 on panel */
+  --text-2:#c6bbb0;          /*  9.4:1 */
+  --text-3:#a0968b;          /*  5.6:1 on panel, 4.9:1 on field */
+  --canvas:#191715;
+  --canvas-dot:#2b2724;
+  --accent:#e07240;          /* kiln clay */
+  --accent-ink:#1b1410;      /* 5.6:1 on accent */
+  --accent-text:#ec8a5e;     /* 5.9:1 on panel */
+  --accent-soft:rgba(224,114,64,.16);
+  --accent-faint:rgba(224,114,64,.07);
+  --sel:#e07240;
+  --sel-ink:#1b1410;
+  --measure:#d93b30;         /* white text 4.6:1 */
+  --guide:#ff4fa0;
+  --token:#b3c99a;
+  --token-bg:rgba(179,201,154,.13);
+  --token-line:rgba(179,201,154,.34);
+  --warn:#e8b65a;
+  --ok:#9cc787;
+  --pop-shadow:0 12px 32px rgba(8,5,3,.5),0 0 0 1px var(--line-strong);
+  --ab-shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px rgba(0,0,0,.28);
+  --r-xs:4px; --r-sm:6px; --r:8px; --r-lg:12px;
+}
+/* ============ Light theme (toggle class on <html>) ============ */
+html.light{
+  --chrome:#f4efe8;
+  --panel:#fbf8f4;
+  --raised:#ffffff;
+  --field:#f0ebe4;
+  --field-hover:#e8e1d8;
+  --seg-on:#ffffff;
+  --line:#e6dfd6;
+  --line-strong:#d6cdc2;
+  --text:#2a2521;            /* 14.6:1 */
+  --text-2:#554c44;          /*  8.0:1 */
+  --text-3:#6f655b;          /*  5.4:1 on panel, 4.8:1 on field */
+  --canvas:#e9e3db;
+  --canvas-dot:#d8d0c6;
+  --accent:#b4502a;          /* white text 5.1:1 */
+  --accent-ink:#ffffff;
+  --accent-text:#a8461f;     /* 5.6:1 on panel */
+  --accent-soft:rgba(180,80,42,.12);
+  --accent-faint:rgba(180,80,42,.05);
+  --sel:#c95a2e;
+  --sel-ink:#ffffff;
+  --measure:#c8322a;
+  --guide:#d6247a;
+  --token:#46622f;
+  --token-bg:#e6eddc;
+  --token-line:#c5d4b2;
+  --warn:#8a5a00;
+  --ok:#3f7a2c;
+  --pop-shadow:0 12px 32px rgba(60,40,20,.16),0 0 0 1px var(--line-strong);
+  --ab-shadow:0 1px 2px rgba(60,40,20,.12),0 8px 24px rgba(60,40,20,.10);
+}
+
+*{box-sizing:border-box;margin:0;padding:0}
+html,body,#root{background:var(--canvas);height:100%}
+body{font:400 12px/16px "Instrument Sans",system-ui,sans-serif;color:var(--text);
+  font-variant-numeric:tabular-nums;-webkit-font-smoothing:antialiased;overflow:hidden}
+button{font:inherit;color:inherit;background:none;border:0;cursor:default}
+button:disabled{opacity:.45}
+svg.i{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+.mono{font-family:"JetBrains Mono",ui-monospace,monospace;font-size:11px;letter-spacing:-.1px}
+
+.app{width:100%;height:100%;display:grid;grid-template-columns:240px minmax(0,1fr) 288px;grid-template-rows:48px minmax(0,1fr);overflow:hidden}
+
+/* ============ Top bar ============ */
+.top{grid-column:1/-1;background:var(--chrome);border-bottom:1px solid var(--line);display:flex;align-items:center;padding:0 12px;gap:8px}
+.mark{width:28px;height:28px;border-radius:var(--r);display:grid;place-items:center;color:var(--accent)}
+.mark svg{width:20px;height:20px}
+.proj{display:flex;align-items:center;gap:4px;height:32px;padding:0 8px;border-radius:var(--r-sm);font-weight:600;font-size:13px;line-height:20px;white-space:nowrap}
+.proj .sub{color:var(--text-3);font-weight:400}
+.vsep{width:1px;height:20px;background:var(--line);margin:0 4px}
+.sync{display:flex;align-items:center;height:32px;padding:0 4px;border-radius:var(--r);background:var(--field)}
+.step{display:flex;align-items:center;gap:6px;height:24px;padding:0 8px;border-radius:var(--r-sm);color:var(--text-3);font-size:12px;white-space:nowrap}
+.step svg.i{width:14px;height:14px}
+.step.done{color:var(--text-2)}
+.step.done svg{color:var(--ok)}
+.step[aria-current="step"]{background:var(--raised);color:var(--text);box-shadow:0 0 0 1px var(--line-strong)}
+.step .dot{width:8px;height:8px;border-radius:50%;background:var(--warn);box-shadow:0 0 0 3px color-mix(in srgb,var(--warn) 22%,transparent)}
+.step .n{color:var(--text-3)}
+.arrow{color:var(--line-strong)}
+.sync svg.arrow{width:12px;height:12px}
+.spacer{flex:1}
+.ibtn{width:32px;height:32px;border-radius:var(--r-sm);display:grid;place-items:center;color:var(--text-2)}
+.ibtn:hover:not(:disabled){background:var(--field);color:var(--text)}
+.ibtn:disabled{opacity:1;color:var(--text-3)}
+.theme-ico .moon{display:none}
+html.light .theme-ico .sun{display:none}
+html.light .theme-ico .moon{display:block}
+
+/* ============ Left panel ============ */
+.left{background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
+.ptabs{height:40px;flex:none;display:flex;align-items:center;gap:4px;padding:0 8px;border-bottom:1px solid var(--line)}
+.ptab{height:28px;padding:0 10px;border-radius:var(--r-sm);display:flex;align-items:center;font-weight:600;color:var(--text-3)}
+.ptab[aria-selected="true"]{color:var(--text);background:var(--field)}
+.ptab .n{margin-left:6px;color:var(--text-3);font-weight:500}
+.left > nav,.left > .diff{flex:1;min-height:0}
+
+/* ============ Changes: per-file diff ============ */
+.diff{overflow:auto;padding:8px 0}
+.diff .empty{padding:8px 12px;color:var(--text-3)}
+.dfile{padding:0 4px 8px}
+.dhead{height:28px;display:flex;align-items:center;gap:8px;padding:0 4px 0 8px;font-weight:600;color:var(--text)}
+.dhead .nm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dhead button{margin-left:auto;height:24px;padding:0 8px;border-radius:var(--r-sm);font-weight:600;color:var(--text-2);white-space:nowrap}
+.dhead button:hover{background:var(--field);color:var(--text)}
+.dfile ul{list-style:none}
+.dfile li{padding:4px 8px;color:var(--text-2);overflow-wrap:anywhere}
+
+/* ============ Canvas column ============ */
+.center{position:relative;display:flex;flex-direction:column;min-width:0;min-height:0}
+.center > .canvas-view{flex:1}
+.banners{display:grid;flex:none}
+.banner{display:flex;align-items:center;gap:8px;min-height:32px;padding:6px 12px;background:color-mix(in srgb,var(--warn) 14%,var(--panel));border-bottom:1px solid var(--line);color:var(--text)}
+.banner svg.i{width:14px;height:14px;color:var(--warn)}
+
+/* ============ Toasts ============ */
+.toasts{position:absolute;right:16px;bottom:16px;display:grid;gap:8px;justify-items:end;pointer-events:none}
+.toast{pointer-events:auto;width:344px;padding:12px;border-radius:var(--r-lg);background:var(--panel);box-shadow:var(--pop-shadow);display:grid;grid-template-columns:24px 1fr auto;gap:0 12px;align-items:center}
+.toast .ok{width:24px;height:24px;border-radius:50%;background:color-mix(in srgb,var(--ok) 18%,transparent);color:var(--ok);display:grid;place-items:center}
+.toast .ok svg{width:14px;height:14px}
+.toast.warning .ok,.toast.error .ok{background:color-mix(in srgb,var(--warn) 18%,transparent);color:var(--warn)}
+.toast strong{font-weight:600;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.toast .mono{color:var(--text-3);display:block;margin-top:2px;white-space:pre;overflow:hidden;text-overflow:ellipsis}
+.toast .ta{display:flex;gap:4px}
+.toast .ta button{height:24px;padding:0 8px;border-radius:var(--r-sm);font-weight:600;color:var(--text-2);white-space:nowrap}
+.toast .ta button:first-child{background:var(--field);color:var(--text)}
