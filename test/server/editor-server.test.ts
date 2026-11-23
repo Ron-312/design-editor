@@ -10,6 +10,7 @@ import WebSocket from 'ws'
 import { startEditor } from '../../src/server/main'
 import { HTTP_ROUTES, TOKEN_HEADER, WS_PATH, WS_TOKEN_PARAM, type BoardIndex, type ServerMessage } from '../../src/shared/protocol'
 import type { ProjectPath } from '../../src/shared/types'
+import { cacheFixtureAssets } from '../pulled-fixture'
 
 const CANVAS = fileURLToPath(new URL('../fixtures/canvas/', import.meta.url))
 const HOME = 'project/home.dc.html' as ProjectPath
@@ -57,12 +58,12 @@ afterAll(() => {
   rmSync(uiDir, { recursive: true, force: true })
 })
 
-function makeProject(): string {
+async function makeProject(): Promise<string> {
   const parent = mkdtempSync(path.join(tmpdir(), 'ed listener '))
   parents.push(parent)
   const root = path.join(parent, 'Café board ü')
   cpSync(path.join(CANVAS, 'project'), path.join(root, 'project'), { recursive: true })
-  cpSync(path.join(CANVAS, 'fetched'), path.join(root, '.editor', 'cache'), { recursive: true })
+  await cacheFixtureAssets(root)
   return root
 }
 
@@ -85,7 +86,7 @@ async function freePortPair(): Promise<number> {
 }
 
 async function launch(dev = false): Promise<Running> {
-  const root = makeProject()
+  const root = await makeProject()
   const port = await freePortPair()
   const editor = await startEditor({ projectDir: root, port, dev, uiDir })
   const info = JSON.parse(readFileSync(path.join(root, '.editor', 'server.json'), 'utf8')) as { token: string }

@@ -1,13 +1,13 @@
 import { mkdir, readdir, readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { atomicWrite } from '../core/atomic-write'
-import { EDITOR_FILES } from '../shared/protocol'
+import { CURRENT_RELEASE_FILE, EDITOR_FILES, SUPPORT_JS } from '../shared/protocol'
 import type { CacheOutput } from '../shared/sync'
 
-const SUPPORT_JS = 'support.js'
 const BLOB_FILE = /^([0-9a-f]{32})(\.[A-Za-z0-9]+)?$/
 const BLOB_REFERENCE = /\/_blob\/([0-9a-f]{32})/g
 const SCANNED_EXTENSIONS = new Set(['.css', '.js'])
+const SAFE_RELEASE = /^[\w][\w.+-]*$/
 
 export function cacheDirOf(projectDir: string): string {
   return path.join(projectDir, ...EDITOR_FILES.cache.split('/'))
@@ -60,11 +60,13 @@ async function missingReferences(cacheDir: string): Promise<string[]> {
   return [...referenced].filter((id) => !cached.has(id))
 }
 
-/** `edsync cache --from <dir>`: copies blobs by id and support.js by type release into `.editor/cache/`. */
+/** `edsync cache --from <dir>`: copies blobs by id and support.js by type release into `.editor/cache/`, and makes that release current. */
 export async function cacheFetched(options: { projectDir: string; from: string; release: string }): Promise<CacheOutput> {
+  if (!SAFE_RELEASE.test(options.release)) throw new Error(`--release must be a plain version name, not ${JSON.stringify(options.release)}`)
   const cacheDir = cacheDirOf(options.projectDir)
   await mkdir(cacheDir, { recursive: true })
   const copied = await copyFetched(options.from, cacheDir, options.release)
+  if (copied.includes(SUPPORT_JS)) await atomicWrite(path.join(cacheDir, CURRENT_RELEASE_FILE), Buffer.from(`${options.release}\n`))
   return { copied, missing: await missingReferences(cacheDir) }
 }
 

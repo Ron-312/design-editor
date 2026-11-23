@@ -8,6 +8,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { test as base, expect, type FrameLocator, type Locator, type Page } from '@playwright/test'
 import { HTTP_ROUTES, TOKEN_HEADER, type ServerInfo } from '../../src/shared/protocol'
+import { cacheFixtureAssets } from '../pulled-fixture'
 
 export { expect }
 
@@ -45,10 +46,10 @@ function git(cwd: string, ...args: string[]): string {
   return execFileSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } })
 }
 
-/** The same shape `/design-pull` leaves: the canvas in its own repo, blobs and support.js in `.editor/cache`. */
-function pullFixture(root: string): void {
+/** The same shape `/design-pull` leaves: the canvas in its own repo, and `.editor/cache` filled by the real `edsync cache`. */
+async function pullFixture(root: string): Promise<void> {
   cpSync(path.join(CANVAS_FIXTURE, 'project'), path.join(root, 'project'), { recursive: true })
-  cpSync(path.join(CANVAS_FIXTURE, 'fetched'), path.join(root, '.editor', 'cache'), { recursive: true })
+  await cacheFixtureAssets(root)
   git(root, 'init', '-q')
   const config: ReadonlyArray<readonly [string, string]> = [
     ['core.autocrlf', 'false'],
@@ -66,10 +67,10 @@ function pullFixture(root: string): void {
   git(root, 'commit', '-q', '-m', 'pulled')
 }
 
-function createProject(): { project: E2eProject; remove(): void } {
+async function createProject(): Promise<{ project: E2eProject; remove(): void }> {
   const parent = mkdtempSync(path.join(tmpdir(), 'ed e2e '))
   const root = path.join(parent, 'Café board ü')
-  pullFixture(root)
+  await pullFixture(root)
   const project: E2eProject = {
     root,
     read: (file) => readFileSync(path.join(root, ...file.split('/'))),
@@ -158,7 +159,7 @@ export const test = base.extend<{ project: E2eProject; editor: RunningEditor }>(
   // Playwright reads a fixture's dependencies from its first argument, which must be an object pattern.
   // eslint-disable-next-line no-empty-pattern
   project: async ({}, use) => {
-    const { project, remove } = createProject()
+    const { project, remove } = await createProject()
     await use(project)
     remove()
   },

@@ -1,6 +1,6 @@
 import { readdir, readFile } from 'node:fs/promises'
 import path from 'node:path'
-import { SUPPORT_JS } from '../../shared/protocol'
+import { CURRENT_RELEASE_FILE, SUPPORT_JS } from '../../shared/protocol'
 
 export interface CachedFile {
   readonly bytes: Buffer
@@ -39,7 +39,9 @@ function isBlobFileOf(id: string, name: string): boolean {
   return name === id || (name.startsWith(`${id}.`) && !name.slice(id.length + 1).includes('.'))
 }
 
-/** `.editor/cache/` as `edsync cache` fills it: blobs stored as `<id>.<ext>`, plus the runtime's `support.js`. */
+const SAFE_RELEASE = /^[\w][\w.+-]*$/
+
+/** `.editor/cache/` as `edsync cache` fills it: blobs stored as `<id>.<ext>`, `support.js` under `<release>/`, the current release named in `current-release`. */
 export class BlobCache {
   constructor(private readonly cacheDir: string) {}
 
@@ -50,7 +52,19 @@ export class BlobCache {
   }
 
   async supportJs(): Promise<CachedFile | null> {
-    return (await this.names()).includes(SUPPORT_JS) ? this.read(SUPPORT_JS) : null
+    const release = (await this.readIfPresent(CURRENT_RELEASE_FILE))?.toString('utf8').trim()
+    if (!release || !SAFE_RELEASE.test(release)) return null
+    const bytes = await this.readIfPresent(path.join(release, SUPPORT_JS))
+    return bytes && { bytes, contentType: contentTypeOf(SUPPORT_JS) }
+  }
+
+  private async readIfPresent(name: string): Promise<Buffer | null> {
+    try {
+      return await readFile(path.join(this.cacheDir, name))
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+      throw error
+    }
   }
 
   private async names(): Promise<string[]> {

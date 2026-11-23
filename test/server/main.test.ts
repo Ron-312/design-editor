@@ -10,6 +10,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { ensureUiBuilt, parseArgs, startEditor } from '../../src/server/main'
 import { DEFAULT_EDITOR_PORT, HTTP_ROUTES, TOKEN_HEADER } from '../../src/shared/protocol'
+import { cacheFixtureAssets } from '../pulled-fixture'
 
 const REPO = fileURLToPath(new URL('../../', import.meta.url))
 const START_SCRIPT = path.join(REPO, 'scripts', 'start.mjs')
@@ -62,12 +63,12 @@ afterAll(() => {
   rmSync(uiDir, { recursive: true, force: true })
 })
 
-function makeProject(): string {
+async function makeProject(): Promise<string> {
   const parent = mkdtempSync(path.join(tmpdir(), 'ed main '))
   parents.push(parent)
   const root = path.join(parent, 'Café board ü')
   cpSync(path.join(CANVAS, 'project'), path.join(root, 'project'), { recursive: true })
-  cpSync(path.join(CANVAS, 'fetched'), path.join(root, '.editor', 'cache'), { recursive: true })
+  await cacheFixtureAssets(root)
   return root
 }
 
@@ -218,7 +219,7 @@ describe('ensureUiBuilt', () => {
 describe('startEditor', () => {
   it('binds both listeners to 127.0.0.1, the project origin on editor port + 1, with ipv4first DNS order', async () => {
     dns.setDefaultResultOrder('verbatim')
-    const root = makeProject()
+    const root = await makeProject()
     const port = await freePortPair()
 
     const editor = await launch(root, port)
@@ -229,7 +230,7 @@ describe('startEditor', () => {
   })
 
   it('writes .editor/server.json with both ports, a fresh token and its pid, and removes it on close', async () => {
-    const root = makeProject()
+    const root = await makeProject()
     const port = await freePortPair()
     const editor = await launch(root, port)
 
@@ -247,7 +248,7 @@ describe('startEditor', () => {
   })
 
   it('keeps the running editor\'s server.json when a second start on the same port fails', async () => {
-    const root = makeProject()
+    const root = await makeProject()
     const port = await freePortPair()
     await launch(root, port)
     const running = readServerJson(root)
@@ -258,7 +259,7 @@ describe('startEditor', () => {
   })
 
   it.skipIf(ON_WINDOWS)('writes server.json readable by its owner only', async () => {
-    const root = makeProject()
+    const root = await makeProject()
     const port = await freePortPair()
 
     await launch(root, port)
@@ -267,7 +268,7 @@ describe('startEditor', () => {
   })
 
   it('opens a project whose path has spaces and non-ASCII characters', async () => {
-    const root = makeProject()
+    const root = await makeProject()
     expect(root).toMatch(/ .*[^\p{ASCII}]/u)
     const port = await freePortPair()
 
@@ -277,7 +278,7 @@ describe('startEditor', () => {
   })
 
   it('stops with the in-use message when the editor port is taken, and never falls back to another port', async () => {
-    const root = makeProject()
+    const root = await makeProject()
     const port = await freePortPair()
     await occupy(port)
 
@@ -288,7 +289,7 @@ describe('startEditor', () => {
   })
 
   it('stops with the in-use message when the project port is taken, and releases the editor port', async () => {
-    const root = makeProject()
+    const root = await makeProject()
     const port = await freePortPair()
     await occupy(port + 1)
 
@@ -301,7 +302,7 @@ describe('startEditor', () => {
 
 describe('scripts/start.mjs', () => {
   it('runs the editor with the given args and shuts down on a token-guarded POST /shutdown', async () => {
-    const root = makeProject()
+    const root = await makeProject()
     const port = await freePortPair()
     const cli = await healthyCli(root, port)
     const info = readServerJson(root)
@@ -319,7 +320,7 @@ describe('scripts/start.mjs', () => {
   }, CLI_TEST_MS)
 
   it('shuts down cleanly when stdin closes', async () => {
-    const root = makeProject()
+    const root = await makeProject()
     const port = await freePortPair()
     const cli = await healthyCli(root, port)
 
@@ -330,7 +331,7 @@ describe('scripts/start.mjs', () => {
   }, CLI_TEST_MS)
 
   it.skipIf(ON_WINDOWS)('shuts down cleanly on a real SIGINT', async () => {
-    const root = makeProject()
+    const root = await makeProject()
     const port = await freePortPair()
     const cli = await healthyCli(root, port)
 
@@ -341,7 +342,7 @@ describe('scripts/start.mjs', () => {
   }, CLI_TEST_MS)
 
   it.each(['SIGINT', 'SIGBREAK'])('shuts down cleanly on %s', async (signal) => {
-    const root = makeProject()
+    const root = await makeProject()
     const port = await freePortPair()
     const preload = signalPreload(path.dirname(root))
     const env = { ...process.env, ED_TEST_SERVER_JSON: serverJsonOf(root), ED_TEST_SIGNAL: signal }
@@ -352,7 +353,7 @@ describe('scripts/start.mjs', () => {
   }, CLI_TEST_MS)
 
   it('exits with the in-use message when the port is taken', async () => {
-    const root = makeProject()
+    const root = await makeProject()
     const port = await freePortPair()
     await occupy(port)
 
@@ -364,7 +365,7 @@ describe('scripts/start.mjs', () => {
   }, CLI_TEST_MS)
 
   it.skipIf(ON_WINDOWS)('stops at startup with the found version and an upgrade hint when Git is older than 2.44', async () => {
-    const root = makeProject()
+    const root = await makeProject()
     const fakeBin = path.join(path.dirname(root), 'old git bin')
     mkdirSync(fakeBin)
     writeFileSync(path.join(fakeBin, 'git'), '#!/bin/sh\necho "git version 2.39.5"\n')

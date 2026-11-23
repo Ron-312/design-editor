@@ -33,7 +33,6 @@ type LeftTab = 'layers' | 'changes'
 type SyncStep = 'pulled' | 'edited' | 'pushing'
 type RestoredMessage = Extract<ServerMessage, { type: 'restored' }>
 
-const NO_TOKENS: readonly Token[] = []
 const NO_UNDO: UndoState = { canUndo: false, canRedo: false, undoLabel: null, redoLabel: null }
 const TOAST_MS = 6000
 const OFFLINE_BANNER = 'offline'
@@ -126,6 +125,7 @@ export function App({ store, ws, platform, projectName }: AppProps) {
   const [undoState, setUndoState] = useState<UndoState>(NO_UNDO)
   const [saved, setSaved] = useState<SavedEdit | null>(null)
   const [leftTab, setLeftTab] = useState<LeftTab>('layers')
+  const [tokens, setTokens] = useState<readonly Token[]>([])
   const registry = useMemo(() => createDefaultRegistry(platform), [platform])
   const editorState = session?.editorState
   const ctx = useMemo(
@@ -143,6 +143,9 @@ export function App({ store, ws, platform, projectName }: AppProps) {
             break
           case 'undoState':
             setUndoState(message.state)
+            break
+          case 'tokens':
+            setTokens(message.tokens)
             break
           case 'ack':
             setSaved({ record: message.record, line: lineOf(store, message.record) })
@@ -273,7 +276,7 @@ export function App({ store, ws, platform, projectName }: AppProps) {
 
       {panelCtx ? (
         <ErrorBoundary area="properties panel">
-          <PropertiesPanel ctx={panelCtx} tokens={NO_TOKENS} />
+          <PropertiesPanel ctx={panelCtx} tokens={tokens} />
         </ErrorBoundary>
       ) : (
         <aside className="props" aria-label="Properties" />

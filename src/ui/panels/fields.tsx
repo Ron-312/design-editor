@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, type ChangeEvent, type KeyboardEvent, type ReactNode } from 'react'
-import type { BoardIndex } from '../../shared/protocol'
+import type { BoardIndex, DesignToken } from '../../shared/protocol'
 import type { AuthoredDeclaration, EdId, EditOp, RuleId, StyleSource } from '../../shared/types'
 import type { EditorContext } from '../plugin-api'
 import { colorAlpha, inAuthoredColorFormat, stepNumber, withAuthoredUnit, withColorAlpha } from './css-values'
@@ -96,12 +96,7 @@ export function Icon({ name }: { readonly name: IconName }) {
   )
 }
 
-/** A design-system token: `tokens.json` tokens are written as their literal value, `:root` variables as `var()`. */
-export interface Token {
-  readonly name: string
-  readonly value: string
-  readonly source: 'tokens.json' | ':root'
-}
+export type Token = DesignToken
 
 /** Where edits land: the element's inline `style`, or the `<helmet><style>` rule picked in the selector chip. */
 export type StyleTarget = 'inline' | RuleId

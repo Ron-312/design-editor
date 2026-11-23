@@ -10,6 +10,7 @@ import { startProjectServer, type ProjectServer, type ProjectServerOptions } fro
 import { SourceIndex, type IndexedFile } from '../../../src/server/source/source-index'
 import { HTTP_ROUTES, TOKEN_HEADER, WS_PATH } from '../../../src/shared/protocol'
 import type { EdId, ProjectPath } from '../../../src/shared/types'
+import { cacheFixtureAssets, FIXTURE_RELEASE } from '../../pulled-fixture'
 
 interface Reply {
   readonly status: number
@@ -37,12 +38,12 @@ const openServers: ProjectServer[] = []
 const roots: string[] = []
 
 /** A pulled project as `/design-pull` leaves it: the git root holds project/, .editor/ and .git/. */
-function makeProjectRoot(): string {
+async function makeProjectRoot(): Promise<string> {
   const parent = mkdtempSync(path.join(tmpdir(), 'ed serve '))
   const root = path.join(parent, 'Café board ü')
   roots.push(parent)
   cpSync(path.join(CANVAS, 'project'), path.join(root, 'project'), { recursive: true })
-  cpSync(path.join(CANVAS, 'fetched'), path.join(root, '.editor', 'cache'), { recursive: true })
+  await cacheFixtureAssets(root)
   writeFileSync(path.join(root, '.editor', 'server.json'), JSON.stringify({ port: 5300, token: EDITOR_TOKEN, pid: 1, startedAt: 0 }))
   writeFileSync(path.join(root, '.editor', 'state.json'), JSON.stringify({ hidden: [], locked: [], collapsed: [], boards: {} }))
   mkdirSync(path.join(root, '.git'))
@@ -83,7 +84,7 @@ interface Started {
 }
 
 async function start(overrides: Partial<ProjectServerOptions> = {}): Promise<Started> {
-  const root = makeProjectRoot()
+  const root = await makeProjectRoot()
   const projectPort = await freeProjectPort()
   const editorPort = projectPort - 1
   const sourceIndex = new SourceIndex()
@@ -520,10 +521,10 @@ describe('project listener: documents, blobs and support.js', () => {
     }
   })
 
-  it('answers ./support.js from .editor/cache/', async () => {
+  it('answers ./support.js from the current release in .editor/cache/', async () => {
     const reply = await get(`${started.server.prefix}support.js`)
     expect(reply.status).toBe(200)
-    expect(reply.body.equals(readFileSync(path.join(started.root, '.editor', 'cache', 'support.js')))).toBe(true)
+    expect(reply.body.equals(readFileSync(path.join(started.root, '.editor', 'cache', FIXTURE_RELEASE, 'support.js')))).toBe(true)
     expect(reply.headers['content-type']).toMatch(/javascript/)
   })
 

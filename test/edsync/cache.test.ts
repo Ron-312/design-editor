@@ -4,6 +4,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { cacheFetched, rewriteBlobs } from '../../src/edsync/cache'
+import { BlobCache } from '../../src/server/serve/blob-cache'
 import { EDITOR_FILES } from '../../src/shared/protocol'
 
 const FIXTURES = fileURLToPath(new URL('../fixtures/', import.meta.url))
@@ -100,6 +101,20 @@ describe('cacheFetched', () => {
     await cacheFetched({ projectDir, from: scratchRound({ 'support.js': 'window.release = 2\n' }), release: 'r2' })
     expect(readFileSync(path.join(cacheDir, 'r1', 'support.js'), 'utf8')).toBe('window.release = 1\n')
     expect(readFileSync(path.join(cacheDir, 'r2', 'support.js'), 'utf8')).toBe('window.release = 2\n')
+  })
+
+  it('makes the release it last cached support.js for the one the editor serves', async () => {
+    await cacheFetched({ projectDir, from: scratchRound({ 'support.js': 'window.release = 1\n' }), release: 'r1' })
+    await cacheFetched({ projectDir, from: scratchRound({ 'support.js': 'window.release = 2\n' }), release: 'r2' })
+    await cacheFetched({ projectDir, from: scratchRound({ [CSS_FILE]: fetchedFixture(CSS_FILE) }), release: 'r3' })
+
+    const served = await new BlobCache(cacheDir).supportJs()
+    expect(served?.bytes.toString('utf8')).toBe('window.release = 2\n')
+    expect(served?.contentType).toMatch(/javascript/)
+  })
+
+  it.each(['../escape', 'a/b', ''])('refuses the release name %j', async (release) => {
+    await expect(cacheFetched({ projectDir, from: scratchRound({ 'support.js': 'x' }), release })).rejects.toThrow(/--release/)
   })
 
   it('leaves the scratch folder as it found it', async () => {

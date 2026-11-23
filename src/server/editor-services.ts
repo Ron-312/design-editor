@@ -3,18 +3,11 @@ import path from 'node:path'
 import { atomicWrite } from '../core/atomic-write'
 import { gitOutput } from '../core/git'
 import { toNativePath } from '../shared/paths'
-import { EDITOR_FILES, type EditorState } from '../shared/protocol'
+import { EDITOR_FILES, type DesignToken, type EditorState } from '../shared/protocol'
 import { CANVAS_JSON } from '../shared/sync'
 import type { Board, CanvasLayout, ProjectPath } from '../shared/types'
 import { readSource } from './source/bytes'
 import { SourceIndex } from './source/source-index'
-
-/** A design-system token: `tokens.json` tokens are written as their literal value, `:root` variables as `var()`. */
-export interface DesignToken {
-  readonly name: string
-  readonly value: string
-  readonly source: 'tokens.json' | ':root'
-}
 
 interface CanvasJson {
   readonly boards: Readonly<Record<string, { readonly w: number; readonly h: number }>>

@@ -23,6 +23,7 @@ import {
 } from '../../src/shared/protocol'
 import { LEASE } from '../../src/shared/sync'
 import type { EdId, EditOp, EditPayloads, ProjectPath } from '../../src/shared/types'
+import { cacheFixtureAssets } from '../pulled-fixture'
 
 type MessageOf<T extends ServerMessage['type']> = Extract<ServerMessage, { type: T }>
 
@@ -96,7 +97,7 @@ async function makeProject(homeBytes: Buffer = HOME_BYTES): Promise<string> {
   const root = path.join(parent, 'Café board ü')
   cpSync(path.join(CANVAS, 'project'), path.join(root, 'project'), { recursive: true })
   writeFileSync(path.join(root, 'project', 'home.dc.html'), homeBytes)
-  cpSync(path.join(CANVAS, 'fetched'), path.join(root, '.editor', 'cache'), { recursive: true })
+  await cacheFixtureAssets(root)
   await git(root, 'init', '-q')
   await git(root, 'config', 'user.email', 'test@example.com')
   await git(root, 'config', 'user.name', 'Test')
@@ -661,6 +662,24 @@ describe('a push lock the editor does not own at startup', () => {
     const client = await connect(editor)
 
     expect((await client.waitFor('hello')).readOnly).toBe(false)
+  })
+})
+
+describe('design tokens', () => {
+  it('sends the tokens.json tokens on connect, and again when tokens.json changes outside the editor', async () => {
+    const root = await makeProject()
+    const editor = await launch(root)
+    const client = await connect(editor)
+
+    const first = await client.waitFor('tokens')
+    expect(first.tokens).toContainEqual({ name: 'color.accent', value: '#c2410c', source: 'tokens.json' })
+
+    const tokensFile = path.join(root, 'project', 'ds', 'core', 'tokens.json')
+    const at = client.messages.length
+    writeFileSync(tokensFile, JSON.stringify({ color: { brand: { value: '#123456' } } }))
+
+    const changed = await client.waitFor('tokens', () => true, at)
+    expect(changed.tokens).toEqual([{ name: 'color.brand', value: '#123456', source: 'tokens.json' }])
   })
 })
 

@@ -248,6 +248,20 @@ test.describe('M5: structure and multi-edit', () => {
     await expect(layerRowOf(page, final)).toBeVisible()
   })
 
+  test('picking a tokens.json token writes its literal value into the selected element', async ({ page, project, editor }) => {
+    await goOffline(page)
+    await openEditor(page, editor)
+    await selectRow(page, await edIdOf(column(page, 'Brief')))
+
+    const field = properties(page).locator('[data-prop="background-color"]')
+    await field.getByRole('button', { name: 'Tokens' }).click()
+    await properties(page).getByRole('option', { name: /color\.paper/ }).click()
+
+    const expected = originalHome(project).replace(BRIEF, BRIEF.replace('padding: 16px', 'padding: 16px; background-color: #fff7ed'))
+    await expect.poll(() => homeText(project)).toBe(expected)
+    await expect(column(page, 'Brief')).toHaveCSS('background-color', 'rgb(255, 247, 237)')
+  })
+
   test('hide and lock shortcuts change editor-only state and never the source', async ({ page, project, editor }) => {
     await goOffline(page)
     await openEditor(page, editor)

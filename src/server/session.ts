@@ -1,13 +1,13 @@
 import type WebSocket from 'ws'
 import { acquirePushLock, isPushLockLive, releasePushLock, renewPushLock } from '../core/push-lock'
 import { findStoredPath } from '../shared/paths'
-import type { BoardIndex, ClientMessage, EditorState, ServerMessage } from '../shared/protocol'
+import type { BoardIndex, ClientMessage, DesignToken, EditorState, ServerMessage } from '../shared/protocol'
 import { LEASE, type PushLock } from '../shared/sync'
 import type { CanvasLayout, EdId, EditOp, ProjectPath, StyleSource } from '../shared/types'
 import { parseClientMessage } from './client-message'
 import { UndoLog } from './edit/undo-log'
 import { contentHash, Writer } from './edit/writer'
-import { readCanvasLayout, readEditorState, syncedText, writeEditorState } from './editor-services'
+import { loadTokens, readCanvasLayout, readEditorState, syncedText, writeEditorState } from './editor-services'
 import { encodeSource } from './source/bytes'
 import { SourceIndex, type IndexedFile } from './source/source-index'
 import { reconcile } from './watch/reconcile'
@@ -15,6 +15,7 @@ import { reconcile } from './watch/reconcile'
 const PUSH_IN_PROGRESS = 'Push in progress: the canvas is read-only until it finishes'
 const FOREIGN_LOCK_POLL_MS = 500
 const PROJECT_FOLDER_PREFIX = 'project/'
+const TOKEN_SOURCES = /^project\/(?:ds\/[^/]+\/tokens\.json|[^/]+\.dc\.html)$/
 /** chokidar can miss a change that lands while it re-attaches to a file the Writer's atomic rename replaced. */
 const OWN_WRITE_RECHECK_MS = 250
 
@@ -47,6 +48,7 @@ export class EditSession {
   private lock: LockState | null = null
   private frameBase = ''
   private recheck: ReturnType<typeof setTimeout> | undefined
+  private tokens: readonly DesignToken[] = []
 
   private constructor(
     private readonly root: string,
@@ -60,6 +62,7 @@ export class EditSession {
   static async open(root: string): Promise<EditSession> {
     const session = new EditSession(root, await readCanvasLayout(root), await readEditorState(root))
     for (const board of session.layout.order) await session.writer.open(board)
+    session.tokens = await loadTokens(root)
     if (await isPushLockLive(root)) session.watchForeignLock()
     return session
   }
@@ -79,6 +82,7 @@ export class EditSession {
 
   outsideChange(file: ProjectPath): void {
     inBackground(this.writer.outsideChange(file))
+    if (TOKEN_SOURCES.test(file)) inBackground(this.refreshTokens())
   }
 
   /** The project origin serves the session's ids; bytes the watcher has not reconciled yet get fresh ones until it does. */
@@ -95,6 +99,7 @@ export class EditSession {
       if (message) inBackground(this.receive(socket, message))
     })
     this.sendTo(socket, { type: 'hello', layout: this.layout, editorState: this.state, readOnly: this.lock !== null })
+    this.sendTo(socket, { type: 'tokens', tokens: this.tokens })
   }
 
   /** Flushes the debounce to disk, then takes push.lock; null while any lock is held. */
@@ -202,6 +207,7 @@ export class EditSession {
     this.broadcast(message)
     if (message.type !== 'undoState') return
     this.resendChangedIndexes()
+    inBackground(this.refreshTokens())
     this.recheckBoardsSoon()
   }
 
@@ -210,6 +216,14 @@ export class EditSession {
     this.recheck = setTimeout(() => {
       for (const board of this.layout.order) inBackground(this.writer.outsideChange(board))
     }, OWN_WRITE_RECHECK_MS)
+  }
+
+  /** The editor's own writes can change a `:root` variable too, so a flush refreshes the list as an outside edit does. */
+  private async refreshTokens(): Promise<void> {
+    const tokens = await loadTokens(this.root)
+    if (JSON.stringify(tokens) === JSON.stringify(this.tokens)) return
+    this.tokens = tokens
+    this.broadcast({ type: 'tokens', tokens })
   }
 
   private resendChangedIndexes(): void {

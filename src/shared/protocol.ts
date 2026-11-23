@@ -24,6 +24,8 @@ export const TOKEN_HEADER = 'x-editor-token'
 export const PROJECT_PATH_PREFIX = '/project/'
 export const BLOB_PATH_PREFIX = '/_blob/'
 export const SUPPORT_JS = 'support.js'
+/** Inside `.editor/cache/`: names the type release whose `<release>/support.js` the canvas runs on. */
+export const CURRENT_RELEASE_FILE = 'current-release'
 
 export const EDITOR_DIR = '.editor'
 export const EDITOR_FILES = {
@@ -42,6 +44,13 @@ export interface ServerInfo {
   readonly token: string
   readonly pid: number
   readonly startedAt: number
+}
+
+/** A design-system token: `tokens.json` tokens are written as their literal value, `:root` variables as `var()`. */
+export interface DesignToken {
+  readonly name: string
+  readonly value: string
+  readonly source: 'tokens.json' | ':root'
 }
 
 /** Editor-only state; never written into the source. */
@@ -135,6 +144,8 @@ export type ServerMessage =
   | { readonly type: 'writeFailed'; readonly file: ProjectPath; readonly reason: 'locked' | 'error'; readonly message: string }
   | { readonly type: 'pushLock'; readonly held: boolean }
   | { readonly type: 'pushStale'; readonly heldForMs: number }
+  /** The token picker's list; sent on connect and again whenever it changes. */
+  | { readonly type: 'tokens'; readonly tokens: readonly DesignToken[] }
 
 // ── Probe ↔ editor over the handshake MessagePort ─────────────────────────────
 

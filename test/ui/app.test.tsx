@@ -363,6 +363,22 @@ describe('editor shell', () => {
     expect(container.querySelector('[role="alert"]')).toBeNull()
   })
 
+  it('gives the properties panel the tokens the server sends, and writes the one picked', async () => {
+    const { container, socket, store } = await openHome()
+    await receive(socket, { type: 'tokens', tokens: [{ name: 'color.paper', value: '#fff7ed', source: 'tokens.json' }] })
+    const radius = { ...homeIndex, styles: { ...homeIndex.styles, [edId('header')]: [inlineAt(home, 47, 'background-color', '#000000')] } }
+    await receive(socket, { type: 'index', index: radius })
+    act(() => store.select([edId('header')]))
+    await settle()
+
+    const field = container.querySelector('[data-prop="background-color"]')!
+    await click(buttonNamed(field, /^Tokens$/))
+    await click([...container.querySelectorAll('[role="option"]')].find((option) => text(option).includes('color.paper'))!)
+
+    const sent = sentOfType(socket, 'op').at(-1)
+    expect(sent?.op).toMatchObject({ kind: 'setDecl', target: ['header'], payload: { prop: 'background-color', value: '#fff7ed' } })
+  })
+
   it('saves a layer hidden in the layers panel through saveEditorState', async () => {
     const { container, socket } = await openHome()
     const headerRow = container.querySelector('[role="treeitem"][data-layer-id="header"]')!
