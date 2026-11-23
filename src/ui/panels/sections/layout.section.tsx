@@ -59,9 +59,13 @@ function useComputedStyle(edId: EdId | null, props: readonly string[]): Readonly
   useEffect(() => {
     if (!edId) return
     let current = true
-    void ctx.read({ kind: 'computed', edId, props }).then((result) => {
-      if (current) setValues({ ...INITIAL_VALUES, ...Object.fromEntries(Object.entries(result.values).filter(([, value]) => value !== '')) })
-    })
+    ctx
+      .read({ kind: 'computed', edId, props })
+      .then((result) => {
+        if (current) setValues({ ...INITIAL_VALUES, ...Object.fromEntries(Object.entries(result.values).filter(([, value]) => value !== '')) })
+      })
+      // A reload rejects reads in flight; the next index change reads again.
+      .catch(() => {})
     return () => {
       current = false
     }
@@ -251,7 +255,7 @@ function SizingControl({ axis, onMain, item }: SizingControlProps) {
           className={mode === value ? 'on' : undefined}
           aria-checked={mode === value}
           disabled={!state.editable}
-          onClick={() => void pick(value)}
+          onClick={() => void pick(value).catch(() => {})}
         >
           {name}
         </button>
@@ -274,7 +278,7 @@ function ContentBoxMaxWarning({ children }: { readonly children: ReactNode }) {
     const { ctx } = state
     const apply = async (op: EditOp) => {
       const ack = await ctx.apply(op)
-      void warnIfContentBox(ctx, op)
+      void warnIfContentBox(ctx, op).catch(() => {})
       return ack
     }
     return { ...state, ctx: { ...ctx, apply } }
@@ -335,20 +339,16 @@ function SizeSection({ ctx, selection }: PanelSectionProps) {
   return (
     <div className="rows layout">
       <style>{SECTION_CSS}</style>
-      {inFlex ? (
-        (['width', 'height'] as const).map((axis) => (
-          <div className="sz" key={axis}>
-            <span className="ax">{AXIS_LABELS[axis]}</span>
-            <SizingControl axis={axis} onMain={axis === mainAxis} item={item} />
-            <NumberField prop={axis} label={AXIS_LABELS[axis]} bare />
+      {/* One tree for both layouts: the computed reads that decide `inFlex` land late, and a remount would drop typed text. */}
+      <div className={inFlex ? 'rows' : 'r r2'}>
+        {(['width', 'height'] as const).map((axis) => (
+          <div className={inFlex ? 'sz' : undefined} key={axis}>
+            {inFlex && <span className="ax">{AXIS_LABELS[axis]}</span>}
+            {inFlex && <SizingControl axis={axis} onMain={axis === mainAxis} item={item} />}
+            <NumberField prop={axis} label={AXIS_LABELS[axis]} bare={inFlex} />
           </div>
-        ))
-      ) : (
-        <div className="r r2">
-          <NumberField prop="width" label="W" />
-          <NumberField prop="height" label="H" />
-        </div>
-      )}
+        ))}
+      </div>
       <ContentBoxMaxWarning>
         <div className="r r2">
           <NumberField prop="min-width" label="Min W" />
@@ -358,7 +358,7 @@ function SizeSection({ ctx, selection }: PanelSectionProps) {
         </div>
       </ContentBoxMaxWarning>
       {inFlex && tree && item['position'] !== 'absolute' && (
-        <button type="button" className="add-al" disabled={!state.editable} onClick={() => void ignoreAutoLayout(state, tree)}>
+        <button type="button" className="add-al" disabled={!state.editable} onClick={() => void ignoreAutoLayout(state, tree).catch(() => {})}>
           Ignore auto layout
         </button>
       )}

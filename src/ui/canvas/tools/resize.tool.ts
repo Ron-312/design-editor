@@ -196,6 +196,11 @@ function onPointerUp(): boolean {
   return true
 }
 
+function onCancel(): void {
+  resize = null
+  drawLayer(DRAG_LAYER, [])
+}
+
 function onHover(ctx: EditorContext): boolean {
   trackSelection(ctx)
   return false
@@ -210,4 +215,5 @@ export const tool: CanvasTool = {
   onPointerMove,
   onPointerUp,
   onHover,
+  onCancel,
 }

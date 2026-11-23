@@ -142,6 +142,10 @@ interface MountOptions {
   readonly tokens?: readonly Token[]
   readonly probe?: Partial<Probe>
   readonly sections?: readonly PanelSection[]
+  /** Probe reads wait for this before they answer. */
+  readonly readsAfter?: Promise<unknown>
+  /** Probe reads reject with this instead of answering. */
+  readonly readError?: Error
 }
 
 interface Mounted {
@@ -164,7 +168,11 @@ async function mountPanel(options: MountOptions = {}): Promise<Mounted> {
   store.setIndex(index)
   store.select((options.selection ?? ['card']).map(edId))
   const probe = { ...defaultProbe, ...options.probe }
-  const reads = vi.fn(async (read: ProbeRead) => answer(probe, read))
+  const reads = vi.fn(async (read: ProbeRead) => {
+    await options.readsAfter
+    if (options.readError) throw options.readError
+    return answer(probe, read)
+  })
   const ctx = contextFor(store, reads)
   const container = document.createElement('div')
   document.body.append(container)
@@ -394,6 +402,79 @@ describe('number fields', () => {
     await commit(inputOf('line-height'), '2')
 
     expect(lastOp(view)).toMatchObject({ payload: { prop: 'line-height', value: '2' } })
+  })
+
+  it('keeps typed text when the selection’s styles arrive while typing, and writes it on Enter', async () => {
+    const view = await mountPanel()
+    act(() => {
+      inputOf('font-size').focus()
+      setNativeValue(inputOf('font-size'), '20px')
+    })
+
+    const styles = { ...defaultStyles, card: [inline(12, [decl('font-size', '16px')])] } as BoardIndex['styles']
+    act(() => view.store.setIndex({ ...view.store.getState().index!, styles }))
+    await settle()
+    expect(inputOf('font-size').value).toBe('20px')
+
+    act(() => key(inputOf('font-size'), 'Enter'))
+    await settle()
+    expect(lastOp(view)).toMatchObject({ target: ['card'], payload: { prop: 'font-size', value: '20px' } })
+  })
+
+  it('drops typed text when the selection changes before Enter', async () => {
+    const view = await mountPanel()
+    act(() => {
+      inputOf('font-size').focus()
+      setNativeValue(inputOf('font-size'), '20px')
+    })
+
+    act(() => view.store.select([edId('other')]))
+    await settle()
+    expect(inputOf('font-size').value).toBe('14px')
+
+    act(() => key(inputOf('font-size'), 'Enter'))
+    await settle()
+    expect(view.ctx.apply).not.toHaveBeenCalled()
+  })
+})
+
+describe('typed text across late probe reads and reloads', () => {
+  it('keeps typed width text when the reads that place the element in auto layout land while typing', async () => {
+    let answerReads = () => {}
+    const view = await mountPanel({
+      probe: { computed: { display: 'flex' } },
+      readsAfter: new Promise<void>((resolve) => (answerReads = resolve)),
+    })
+    const typedInto = inputOf('width')
+    act(() => {
+      typedInto.focus()
+      setNativeValue(typedInto, '300px')
+    })
+
+    answerReads()
+    await settle()
+    expect(document.querySelector('[aria-label="Width sizing"]')).not.toBeNull()
+    expect(inputOf('width')).toBe(typedInto)
+    expect(typedInto.value).toBe('300px')
+
+    act(() => key(typedInto, 'Enter'))
+    await settle()
+    expect(lastOp(view)).toMatchObject({ target: ['card'], payload: { prop: 'width', value: '300px' } })
+  })
+
+  it('leaves no read rejected by a frame reload unhandled, and still writes typed text', async () => {
+    const unhandled: unknown[] = []
+    const onUnhandled = (reason: unknown) => unhandled.push(reason)
+    process.on('unhandledRejection', onUnhandled)
+    try {
+      const view = await mountPanel({ selection: ['item'], readError: new Error('the frame reloaded before the probe answered') })
+      await commit(inputOf('width'), '120px')
+
+      expect(lastOp(view)).toMatchObject({ target: ['item'], payload: { prop: 'width', value: '120px' } })
+      expect(unhandled).toEqual([])
+    } finally {
+      process.off('unhandledRejection', onUnhandled)
+    }
   })
 })
 

@@ -112,6 +112,8 @@ export interface CanvasTool {
   readonly onPointerUp?: PointerHandler
   readonly onDoubleClick?: PointerHandler
   readonly onHover?: PointerHandler
+  /** The claimed gesture ended without a release (pointercancel, lost capture, Escape): drop it and write nothing. */
+  readonly onCancel?: (ctx: EditorContext) => void
 }
 
 export interface EditorPlugin {

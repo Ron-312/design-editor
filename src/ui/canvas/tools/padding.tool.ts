@@ -90,9 +90,12 @@ export const tool: CanvasTool = {
       measured = null
       return false
     }
-    void measure(ctx, edId).then((box) => {
-      measured = box
-    })
+    measure(ctx, edId)
+      .then((box) => {
+        measured = box
+      })
+      // A reload rejects the rects read; the next hover measures again.
+      .catch(() => {})
     return false
   },
   onPointerDown(ctx, pointer) {
@@ -113,5 +116,8 @@ export const tool: CanvasTool = {
     measured = null
     void writePadding(ctx, finished, paddingAt(finished, pointer))
     return true
+  },
+  onCancel() {
+    drag = null
   },
 }

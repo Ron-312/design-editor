@@ -147,9 +147,12 @@ function useUnrendered(ctx: EditorContext, tree: TemplateNode | undefined): Read
     if (!tree) return
     let current = true
     const counts = renderedNodes(tree).map(async (node) => ({ edId: node.edId, rects: (await ctx.read({ kind: 'rects', edId: node.edId })).rects }))
-    void Promise.all(counts).then((nodes) => {
-      if (current) setUnrendered(new Set(nodes.filter((node) => node.rects.length === 0).map((node) => node.edId)))
-    })
+    Promise.all(counts)
+      .then((nodes) => {
+        if (current) setUnrendered(new Set(nodes.filter((node) => node.rects.length === 0).map((node) => node.edId)))
+      })
+      // A reload rejects reads in flight; the reload's new index reads again.
+      .catch(() => {})
     return () => {
       current = false
     }

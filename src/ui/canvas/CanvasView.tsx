@@ -360,7 +360,7 @@ export function CanvasView({ ref, store, ws, layout, editorState, platform, tool
     }
     const tool = claimingTool('onPointerDown', pointer)
     gesture.current = tool ? { kind: 'tool', tool } : null
-    if (!tool) void selectAt(pointer)
+    if (!tool) void selectAt(pointer).catch(() => {})
   }
 
   function onPointerMove(event: ReactPointerEvent<HTMLDivElement>): void {
@@ -376,7 +376,7 @@ export function CanvasView({ ref, store, ws, layout, editorState, platform, tool
       current.tool.onPointerMove?.(ctx, pointer)
       return
     }
-    if (event.buttons === 0 && store.getState().mode === 'select' && !claimingTool('onHover', pointer)) void hoverAt(pointer)
+    if (event.buttons === 0 && store.getState().mode === 'select' && !claimingTool('onHover', pointer)) void hoverAt(pointer).catch(() => {})
   }
 
   /** A tool that claimed the press but turns down its release never dragged, so the press is a click. */
@@ -386,13 +386,19 @@ export function CanvasView({ ref, store, ws, layout, editorState, platform, tool
     if (current?.kind !== 'tool') return
     const pointer = pointerAt(event)
     const used = current.tool.onPointerUp?.(ctx, pointer) ?? true
-    if (!used) void selectAt(pointer)
+    if (!used) void selectAt(pointer).catch(() => {})
+  }
+
+  function cancelGesture(): void {
+    const current = gesture.current
+    gesture.current = null
+    if (current?.kind === 'tool') current.tool.onCancel?.(ctx)
   }
 
   function onDoubleClick(event: ReactMouseEvent<HTMLDivElement>): void {
     if (store.getState().interact || spaceHeld.current) return
     const pointer = pointerAt(event)
-    if (!claimingTool('onDoubleClick', pointer)) void doubleClickAt(pointer)
+    if (!claimingTool('onDoubleClick', pointer)) void doubleClickAt(pointer).catch(() => {})
   }
 
   function fitBoard(): void {
@@ -425,7 +431,7 @@ export function CanvasView({ ref, store, ws, layout, editorState, platform, tool
       case 'Tab':
         return () => selectWith((tree, selection) => siblingSelection(tree, selection, event.shiftKey ? -1 : 1))
       case 'Escape':
-        return () => store.select([])
+        return gesture.current ? cancelGesture : () => store.select([])
       case 'v':
         return () => store.setMode('select')
       case 'h':
@@ -487,6 +493,8 @@ export function CanvasView({ ref, store, ws, layout, editorState, platform, tool
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
+          onPointerCancel={cancelGesture}
+          onLostPointerCapture={cancelGesture}
           onPointerLeave={() => store.setHover(null)}
           onDoubleClick={onDoubleClick}
         />

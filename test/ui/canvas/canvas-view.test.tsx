@@ -4,17 +4,18 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BoardIndex, ClientMessage, EditorState, ProbeRead, ProbeReadResult, ProbeToEditor, Rect } from '../../../src/shared/protocol'
-import type { Board, CanvasLayout, EdId, ProjectPath, TemplateNode } from '../../../src/shared/types'
+import type { Board, CanvasLayout, EdId, EditOp, ProjectPath, TemplateNode } from '../../../src/shared/types'
 import type { Platform } from '../../../src/ui/actions/registry'
-import { CanvasView, defaultCanvasTools, loadCanvasTools, openBoard, type CanvasCommands, type ToolModule } from '../../../src/ui/canvas/CanvasView'
+import { CanvasView, canvasContext, defaultCanvasTools, loadCanvasTools, openBoard, type CanvasCommands, type ToolModule } from '../../../src/ui/canvas/CanvasView'
 import type { CanvasPointer, CanvasTool, EditorContext, PointerHandler } from '../../../src/ui/plugin-api'
+import type { ProbeClient } from '../../../src/ui/probe-client'
 import { createEditorStore, type EditorStore } from '../../../src/ui/store'
 import type { WsClient } from '../../../src/ui/ws-client'
 
 /** Stands in for the probe inside the frame: answers reads from the rendered scene below. */
 const probes = vi.hoisted(() => {
   type Listener = (message: ProbeToEditor) => void
-  const scene = { rendered: [] as Array<readonly [string, Rect]> }
+  const scene = { rendered: [] as Array<readonly [string, Rect]>, computed: {} as Record<string, Readonly<Record<string, string>>> }
   const contains = (rect: Rect, x: number, y: number) =>
     x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height
 
@@ -30,8 +31,10 @@ const probes = vi.hoisted(() => {
         const self = scene.rendered.find(([id]) => id === read.edId)?.[1] ?? { x: 0, y: 0, width: 0, height: 0 }
         return { kind: 'snapRects', self, parent: null, siblings: [] }
       }
-      case 'computed':
-        return { kind: 'computed', values: {} }
+      case 'computed': {
+        const values = scene.computed[read.edId] ?? {}
+        return { kind: 'computed', values: Object.fromEntries(read.props.flatMap((prop) => (prop in values ? [[prop, values[prop]!]] : []))) }
+      }
       case 'supports':
         return { kind: 'supports', supported: true }
     }
@@ -390,6 +393,7 @@ function notices(store: EditorStore): string[] {
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true
   probes.scene.rendered = [...homeScene]
+  probes.scene.computed = {}
   vi.stubGlobal('ResizeObserver', FakeResizeObserver)
   vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
     return sizedRect(this)
@@ -964,5 +968,261 @@ describe('canvas tools', () => {
 
     expect(declining.onPointerDown).toHaveBeenCalled()
     expect(view.store.getState().view.selection).toEqual(ids('card'))
+  })
+})
+
+describe('the editor context the canvas hands its tools', () => {
+  function fakeProbe() {
+    return { read: vi.fn(async () => ({ kind: 'rects', rects: [] })), previewDecl: vi.fn() }
+  }
+
+  function contextWith(probe: ReturnType<typeof fakeProbe> | null) {
+    const store = createEditorStore()
+    const ws = fakeWs()
+    ws.sendOp.mockResolvedValue('acked')
+    const state = editorStateWith(ids('aside'))
+    const ctx = canvasContext(store, ws as unknown as WsClient, probe as unknown as ProbeClient | null, state)
+    return { store, ws, ctx, state }
+  }
+
+  it('previews a declaration in the frame and sends it with the value it previewed for each target', async () => {
+    const probe = fakeProbe()
+    const { ws, ctx } = contextWith(probe)
+    const op: EditOp = { target: ids('title', 'aside'), kind: 'setDecl', payload: { prop: 'width', value: '120px' } }
+
+    await expect(ctx.apply(op)).resolves.toBe('acked')
+
+    expect(probe.previewDecl).toHaveBeenCalledWith(ids('title', 'aside'), 'width', '120px')
+    expect(ws.sendOp).toHaveBeenCalledWith(op, { title: '120px', aside: '120px' })
+  })
+
+  it('previews a removed declaration as gone and sends no previewed values', async () => {
+    const probe = fakeProbe()
+    const { ws, ctx } = contextWith(probe)
+    const op: EditOp = { target: ids('title'), kind: 'removeDecl', payload: { prop: 'width' } }
+
+    await ctx.apply(op)
+
+    expect(probe.previewDecl).toHaveBeenCalledWith(ids('title'), 'width', null)
+    expect(ws.sendOp).toHaveBeenCalledWith(op, {})
+  })
+
+  it('previews nothing for a structural op', async () => {
+    const probe = fakeProbe()
+    const { ws, ctx } = contextWith(probe)
+    const op: EditOp = { target: ids('title'), kind: 'moveNode', payload: { parent: edId('card'), before: null } }
+
+    await ctx.apply(op)
+
+    expect(probe.previewDecl).not.toHaveBeenCalled()
+    expect(ws.sendOp).toHaveBeenCalledWith(op, {})
+  })
+
+  it('still sends a declaration with no frame loaded', async () => {
+    const { ws, ctx } = contextWith(null)
+    const op: EditOp = { target: ids('title'), kind: 'setDecl', payload: { prop: 'width', value: '120px' } }
+
+    await ctx.apply(op)
+
+    expect(ws.sendOp).toHaveBeenCalledWith(op, { title: '120px' })
+  })
+
+  it('rejects reads with no frame loaded, and passes them to the probe once one is', async () => {
+    await expect(contextWith(null).ctx.read({ kind: 'rects', edId: edId('title') })).rejects.toThrow('No artboard is loaded')
+
+    const probe = fakeProbe()
+    await contextWith(probe).ctx.read({ kind: 'rects', edId: edId('title') })
+    expect(probe.read).toHaveBeenCalledWith({ kind: 'rects', edId: edId('title') })
+  })
+
+  it('reads and changes the store, and forwards undo and redo to the server', () => {
+    const { store, ws, ctx, state } = contextWith(null)
+    store.setBoard(home)
+
+    ctx.select(ids('title'))
+    ctx.setViewport({ zoom: 3, panX: 1, panY: 2 })
+    ctx.toast({ message: 'Hello', tone: 'info' })
+    ctx.undo()
+    ctx.redo()
+
+    expect(ctx.selection()).toEqual({ board: home, edIds: ids('title') })
+    expect(ctx.viewport()).toEqual({ zoom: 3, panX: 1, panY: 2 })
+    expect(notices(store)).toContain('Hello')
+    expect(ctx.editorState()).toBe(state)
+    expect(ctx.records()).toBe(store.getState().records)
+    expect(ws.undo).toHaveBeenCalledTimes(1)
+    expect(ws.redo).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('keys and pointer leaving the canvas', () => {
+  it('Escape clears the selection', async () => {
+    const view = await openHome()
+    await clickAt(view, at.aside)
+
+    const escape = await pressKey(view.container, 'Escape')
+
+    expect(view.store.getState().view.selection).toEqual([])
+    expect(escape.defaultPrevented).toBe(true)
+  })
+
+  it('clears the hover outline when the pointer leaves the canvas', async () => {
+    const view = await openHome()
+    await hoverAt(view, at.aside)
+    expect(view.store.getState().hover).toBe(edId('aside'))
+
+    act(() => {
+      shieldOf(view.container).dispatchEvent(new PointerEvent('pointerout', { bubbles: true, relatedTarget: document.body }))
+    })
+    await settle()
+
+    expect(view.store.getState().hover).toBeNull()
+    expect(outlines(view.container, 'hover')).toEqual([])
+  })
+})
+
+describe('reads a reload rejects', () => {
+  it('keeps the outlines it had and shows no reset notice', async () => {
+    const view = await openHome()
+    await clickAt(view, at.title, { metaKey: true })
+    latestProbe().read.mockRejectedValue(new Error('reloaded'))
+
+    act(() => latestProbe().emit({ type: 'scrolled', scrollX: 0, scrollY: 10 }))
+    await settle()
+    act(() => latestProbe().emit({ type: 'ready', scrollX: 0, scrollY: 0 }))
+    await settle()
+
+    expect(outlines(view.container, 'selection')).toHaveLength(1)
+    expect(notices(view.store)).not.toContainEqual(expect.stringMatching(/page reset/i))
+  })
+
+  it('leaves hover and selection as they were when the hit-test is rejected', async () => {
+    const view = await openHome()
+    latestProbe().read.mockRejectedValue(new Error('reloaded'))
+
+    await hoverAt(view, at.aside)
+    await clickAt(view, at.aside)
+    await doubleClickAt(view, at.aside)
+
+    expect(view.store.getState().hover).toBeNull()
+    expect(view.store.getState().view.selection).toEqual([])
+  })
+
+  it('leaves the selection as it was when the hit-test behind a turned-down press is rejected', async () => {
+    const pressOnly: CanvasTool = { id: 'press-only', priority: 5, onPointerDown: () => true, onPointerUp: () => false }
+    const view = await openHome({ tools: [pressOnly] })
+    latestProbe().read.mockRejectedValue(new Error('reloaded'))
+
+    await clickAt(view, at.aside)
+
+    expect(view.store.getState().view.selection).toEqual([])
+  })
+})
+
+describe('in-place text edits', () => {
+  it("says 'page redrew, edit cancelled' when a redraw ends the edit, and nothing on Escape", async () => {
+    const view = await openHome()
+
+    act(() => latestProbe().emit({ type: 'textCancelled', session: 'text-1', reason: 'escape' }))
+    expect(notices(view.store)).toEqual([])
+
+    act(() => latestProbe().emit({ type: 'textCancelled', session: 'text-1', reason: 'redrawn' }))
+    expect(notices(view.store)).toContainEqual(expect.stringMatching(/page redrew, edit cancelled/i))
+  })
+
+  it('sends the committed text as a setText op', async () => {
+    const view = await openHome()
+    view.ws.sendOp.mockResolvedValue({})
+
+    act(() => latestProbe().emit({ type: 'textCommit', session: 'text-1', edId: edId('title'), text: 'Hello' }))
+    await settle()
+
+    expect(view.ws.sendOp).toHaveBeenCalledWith({ target: ids('title'), kind: 'setText', payload: { text: 'Hello' } }, {})
+  })
+
+  it('leaves a refused text commit to the ws client toast', async () => {
+    const view = await openHome()
+    view.ws.sendOp.mockRejectedValue(new Error('refused'))
+
+    act(() => latestProbe().emit({ type: 'textCommit', session: 'text-1', edId: edId('title'), text: 'Hello' }))
+    await settle()
+
+    expect(view.ws.sendOp).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('dragging with the built-in move tool', () => {
+  const asideCenter = { x: 850, y: 400 }
+  const dropped = { x: 890, y: 430 }
+
+  async function asideSelected(): Promise<Mounted> {
+    probes.scene.computed = { root: { display: 'block' }, aside: { position: 'absolute', transform: 'none', left: '700px', top: '200px' } }
+    const view = await openHome()
+    await setViewport(view.store, 1, 0, 0)
+    view.ws.sendOp.mockResolvedValue({ warnings: [] })
+    await clickAt(view, at.aside)
+    expect(view.store.getState().view.selection).toEqual(ids('aside'))
+    return view
+  }
+
+  async function startDrag(view: Mounted) {
+    const shield = shieldOf(view.container)
+    act(() => dispatchPointer(shield, 'pointerdown', toScreen(view.store, asideCenter)))
+    await settle()
+    act(() => dispatchPointer(shield, 'pointermove', toScreen(view.store, dropped)))
+    expect(view.container.querySelector('[data-move-ghost]')).not.toBeNull()
+  }
+
+  function setDecls(view: Mounted): string[] {
+    return view.ws.sendOp.mock.calls.flatMap(([op]) => (op.kind === 'setDecl' ? [`${op.payload.prop}: ${op.payload.value}`] : []))
+  }
+
+  it('writes the dragged absolute element’s left and top and previews them in the frame', async () => {
+    const view = await asideSelected()
+
+    await startDrag(view)
+    act(() => dispatchPointer(shieldOf(view.container), 'pointerup', toScreen(view.store, dropped)))
+    await settle()
+
+    expect(setDecls(view)).toEqual(['left: 740px', 'top: 230px'])
+    expect(latestProbe().previewDecl).toHaveBeenCalledWith(ids('aside'), 'left', '740px')
+    expect(view.container.querySelector('[data-move-ghost]')).toBeNull()
+    expect(view.store.getState().view.selection).toEqual(ids('aside'))
+  })
+
+  it('ends the drag on pointercancel and goes back to hovering', async () => {
+    const view = await asideSelected()
+    await startDrag(view)
+
+    act(() => dispatchPointer(shieldOf(view.container), 'pointercancel', toScreen(view.store, dropped), { buttons: 0 }))
+    await settle()
+    await hoverAt(view, at.label)
+
+    expect(view.container.querySelector('[data-move-ghost]')).toBeNull()
+    expect(view.store.getState().hover).toBe(edId('card'))
+  })
+
+  it('ends the drag when pointer capture is lost and goes back to hovering', async () => {
+    const view = await asideSelected()
+    await startDrag(view)
+
+    act(() => dispatchPointer(shieldOf(view.container), 'lostpointercapture', toScreen(view.store, dropped), { buttons: 0 }))
+    await settle()
+    await hoverAt(view, at.label)
+
+    expect(view.container.querySelector('[data-move-ghost]')).toBeNull()
+    expect(view.store.getState().hover).toBe(edId('card'))
+  })
+
+  it('cancels the drag on Escape, so the release writes nothing', async () => {
+    const view = await asideSelected()
+    await startDrag(view)
+
+    await pressKey(view.container, 'Escape')
+    act(() => dispatchPointer(shieldOf(view.container), 'pointerup', toScreen(view.store, dropped)))
+    await settle()
+
+    expect(view.ws.sendOp).not.toHaveBeenCalled()
+    expect(view.container.querySelector('[data-move-ghost]')).toBeNull()
   })
 })

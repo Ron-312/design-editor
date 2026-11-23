@@ -229,9 +229,13 @@ function RepeatsNotice({ ctx, tree, edIds }: RepeatsNoticeProps) {
   useEffect(() => {
     if (!repeated) return
     let current = true
-    void ctx.read({ kind: 'rects', edId: repeated }).then((result) => {
-      if (current) setCount(result.rects.length)
-    })
+    ctx
+      .read({ kind: 'rects', edId: repeated })
+      .then((result) => {
+        if (current) setCount(result.rects.length)
+      })
+      // A reload rejects reads in flight; the notice waits for the next selection or index.
+      .catch(() => {})
     return () => {
       current = false
     }

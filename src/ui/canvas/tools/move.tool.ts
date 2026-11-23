@@ -430,6 +430,11 @@ function onPointerUp(_ctx: EditorContext, pointer: CanvasPointer): boolean {
   return true
 }
 
+function onCancel(): void {
+  press = null
+  drawLayer(LAYER, [])
+}
+
 function onHover(ctx: EditorContext): boolean {
   trackSelection(ctx)
   listenForNudges()
@@ -474,4 +479,5 @@ export const tool: CanvasTool = {
   onPointerMove,
   onPointerUp,
   onHover,
+  onCancel,
 }

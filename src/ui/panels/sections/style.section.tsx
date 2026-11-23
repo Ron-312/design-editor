@@ -84,9 +84,13 @@ function useTextBoxSupported(): boolean {
   const [supported, setSupported] = useState(true)
   useEffect(() => {
     let current = true
-    void ctx.read({ kind: 'supports', condition: `(text-box: ${TEXT_BOX_TRIM})` }).then((result) => {
-      if (current) setSupported(result.supported)
-    })
+    ctx
+      .read({ kind: 'supports', condition: `(text-box: ${TEXT_BOX_TRIM})` })
+      .then((result) => {
+        if (current) setSupported(result.supported)
+      })
+      // A reload rejects reads in flight; until one answers the toggle stays offered.
+      .catch(() => {})
     return () => {
       current = false
     }

@@ -109,9 +109,26 @@ export async function isPushLockLive(projectDir: string): Promise<boolean> {
   return text !== null && (await isLive(file, text))
 }
 
+const lockQueues = new Map<string, Promise<unknown>>()
+
+/** Runs lock operations on one file one at a time in this process, so a renewal can never rewrite a lock released meanwhile. */
+function serialized<T>(file: string, operation: () => Promise<T>): Promise<T> {
+  const run = (lockQueues.get(file) ?? Promise.resolve()).then(operation, operation)
+  const settled = run.catch(() => undefined)
+  lockQueues.set(file, settled)
+  void settled.then(() => {
+    if (lockQueues.get(file) === settled) lockQueues.delete(file)
+  })
+  return run
+}
+
 /** Returns the new lock, or null while another holder's lease is live. */
-export async function acquirePushLock(projectDir: string, options: AcquireOptions): Promise<PushLock | null> {
+export function acquirePushLock(projectDir: string, options: AcquireOptions): Promise<PushLock | null> {
   const file = lockFileOf(projectDir)
+  return serialized(file, () => acquire(file, options))
+}
+
+async function acquire(file: string, options: AcquireOptions): Promise<PushLock | null> {
   await mkdir(path.dirname(file), { recursive: true })
   const startedAt = Date.now()
   const lock: PushLock = {
@@ -127,15 +144,18 @@ export async function acquirePushLock(projectDir: string, options: AcquireOption
 }
 
 /** Moves `expiresAt` to `leaseMs` from now; null when the lock is gone or no longer ours. */
-export async function renewPushLock(projectDir: string, nonce: string, leaseMs: number): Promise<PushLock | null> {
-  const held = await readPushLock(projectDir)
-  if (held?.nonce !== nonce) return null
-  const renewed: PushLock = { ...held, expiresAt: Date.now() + leaseMs }
-  await atomicWrite(lockFileOf(projectDir), Buffer.from(JSON.stringify(renewed)))
-  return renewed
+export function renewPushLock(projectDir: string, nonce: string, leaseMs: number): Promise<PushLock | null> {
+  return serialized(lockFileOf(projectDir), async () => {
+    const held = await readPushLock(projectDir)
+    if (held?.nonce !== nonce) return null
+    const renewed: PushLock = { ...held, expiresAt: Date.now() + leaseMs }
+    await atomicWrite(lockFileOf(projectDir), Buffer.from(JSON.stringify(renewed)))
+    return renewed
+  })
 }
 
 /** Deletes the lock only while it still carries our nonce. */
 export function releasePushLock(projectDir: string, nonce: string): Promise<boolean> {
-  return deleteIfNonce(lockFileOf(projectDir), nonce)
+  const file = lockFileOf(projectDir)
+  return serialized(file, () => deleteIfNonce(file, nonce))
 }

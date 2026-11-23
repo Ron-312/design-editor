@@ -214,6 +214,17 @@ describe('renewPushLock', () => {
     await expect(renewPushLock(projectDir, lock.nonce, 60_000)).resolves.toBeNull()
     expect(existsSync(lockFile)).toBe(false)
   })
+
+  it('never brings back a lock released while the renewal was in flight', async () => {
+    for (let round = 0; round < 20; round++) {
+      const lock = mustAcquire(await acquirePushLock(projectDir, { holder: 'editor', leaseMs: 60_000 }))
+      const renewing = renewPushLock(projectDir, lock.nonce, 60_000)
+      await releasePushLock(projectDir, lock.nonce)
+      await renewing
+
+      expect(existsSync(lockFile), `round ${round}`).toBe(false)
+    }
+  })
 })
 
 describe('releasePushLock', () => {

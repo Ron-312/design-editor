@@ -117,12 +117,13 @@ interface Mounted {
   readonly container: HTMLElement
 }
 
-async function mountPanel(editorState: EditorState = editorStateWith()): Promise<Mounted> {
+async function mountPanel(editorState: EditorState = editorStateWith(), readError: Error | null = null): Promise<Mounted> {
   const store = createEditorStore()
   store.setBoard(home)
   const index: BoardIndex = { board: home, frameSrc: `/project/secret/${home}`, tree, locations: {}, styles: {} }
   store.setIndex(index)
   const ctx = contextFor(store, editorState)
+  if (readError) ctx.read = () => Promise.reject(readError)
   const onEditorStateChange = vi.fn<(state: EditorState) => void>()
   const container = document.createElement('div')
   document.body.append(container)
@@ -295,6 +296,19 @@ describe('the tree is the template tree', () => {
       .map((element) => element.dataset.layerId)
 
     expect(dimmed).toEqual(['banner'])
+  })
+  it('still shows the tree when a frame reload rejects the rendered-rect reads, leaving none unhandled', async () => {
+    const unhandled: unknown[] = []
+    const onUnhandled = (reason: unknown) => unhandled.push(reason)
+    process.on('unhandledRejection', onUnhandled)
+    try {
+      await mountPanel(editorStateWith(), new Error('the frame reloaded before the probe answered'))
+
+      expect(row('hero')).toBeTruthy()
+      expect(unhandled).toEqual([])
+    } finally {
+      process.off('unhandledRejection', onUnhandled)
+    }
   })
 })
 

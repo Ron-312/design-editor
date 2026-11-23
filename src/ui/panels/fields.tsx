@@ -188,7 +188,8 @@ export function useDeclaration(prop: string): Declaration {
       // The ws client already toasted the rejection and reloaded any preview.
       return
     }
-    setWarning(written === null ? null : await overrideWarning(state, prop, written))
+    // A reload rejects the reads behind the warning; the write itself landed.
+    setWarning(written === null ? null : await overrideWarning(state, prop, written).catch(() => null))
   }
 
   return {
@@ -233,15 +234,19 @@ interface FieldText {
   readonly dirty: boolean
 }
 
-/** A field's typed text, dropped as soon as the authored value under it changes. */
+/**
+ * A field's text. Typed text lasts until it is committed, escaped or the selection changes, so styles that
+ * arrive while the user types cannot wipe it; shown text follows the authored value under it.
+ */
 function useFieldText(shown: string) {
-  const [edit, setEdit] = useState<(FieldText & { readonly base: string }) | null>(null)
-  const current = edit && edit.base === shown ? edit : null
+  const selection = usePanelState().edIds.join(' ')
+  const [edit, setEdit] = useState<(FieldText & { readonly base: string; readonly selection: string }) | null>(null)
+  const current = edit && edit.selection === selection && (edit.dirty || edit.base === shown) ? edit : null
   return {
     text: current?.text ?? shown,
     dirty: current?.dirty ?? false,
-    type: (text: string) => setEdit({ text, dirty: true, base: shown }),
-    show: (text: string) => setEdit({ text, dirty: false, base: shown }),
+    type: (text: string) => setEdit({ text, dirty: true, base: shown, selection }),
+    show: (text: string) => setEdit({ text, dirty: false, base: shown, selection }),
     reset: () => setEdit(null),
   }
 }
