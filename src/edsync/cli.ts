@@ -228,7 +228,8 @@ async function rewriteBlobsVerb(flags: Flags, cwd: string): Promise<VerbResult> 
 }
 
 async function merge(flags: Flags, cwd: string): Promise<VerbResult> {
-  const [ours, base, theirs] = await Promise.all((['ours', 'base', 'theirs'] as const).map((name) => readFile(pathFlag(flags, name, cwd))))
+  const paths = (['ours', 'base', 'theirs'] as const).map((name) => pathFlag(flags, name, cwd))
+  const [ours, base, theirs] = await Promise.all(paths.map((file) => readFile(file)))
   const result = await mergeThreeWay({ ours: ours!, base: base!, theirs: theirs! }, required(flags, 'ours'))
   const output: MergeOutcome = result.kind === 'clean' ? { kind: 'clean', merged: result.merged.toString('utf8') } : result
   return { exitCode: result.kind === 'clean' ? EXIT.ok : EXIT.stopped, output }
