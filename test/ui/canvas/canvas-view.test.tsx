@@ -5,7 +5,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BoardIndex, ClientMessage, EditorState, ProbeRead, ProbeReadResult, ProbeToEditor, Rect } from '../../../src/shared/protocol'
 import type { Board, CanvasLayout, EdId, EditOp, ProjectPath, TemplateNode } from '../../../src/shared/types'
-import type { Platform } from '../../../src/ui/actions/registry'
+import { createDefaultRegistry, type Platform } from '../../../src/ui/actions/registry'
 import { CanvasView, canvasContext, defaultCanvasTools, loadCanvasTools, openBoard, type CanvasCommands, type ToolModule } from '../../../src/ui/canvas/CanvasView'
 import type { CanvasPointer, CanvasTool, EditorContext, PointerHandler } from '../../../src/ui/plugin-api'
 import type { ProbeClient } from '../../../src/ui/probe-client'
@@ -15,11 +15,23 @@ import type { WsClient } from '../../../src/ui/ws-client'
 /** Stands in for the probe inside the frame: answers reads from the rendered scene below. */
 const probes = vi.hoisted(() => {
   type Listener = (message: ProbeToEditor) => void
-  const scene = { rendered: [] as Array<readonly [string, Rect]>, computed: {} as Record<string, Readonly<Record<string, string>>> }
+  type FrameSize = { readonly width: number; readonly height: number }
+  const scene = {
+    rendered: [] as Array<readonly [string, Rect]>,
+    computed: {} as Record<string, Readonly<Record<string, string>>>,
+    /** The document's scrollHeight for the frame's size at the time of the read. */
+    contentHeight: (() => 0) as (frame: FrameSize) => number,
+    /** The frame's size at each documentHeight read. */
+    measuredAt: [] as FrameSize[],
+  }
+  const sizeOfFrame = (frame: HTMLIFrameElement): FrameSize => ({
+    width: Number.parseFloat(frame.style.width || frame.getAttribute('width') || 'NaN'),
+    height: Number.parseFloat(frame.style.height || frame.getAttribute('height') || 'NaN'),
+  })
   const contains = (rect: Rect, x: number, y: number) =>
     x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height
 
-  function answer(read: ProbeRead): ProbeReadResult {
+  function answer(read: ProbeRead, frame: HTMLIFrameElement): ProbeReadResult {
     switch (read.kind) {
       case 'hitTest': {
         const deepest = scene.rendered.filter(([, rect]) => contains(rect, read.x, read.y)).at(-1)
@@ -39,8 +51,11 @@ const probes = vi.hoisted(() => {
         return { kind: 'supports', supported: true }
       case 'matches':
         return { kind: 'matches', matched: read.selectors.map(() => false) }
-      case 'documentHeight':
-        return { kind: 'documentHeight', scrollHeight: 0 }
+      case 'documentHeight': {
+        const size = sizeOfFrame(frame)
+        scene.measuredAt.push(size)
+        return { kind: 'documentHeight', scrollHeight: scene.contentHeight(size) }
+      }
     }
   }
 
@@ -49,7 +64,7 @@ const probes = vi.hoisted(() => {
     let sessions = 0
     return {
       frame,
-      read: vi.fn(async (read: ProbeRead) => answer(read)),
+      read: vi.fn(async (read: ProbeRead) => answer(read, frame)),
       onMessage(listener: Listener) {
         listeners.add(listener)
         return () => {
@@ -146,8 +161,9 @@ function indexFor(board: ProjectPath, tree: TemplateNode): BoardIndex {
   return { board, frameSrc: `/project/secret/${board}`, tree, text: '', locations: {}, styles: {}, rules: [] }
 }
 
-function editorStateWith(locked: readonly EdId[] = []): EditorState {
-  return { hidden: [], locked, collapsed: [], boards: {} }
+function editorStateWith(locked: readonly EdId[] = [], previewWidth?: number): EditorState {
+  const boards = previewWidth === undefined ? {} : { [home]: { zoom: 1, panX: 0, panY: 0, selection: [], previewWidth } }
+  return { hidden: [], locked, collapsed: [], boards }
 }
 
 function fakeWs() {
@@ -184,17 +200,35 @@ interface Mounted {
   readonly store: EditorStore
   readonly ws: ReturnType<typeof fakeWs>
   readonly container: HTMLElement
+  /** The editor context the canvas last handed the shell. */
+  readonly context: () => EditorContext
+  readonly editorStateChanges: ReturnType<typeof vi.fn<(next: EditorState) => void>>
+  readonly setPreviewWidth: (width: number | undefined) => Promise<void>
 }
 
-let mounted: { root: Root; container: HTMLElement } | null = null
+let mounted: { root: Root; container: HTMLElement; stopShortcuts: () => void } | null = null
 
 interface MountOptions {
   readonly layout?: CanvasLayout
   readonly locked?: readonly EdId[]
+  readonly previewWidth?: number
   readonly platform?: Platform
   readonly tools?: readonly CanvasTool[]
   readonly store?: EditorStore
   readonly commands?: { current: CanvasCommands | null }
+  /** Sends keydowns to the default action registry with the canvas's context, as the app does. */
+  readonly shortcuts?: boolean
+}
+
+/** The app's document keydown listener, reduced to the registry call. */
+function listenForShortcuts(platform: Platform, context: () => EditorContext | null): () => void {
+  const registry = createDefaultRegistry(platform)
+  const onKeyDown = (event: KeyboardEvent) => {
+    const ctx = context()
+    if (ctx) registry.handleKeyDown(event, ctx)
+  }
+  document.addEventListener('keydown', onKeyDown)
+  return () => document.removeEventListener('keydown', onKeyDown)
 }
 
 function mount(options: MountOptions = {}): Mounted {
@@ -203,21 +237,45 @@ function mount(options: MountOptions = {}): Mounted {
   const store = options.store ?? createEditorStore()
   const ws = fakeWs()
   const root = createRoot(container)
-  mounted = { root, container }
-  act(() => {
+  const platform = options.platform ?? 'mac'
+  const editorStateChanges = vi.fn<(next: EditorState) => void>()
+  let latest: EditorContext | null = null
+  const stopShortcuts = options.shortcuts === false ? () => {} : listenForShortcuts(platform, () => latest)
+  mounted = { root, container, stopShortcuts }
+
+  function render(previewWidth: number | undefined) {
     root.render(
       <CanvasView
         {...(options.commands ? { ref: options.commands } : {})}
         store={store}
         ws={ws as unknown as WsClient}
         layout={options.layout ?? layout}
-        editorState={editorStateWith(options.locked)}
-        platform={options.platform ?? 'mac'}
+        editorState={editorStateWith(options.locked, previewWidth)}
+        platform={platform}
+        onContext={(ctx: EditorContext) => {
+          latest = ctx
+        }}
+        onEditorStateChange={editorStateChanges}
         {...(options.tools ? { tools: options.tools } : {})}
       />,
     )
-  })
-  return { store, ws, container }
+  }
+
+  act(() => render(options.previewWidth))
+  return {
+    store,
+    ws,
+    container,
+    context() {
+      if (!latest) throw new Error('the canvas handed the shell no editor context')
+      return latest
+    },
+    editorStateChanges,
+    async setPreviewWidth(width) {
+      act(() => render(width))
+      await settle()
+    },
+  }
 }
 
 function latestProbe() {
@@ -422,12 +480,15 @@ beforeEach(() => {
 
 afterEach(() => {
   if (mounted) {
-    const { root, container } = mounted
+    const { root, container, stopShortcuts } = mounted
+    stopShortcuts()
     act(() => root.unmount())
     container.remove()
     mounted = null
   }
   probes.created.length = 0
+  probes.scene.contentHeight = () => 0
+  probes.scene.measuredAt.length = 0
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
 })
@@ -997,7 +1058,7 @@ describe('the editor context the canvas hands its tools', () => {
     await expect(ctx.apply(op)).resolves.toBe('acked')
 
     expect(probe.previewDecl).toHaveBeenCalledWith(ids('title', 'aside'), 'width', '120px')
-    expect(ws.sendOp).toHaveBeenCalledWith(op, { title: '120px', aside: '120px' })
+    expect(ws.sendOp).toHaveBeenCalledWith({ ...op, actionId: expect.any(String) }, { title: '120px', aside: '120px' })
   })
 
   it('previews a removed declaration as gone and sends no previewed values', async () => {
@@ -1008,7 +1069,7 @@ describe('the editor context the canvas hands its tools', () => {
     await ctx.apply(op)
 
     expect(probe.previewDecl).toHaveBeenCalledWith(ids('title'), 'width', null)
-    expect(ws.sendOp).toHaveBeenCalledWith(op, {})
+    expect(ws.sendOp).toHaveBeenCalledWith({ ...op, actionId: expect.any(String) }, {})
   })
 
   it('previews nothing for a structural op', async () => {
@@ -1019,7 +1080,7 @@ describe('the editor context the canvas hands its tools', () => {
     await ctx.apply(op)
 
     expect(probe.previewDecl).not.toHaveBeenCalled()
-    expect(ws.sendOp).toHaveBeenCalledWith(op, {})
+    expect(ws.sendOp).toHaveBeenCalledWith({ ...op, actionId: expect.any(String) }, {})
   })
 
   it('still sends a declaration with no frame loaded', async () => {
@@ -1028,7 +1089,58 @@ describe('the editor context the canvas hands its tools', () => {
 
     await ctx.apply(op)
 
-    expect(ws.sendOp).toHaveBeenCalledWith(op, { title: '120px' })
+    expect(ws.sendOp).toHaveBeenCalledWith({ ...op, actionId: expect.any(String) }, { title: '120px' })
+  })
+
+  it('sends each single-shot op as an action of its own', async () => {
+    const { ws, ctx } = contextWith(fakeProbe())
+    const op: EditOp = { target: ids('title'), kind: 'setDecl', payload: { prop: 'width', value: '120px' } }
+
+    await ctx.apply(op)
+    await ctx.apply(op)
+
+    const [first, second] = ws.sendOp.mock.calls.map(([sent]) => (sent as EditOp).actionId)
+    expect(first).toEqual(expect.any(String))
+    expect(second).toEqual(expect.any(String))
+    expect(first).not.toBe(second)
+  })
+
+  it('sends every op of one action under the id beginAction gave it', async () => {
+    const { ws, ctx } = contextWith(fakeProbe())
+    const left: EditOp = { target: ids('aside'), kind: 'setDecl', payload: { prop: 'left', value: '10px' } }
+    const top: EditOp = { target: ids('aside'), kind: 'setDecl', payload: { prop: 'top', value: '20px' } }
+
+    const drag = ctx.beginAction()
+    const next = ctx.beginAction()
+    await ctx.apply(left, drag)
+    await ctx.apply(top, drag)
+
+    expect(drag).toEqual(expect.any(String))
+    expect(next).not.toBe(drag)
+    expect(ws.sendOp).toHaveBeenNthCalledWith(1, { ...left, actionId: drag }, { aside: '10px' })
+    expect(ws.sendOp).toHaveBeenNthCalledWith(2, { ...top, actionId: drag }, { aside: '20px' })
+  })
+
+  it('previews a declaration in the frame and writes nothing', () => {
+    const probe = fakeProbe()
+    const { ws, ctx } = contextWith(probe)
+
+    ctx.preview({ target: ids('title'), kind: 'setDecl', payload: { prop: 'color', value: 'red' } })
+    ctx.preview({ target: ids('title'), kind: 'removeDecl', payload: { prop: 'color' } })
+
+    expect(probe.previewDecl).toHaveBeenNthCalledWith(1, ids('title'), 'color', 'red')
+    expect(probe.previewDecl).toHaveBeenNthCalledWith(2, ids('title'), 'color', null)
+    expect(ws.sendOp).not.toHaveBeenCalled()
+  })
+
+  it('switches between the select and hand tools', () => {
+    const { store, ctx } = contextWith(null)
+
+    ctx.setMode('hand')
+    expect(store.getState().mode).toBe('hand')
+
+    ctx.setMode('select')
+    expect(store.getState().mode).toBe('select')
   })
 
   it('rejects reads with no frame loaded, and passes them to the probe once one is', async () => {
@@ -1056,6 +1168,75 @@ describe('the editor context the canvas hands its tools', () => {
     expect(ctx.records()).toBe(store.getState().records)
     expect(ws.undo).toHaveBeenCalledTimes(1)
     expect(ws.redo).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('the view setters on the context the canvas hands the shell', () => {
+  it('merges an editor-state patch into the editor state and hands it to the shell', async () => {
+    const view = await openHome({ locked: ids('aside') })
+
+    act(() => view.context().setEditorState({ collapsed: ids('card') }))
+
+    expect(view.editorStateChanges).toHaveBeenCalledExactlyOnceWith({ hidden: [], locked: ids('aside'), collapsed: ids('card'), boards: {} })
+  })
+
+  it('zooms to 100% around the centre of the view', async () => {
+    const view = await openHome()
+    await setViewport(view.store, 0.5, 0, 0)
+
+    act(() => view.context().fit('100'))
+
+    expect(view.store.getState().view.viewport).toEqual({ zoom: 1, panX: -VIEWPORT_SIZE.width / 2, panY: -VIEWPORT_SIZE.height / 2 })
+  })
+
+  it('fits the board as it was fitted on open, and the selection', async () => {
+    const view = await openHome()
+    const fitted = view.store.getState().view.viewport
+    await setViewport(view.store, 3, -500, -500)
+
+    act(() => view.context().fit('board'))
+    expect(view.store.getState().view.viewport).toEqual(fitted)
+
+    await clickAt(view, at.title, { metaKey: true })
+    act(() => view.context().fit('selection'))
+    await settle()
+
+    const { zoom, panX } = view.store.getState().view.viewport
+    expect(zoom).toBeGreaterThan(1.6)
+    expect(panX + (60 + 400 / 2) * zoom).toBeCloseTo(VIEWPORT_SIZE.width / 2)
+  })
+})
+
+describe('keys the canvas keeps for itself', () => {
+  it('leaves every pressed shortcut to the action registry', async () => {
+    const view = await openHome({ shortcuts: false })
+    await clickAt(view, at.label)
+    const viewport = view.store.getState().view.viewport
+
+    const pressed = [
+      await pressKey(view.container, 'Enter', { code: 'Enter' }),
+      await pressKey(view.container, 'Tab', { code: 'Tab' }),
+      await pressKey(view.container, 'Escape', { code: 'Escape' }),
+      await pressKey(view.container, 'h', { code: 'KeyH' }),
+      await pressKey(view.container, '!', { code: 'Digit1', shiftKey: true }),
+    ]
+
+    expect(pressed.map((event) => event.defaultPrevented)).toEqual([false, false, false, false, false])
+    expect(view.store.getState().view.selection).toEqual(ids('card'))
+    expect(view.store.getState().mode).toBe('select')
+    expect(view.store.getState().view.viewport).toEqual(viewport)
+  })
+
+  it('still holds Space to pan and I to interact with no registry', async () => {
+    const view = await openHome({ shortcuts: false })
+
+    const space = press(view.container, 'keydown', ' ', { code: 'Space' })
+    press(view.container, 'keyup', ' ', { code: 'Space' })
+    press(view.container, 'keydown', 'i', { code: 'KeyI' })
+    await settle()
+
+    expect(space.defaultPrevented).toBe(true)
+    expect(view.store.getState().interact).toBe(true)
   })
 })
 
@@ -1141,7 +1322,7 @@ describe('in-place text edits', () => {
     act(() => latestProbe().emit({ type: 'textCommit', session: 'text-1', edId: edId('title'), text: 'Hello' }))
     await settle()
 
-    expect(view.ws.sendOp).toHaveBeenCalledWith({ target: ids('title'), kind: 'setText', payload: { text: 'Hello' } }, {})
+    expect(view.ws.sendOp).toHaveBeenCalledWith(expect.objectContaining({ target: ids('title'), kind: 'setText', payload: { text: 'Hello' } }), {})
   })
 
   it('leaves a refused text commit to the ws client toast', async () => {
@@ -1228,11 +1409,118 @@ describe('dragging with the built-in move tool', () => {
     const view = await asideSelected()
     await startDrag(view)
 
-    await pressKey(view.container, 'Escape')
+    const escape = await pressKey(view.container, 'Escape')
+    act(() => dispatchPointer(shieldOf(view.container), 'pointerup', toScreen(view.store, dropped)))
+    await settle()
+
+    expect(escape.defaultPrevented).toBe(true)
+    expect(view.ws.sendOp).not.toHaveBeenCalled()
+    expect(view.container.querySelector('[data-move-ghost]')).toBeNull()
+    expect(view.store.getState().view.selection).toEqual(ids('aside'))
+  })
+
+  it('drops the drag through the tool when the shell cancels the gesture', async () => {
+    const view = await asideSelected()
+    await startDrag(view)
+
+    act(() => view.context().cancelGesture())
+    await settle()
     act(() => dispatchPointer(shieldOf(view.container), 'pointerup', toScreen(view.store, dropped)))
     await settle()
 
     expect(view.ws.sendOp).not.toHaveBeenCalled()
     expect(view.container.querySelector('[data-move-ghost]')).toBeNull()
+    expect(view.store.getState().view.selection).toEqual(ids('aside'))
+  })
+})
+
+describe('preview width', () => {
+  const BOARD_H = 900
+
+  function labelOf(container: HTMLElement): HTMLElement {
+    const label = container.querySelector<HTMLElement>('[data-board-label]')
+    if (!label) throw new Error('no board label')
+    return label
+  }
+
+  function documentHeightReads(): number {
+    return probes.created.flatMap((probe) => probe.read.mock.calls).filter(([read]) => read.kind === 'documentHeight').length
+  }
+
+  it('shows the board at its preview width: the frame, and the label that names it a preview', async () => {
+    const view = await openHome({ previewWidth: 375 })
+
+    const label = labelOf(view.container)
+    const { zoom } = view.store.getState().view.viewport
+    expect(frameSize(frameOf(view.container)).width).toBe(375)
+    expect(label.textContent).toContain('375 preview')
+    expect(label.textContent).not.toContain('1280')
+    expect(Number.parseFloat(label.style.width)).toBeCloseTo(375 * zoom)
+  })
+
+  it('fits the board at its preview width, centred where the authored width is', async () => {
+    const view = await openHome({ previewWidth: 375 })
+    const atPreview = view.store.getState().view.viewport
+
+    await view.setPreviewWidth(undefined)
+    act(() => view.context().fit('board'))
+    const atAuthored = view.store.getState().view.viewport
+
+    expect(frameSize(frameOf(view.container)).width).toBe(1280)
+    expect(labelOf(view.container).textContent).toBe('home.dc.html1280 × 900')
+    expect(atPreview.panX).toBeGreaterThan(atAuthored.panX + 100)
+    expect(atPreview.panX + (375 * atPreview.zoom) / 2).toBeCloseTo(atAuthored.panX + (1280 * atAuthored.zoom) / 2)
+  })
+
+  it('grows the frame to the content, measured with the frame held at the board height', async () => {
+    probes.scene.contentHeight = ({ height }) => Math.round(1.1 * height)
+
+    const view = await openHome({ previewWidth: 375 })
+
+    expect(frameSize(frameOf(view.container)).height).toBe(990)
+    expect(labelOf(view.container).textContent).toContain('990')
+    expect(probes.scene.measuredAt.length).toBeGreaterThan(0)
+    expect(probes.scene.measuredAt.every((size) => size.height === BOARD_H)).toBe(true)
+  })
+
+  it('settles a board with a min-height: 110vh child at one height across reloads, scrolls and redraws', async () => {
+    probes.scene.contentHeight = ({ height }) => Math.round(1.1 * height)
+    const view = await openHome({ previewWidth: 375 })
+
+    await act(async () => latestProbe().emit({ type: 'ready', scrollX: 0, scrollY: 0 }))
+    await settle()
+    expect(frameSize(frameOf(view.container)).height).toBe(990)
+    expect(probes.scene.measuredAt.every((size) => size.height === BOARD_H)).toBe(true)
+
+    const readsAfterReload = documentHeightReads()
+    await act(async () => latestProbe().emit({ type: 'scrolled', scrollX: 0, scrollY: 120 }))
+    await setViewport(view.store, 0.5, 10, 10)
+    await clickAt(view, at.label)
+    await settle()
+
+    expect(documentHeightReads()).toBe(readsAfterReload)
+    expect(frameSize(frameOf(view.container)).height).toBe(990)
+  })
+
+  it('caps the frame at four board heights, and measures again at the board height when the width changes', async () => {
+    probes.scene.contentHeight = ({ width }) => (width < 500 ? 10_000 : 300)
+    const view = await openHome({ previewWidth: 375 })
+
+    expect(frameSize(frameOf(view.container)).height).toBe(4 * BOARD_H)
+
+    await view.setPreviewWidth(768)
+
+    expect(frameSize(frameOf(view.container))).toEqual({ width: 768, height: BOARD_H })
+    expect(probes.scene.measuredAt.at(-1)).toEqual({ width: 768, height: BOARD_H })
+  })
+
+  it('keeps the board its own size and reads no content height without a preview width', async () => {
+    probes.scene.contentHeight = () => 2000
+
+    const view = await openHome()
+
+    expect(frameSize(frameOf(view.container))).toEqual({ width: 1280, height: BOARD_H })
+    expect(labelOf(view.container).textContent).toBe('home.dc.html1280 × 900')
+    expect(documentHeightReads()).toBe(0)
   })
 })

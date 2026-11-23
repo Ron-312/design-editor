@@ -1,5 +1,5 @@
 import { vi } from 'vitest'
-import type { BoardIndex, ProbeRead, ProbeReadResult, Rect } from '../../../src/shared/protocol'
+import type { BoardIndex, EditorState, ProbeRead, ProbeReadResult, Rect } from '../../../src/shared/protocol'
 import type { AuthoredDeclaration, EdId, EditOp, ProjectPath, StyleSource, TemplateNode } from '../../../src/shared/types'
 import type { AckMessage, CanvasPointer, EditorContext, Viewport } from '../../../src/ui/plugin-api'
 
@@ -85,6 +85,7 @@ export function fakeContext(scene: Scene, options: ContextOptions = {}) {
   const viewport = options.viewport ?? { zoom: 1, panX: 0, panY: 0 }
   const index: BoardIndex = { board, frameSrc: `/project/s/${board}`, tree: scene.tree, text: '', locations: {}, styles: scene.styles ?? {}, rules: [] }
 
+  let actions = 0
   const ctx = {
     index: vi.fn(() => index),
     selection: vi.fn(() => ({ board, edIds: selection })),
@@ -93,7 +94,13 @@ export function fakeContext(scene: Scene, options: ContextOptions = {}) {
     readOnly: vi.fn(() => readOnly),
     select: vi.fn(),
     setViewport: vi.fn(),
-    apply: vi.fn(async (op: EditOp) => ackFor(op)),
+    apply: vi.fn(async (op: EditOp, _actionId?: string) => ackFor(op)),
+    beginAction: vi.fn(() => `action-${++actions}`),
+    preview: vi.fn<(op: EditOp) => void>(),
+    setMode: vi.fn<(mode: 'select' | 'hand') => void>(),
+    fit: vi.fn<(kind: 'board' | 'selection' | '100') => void>(),
+    cancelGesture: vi.fn(),
+    setEditorState: vi.fn<(patch: Partial<EditorState>) => void>(),
     undo: vi.fn(),
     redo: vi.fn(),
     read: vi.fn(async (read: ProbeRead) => {
@@ -126,6 +133,10 @@ export function fakeContext(scene: Scene, options: ContextOptions = {}) {
     },
     ops(): EditOp[] {
       return ctx.apply.mock.calls.map(([op]) => op)
+    },
+    /** The action id each `apply` was given, undefined where the caller left it to the context. */
+    actionIds(): Array<string | undefined> {
+      return ctx.apply.mock.calls.map(([, actionId]) => actionId)
     },
     /** Each `setDecl` written, as `prop: value`. */
     writes(): string[] {

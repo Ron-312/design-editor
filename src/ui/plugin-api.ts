@@ -1,6 +1,8 @@
 import type { ComponentType } from 'react'
 import type { BoardIndex, EditorState, ProbeRead, ProbeReadResult, ServerMessage } from '../shared/protocol'
 import type { EdId, EditOp, EditRecord, ProjectPath } from '../shared/types'
+import type { ActionRegistry, Platform } from './actions/registry'
+import type { ProbeClient } from './probe-client'
 
 export type AckMessage = Extract<ServerMessage, { type: 'ack' }>
 
@@ -29,6 +31,9 @@ export interface Toast {
 
 export type Unsubscribe = () => void
 
+/** `'100'` zooms to 100% around the centre of the view. */
+export type FitKind = 'board' | 'selection' | '100'
+
 /** What every plugin sees of the editor; the only way plugins read state or change the source. */
 export interface EditorContext {
   readonly index: () => BoardIndex | null
@@ -39,8 +44,21 @@ export interface EditorContext {
   readonly readOnly: () => boolean
   readonly select: (edIds: readonly EdId[]) => void
   readonly setViewport: (viewport: Viewport) => void
-  /** Previews a `setDecl` / `removeDecl` in the iframe, then resolves with the server's ack. */
-  readonly apply: (op: EditOp) => Promise<AckMessage>
+  readonly setMode: (mode: 'select' | 'hand') => void
+  readonly fit: (kind: FitKind) => void
+  /** Drops the gesture a tool claimed, through its `onCancel`; returns whether there was one. */
+  readonly cancelGesture: () => boolean
+  /** Editor-only state (collapsed, hidden, locked, preview width); never written into the source. */
+  readonly setEditorState: (patch: Partial<EditorState>) => void
+  /** A fresh id that every op of one user action carries, so the action is one undo entry. */
+  readonly beginAction: () => string
+  /**
+   * Previews a `setDecl` / `removeDecl` in the iframe, then resolves with the server's ack.
+   * Without an `actionId` the op is an action of its own.
+   */
+  readonly apply: (op: EditOp, actionId?: string) => Promise<AckMessage>
+  /** Shows a `setDecl` / `removeDecl` in the iframe and writes nothing. */
+  readonly preview: (op: EditOp) => void
   readonly undo: () => void
   readonly redo: () => void
   /** Batched by the probe once per frame. */
@@ -50,14 +68,28 @@ export interface EditorContext {
   readonly onChange: (listener: () => void) => Unsubscribe
 }
 
+/**
+ * Where a shortcut's keydown may come from: `'canvas'` is the canvas viewport or nothing focused,
+ * `'layers'` the layers panel, `'global'` anywhere. None of them is a text field.
+ */
+export type ActionScope = 'canvas' | 'layers' | 'global'
+
 /** One entry in the action registry that menus, shortcuts and the command palette all read. */
 export interface EditorAction {
   readonly id: string
   readonly label: string
-  /** `Mod` is Cmd on macOS and Ctrl on Windows, e.g. `Mod+Shift+'`. */
-  readonly kbd?: string
-  readonly run: (ctx: EditorContext) => void
-  readonly when?: (ctx: EditorContext) => boolean
+  /** `Mod` is Cmd on macOS and Ctrl on Windows, e.g. `Mod+Shift+'`; every alias binds, menus show the first. */
+  readonly kbd?: string | readonly string[]
+  /** Defaults to `'global'`; a list applies wherever any of its scopes does. */
+  readonly scope?: ActionScope | readonly ActionScope[]
+  /** Also fires from a text field. */
+  readonly inTextEntry?: boolean
+  /** Repeats of a held key run under the first press's action id until the key is released. */
+  readonly hold?: boolean
+  /** Shown as a toast when the shortcut is pressed while `when` fails. */
+  readonly disabledReason?: string
+  readonly run: (ctx: EditorContext, actionId: string) => void
+  readonly when?: ((ctx: EditorContext) => boolean) | undefined
 }
 
 export interface PanelSectionProps {
@@ -114,6 +146,20 @@ export interface CanvasTool {
   readonly onHover?: PointerHandler
   /** The claimed gesture ended without a release (pointercancel, lost capture, Escape): drop it and write nothing. */
   readonly onCancel?: (ctx: EditorContext) => void
+}
+
+export interface ShellSlotProps {
+  readonly ctx: EditorContext
+  readonly registry: ActionRegistry
+  readonly platform: Platform
+  readonly probe: ProbeClient | null
+}
+
+/** UI the shell mounts in the top bar or above the whole editor, such as the command palette. */
+export interface ShellSlot {
+  readonly id: string
+  readonly place: 'top-bar' | 'overlay'
+  readonly component: ComponentType<ShellSlotProps>
 }
 
 export interface EditorPlugin {

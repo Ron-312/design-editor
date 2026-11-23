@@ -133,6 +133,7 @@ function ackFor(op: EditOp): AckMessage {
 const editorState: EditorState = { hidden: [], locked: [], collapsed: [], boards: {} }
 
 function contextFor(store: EditorStore, computed: Computed) {
+  let actions = 0
   return {
     index: () => store.getState().index,
     selection: () => {
@@ -145,6 +146,12 @@ function contextFor(store: EditorStore, computed: Computed) {
     select: (edIds: readonly EdId[]) => store.select(edIds),
     setViewport: (viewport) => store.setViewport(viewport),
     apply: vi.fn(async (op: EditOp) => ackFor(op)),
+    beginAction: vi.fn(() => `action-${++actions}`),
+    preview: vi.fn(),
+    setMode: (mode: 'select' | 'hand') => store.setMode(mode),
+    fit: vi.fn(),
+    cancelGesture: vi.fn(),
+    setEditorState: vi.fn(),
     undo: vi.fn(),
     redo: vi.fn(),
     read: <R extends ProbeRead>(read: R) =>

@@ -93,6 +93,7 @@ function answer(read: ProbeRead): ProbeReadResult {
 }
 
 function contextFor(store: EditorStore) {
+  let actions = 0
   return {
     index: () => store.getState().index,
     selection: () => {
@@ -105,6 +106,12 @@ function contextFor(store: EditorStore) {
     select: vi.fn((edIds: readonly EdId[]) => store.select(edIds)),
     setViewport: (viewport) => store.setViewport(viewport),
     apply: vi.fn(async (op: EditOp) => ackFor(op)),
+    beginAction: vi.fn(() => `action-${++actions}`),
+    preview: vi.fn(),
+    setMode: (mode: 'select' | 'hand') => store.setMode(mode),
+    fit: vi.fn(),
+    cancelGesture: vi.fn(),
+    setEditorState: vi.fn(),
     undo: vi.fn(),
     redo: vi.fn(),
     read: <R extends ProbeRead>(read: R) => Promise.resolve(answer(read)) as Promise<Extract<ProbeReadResult, { kind: R['kind'] }>>,

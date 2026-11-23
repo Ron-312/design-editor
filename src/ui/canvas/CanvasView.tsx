@@ -18,20 +18,12 @@ import {
 import type { EditorState, ProbeToEditor, Rect, ResolvedValues } from '../../shared/protocol'
 import type { Board, CanvasLayout, EdId, EditOp, ProjectPath, TemplateNode } from '../../shared/types'
 import type { Platform } from '../actions/registry'
-import type { CanvasPointer, CanvasTool, EditorContext, PointerHandler, Viewport } from '../plugin-api'
+import type { CanvasPointer, CanvasTool, EditorContext, FitKind, PointerHandler, Viewport } from '../plugin-api'
 import { createProbeClient, type ProbeClient } from '../probe-client'
 import type { EditorStore } from '../store'
 import type { WsClient } from '../ws-client'
 import { boundsOf, screenBoxOf, type ScreenBox } from './overlay'
-import {
-  childSelection,
-  clickSelection,
-  doubleClickSelection,
-  findNode,
-  parentSelection,
-  selectableHit,
-  siblingSelection,
-} from './selection'
+import { clickSelection, doubleClickSelection, findNode, selectableHit } from './selection'
 import { fitRect, panBy, screenToBoard, viewportTransform, wheelZoomFactor, zoomAt, zoomTo, type Insets, type Point, type Size } from './viewport'
 
 export interface ToolModule {
@@ -69,11 +61,35 @@ export interface CanvasViewProps {
   readonly tools?: readonly CanvasTool[]
   /** Hands the shell the probe of the mounted artboard, null while none is loaded. */
   readonly onProbe?: (probe: ProbeClient | null) => void
+  /** Hands the shell the editor context, view setters included, each time it changes. */
+  readonly onContext?: (ctx: EditorContext) => void
+  readonly onEditorStateChange?: (next: EditorState) => void
 }
+
+/** What the context's view setters reach: the canvas's own fit and gesture, and the shell's editor state. */
+export interface CanvasViewControls {
+  readonly fit: (kind: FitKind) => void
+  readonly cancelGesture: () => boolean
+  readonly changeEditorState: (next: EditorState) => void
+}
+
+/** A context made outside a mounted canvas has no view to fit, no gesture to drop and no shell to tell. */
+const DETACHED_VIEW: CanvasViewControls = { fit: () => {}, cancelGesture: () => false, changeEditorState: () => {} }
 
 type ToolHandler = 'onPointerDown' | 'onPointerMove' | 'onPointerUp' | 'onDoubleClick' | 'onHover'
 
 type Gesture = { readonly kind: 'pan'; last: Point } | { readonly kind: 'tool'; readonly tool: CanvasTool }
+
+/** One load of the artboard in its frame; each `ready` is a new one. */
+interface FrameLoad {
+  readonly probe: ProbeClient
+}
+
+interface ContentHeight {
+  readonly load: FrameLoad
+  readonly previewWidth: number
+  readonly height: number
+}
 
 interface TextEdit {
   readonly session: string
@@ -88,6 +104,8 @@ const EDIT_IN_SOURCE = 'Edit in source: only an element holding a single run of 
 const RULER = 20
 /** Room around a fitted board: the rulers, the board's label above it, and a margin. */
 const BOARD_INSETS: Insets = { top: RULER + 48, right: 40, bottom: 40, left: RULER + 40 }
+/** A preview width can make a board grow taller; past this many board heights it is cut off. */
+const MAX_GROWTH = 4
 
 function fileName(path: ProjectPath): string {
   return path.slice(path.lastIndexOf('/') + 1)
@@ -97,8 +115,35 @@ function sizeOf(element: HTMLElement | null): Size {
   return { width: element?.clientWidth ?? 0, height: element?.clientHeight ?? 0 }
 }
 
-function boardFit(board: Board, container: Size) {
-  return fitRect({ x: 0, y: 0, width: board.w, height: board.h }, container, BOARD_INSETS)
+function boardFit(frame: Size, container: Size) {
+  return fitRect({ x: 0, y: 0, ...frame }, container, BOARD_INSETS)
+}
+
+function grownHeight(board: Board, scrollHeight: number): number {
+  return Math.min(Math.max(board.h, scrollHeight), MAX_GROWTH * board.h)
+}
+
+/**
+ * The content height at a preview width, measured once per frame load and width with the frame held at the
+ * board's height: `vh` units resolve against the frame, so measuring a grown frame would grow it without end.
+ */
+function useContentHeight(load: FrameLoad | null, board: Board | undefined, previewWidth: number | undefined): number | undefined {
+  const [measured, setMeasured] = useState<ContentHeight | null>(null)
+  useLayoutEffect(() => {
+    if (!load || !board || previewWidth === undefined) return
+    let current = true
+    load.probe
+      .read({ kind: 'documentHeight' })
+      .then(({ scrollHeight }) => {
+        if (current) setMeasured({ load, previewWidth, height: grownHeight(board, scrollHeight) })
+      })
+      // A reload rejects reads in flight; its own `ready` measures again.
+      .catch(() => {})
+    return () => {
+      current = false
+    }
+  }, [load, board, previewWidth])
+  return measured?.load === load && measured.previewWidth === previewWidth ? measured.height : undefined
 }
 
 /** The element's size, kept current as the window or the panels around it change. */
@@ -131,6 +176,8 @@ function isZoomWheel(event: WheelEvent, platform: Platform): boolean {
   return event.ctrlKey || (platform === 'mac' && event.metaKey)
 }
 
+const mintActionId = () => crypto.randomUUID()
+
 function previewedValues(probe: ProbeClient | null, op: EditOp): ResolvedValues {
   if (op.kind === 'setDecl') {
     probe?.previewDecl(op.target, op.payload.prop, op.payload.value)
@@ -140,7 +187,13 @@ function previewedValues(probe: ProbeClient | null, op: EditOp): ResolvedValues 
   return {}
 }
 
-export function canvasContext(store: EditorStore, ws: WsClient, probe: ProbeClient | null, editorState: EditorState): EditorContext {
+export function canvasContext(
+  store: EditorStore,
+  ws: WsClient,
+  probe: ProbeClient | null,
+  editorState: EditorState,
+  view: CanvasViewControls = DETACHED_VIEW,
+): EditorContext {
   return {
     index: () => store.getState().index,
     selection: () => {
@@ -152,7 +205,15 @@ export function canvasContext(store: EditorStore, ws: WsClient, probe: ProbeClie
     readOnly: () => store.getState().readOnly,
     select: (edIds) => store.select(edIds),
     setViewport: (viewport) => store.setViewport(viewport),
-    apply: (op) => ws.sendOp(op, previewedValues(probe, op)),
+    setMode: (mode) => store.setMode(mode),
+    fit: (kind) => view.fit(kind),
+    cancelGesture: () => view.cancelGesture(),
+    setEditorState: (patch) => view.changeEditorState({ ...editorState, ...patch }),
+    beginAction: mintActionId,
+    apply: (op, actionId = mintActionId()) => ws.sendOp({ ...op, actionId }, previewedValues(probe, op)),
+    preview: (op) => {
+      previewedValues(probe, op)
+    },
     undo: () => ws.undo(),
     redo: () => ws.redo(),
     read: (read) => (probe ? probe.read(read) : Promise.reject(new Error('No artboard is loaded'))),
@@ -195,9 +256,37 @@ async function restoreAfterLoad(probe: ProbeClient, store: EditorStore): Promise
   if (perElement.some((rects) => rects.length === 0)) store.toast({ message: PAGE_RESET, tone: 'info' })
 }
 
-export function CanvasView({ ref, store, ws, layout, editorState, platform, tools = DEFAULT_TOOLS, onProbe }: CanvasViewProps) {
+/** Controls that stay the same object while the canvas behind them re-renders, so the context need not change. */
+function forwardingControls() {
+  let target = DETACHED_VIEW
+  const view: CanvasViewControls = {
+    fit: (kind) => target.fit(kind),
+    cancelGesture: () => target.cancelGesture(),
+    changeEditorState: (next) => target.changeEditorState(next),
+  }
+  return {
+    view,
+    forwardTo(next: CanvasViewControls) {
+      target = next
+    },
+  }
+}
+
+export function CanvasView({
+  ref,
+  store,
+  ws,
+  layout,
+  editorState,
+  platform,
+  tools = DEFAULT_TOOLS,
+  onProbe,
+  onContext,
+  onEditorStateChange,
+}: CanvasViewProps) {
   const state = useSyncExternalStore(store.subscribe, store.getState)
   const [probe, setProbe] = useState<ProbeClient | null>(null)
+  const [load, setLoad] = useState<FrameLoad | null>(null)
   const [renderCount, setRenderCount] = useState(0)
   const viewportRef = useRef<HTMLDivElement>(null)
   const shieldRef = useRef<HTMLDivElement>(null)
@@ -205,9 +294,10 @@ export function CanvasView({ ref, store, ws, layout, editorState, platform, tool
   const textEdit = useRef<TextEdit | null>(null)
   const spaceHeld = useRef(false)
   const interactHeld = useRef(false)
+  const [controls] = useState(forwardingControls)
 
   const orderedTools = useMemo(() => [...tools].sort(byDescendingPriority), [tools])
-  const ctx = useMemo(() => canvasContext(store, ws, probe, editorState), [store, ws, probe, editorState])
+  const ctx = useMemo(() => canvasContext(store, ws, probe, editorState, controls.view), [store, ws, probe, editorState, controls])
   const hovered = useMemo(() => (state.hover ? [state.hover] : []), [state.hover])
   const selectionRects = useRenderedRects(probe, state.view.selection, renderCount)
   const hoverRects = useRenderedRects(probe, hovered, renderCount)
@@ -215,6 +305,14 @@ export function CanvasView({ ref, store, ws, layout, editorState, platform, tool
   const viewportSize = useSize(viewportRef)
   const board = layout.boards.find((entry) => entry.path === state.board)
   const viewport = state.view.viewport
+  const previewWidth = board && editorState.boards[board.path]?.previewWidth
+  const contentHeight = useContentHeight(load, board, previewWidth)
+  const frameWidth = previewWidth ?? board?.w ?? 0
+  const frameHeight = contentHeight ?? board?.h ?? 0
+
+  useEffect(() => {
+    onContext?.(ctx)
+  }, [ctx, onContext])
 
   useEffect(() => {
     const current = store.getState().board
@@ -225,8 +323,8 @@ export function CanvasView({ ref, store, ws, layout, editorState, platform, tool
   useLayoutEffect(() => {
     const container = sizeOf(viewportRef.current)
     const laidOut = container.width > 0 && container.height > 0
-    if (board && laidOut && !store.hasView(board.path)) store.setViewport(boardFit(board, container))
-  }, [store, board])
+    if (board && laidOut && !store.hasView(board.path)) store.setViewport(boardFit({ width: frameWidth, height: frameHeight }, container))
+  }, [store, board, frameWidth, frameHeight])
 
   const attachFrame = useCallback(
     (frame: HTMLIFrameElement) => {
@@ -238,6 +336,7 @@ export function CanvasView({ ref, store, ws, layout, editorState, platform, tool
             textEdit.current = null
             // A read rejected by another reload is answered by that reload's own `ready`.
             restoreAfterLoad(client, store).catch(() => {})
+            setLoad({ probe: client })
             rendered()
             break
           case 'scrolled':
@@ -247,7 +346,7 @@ export function CanvasView({ ref, store, ws, layout, editorState, platform, tool
           case 'textCommit':
             textEdit.current = null
             // The ws client reports a refused op with its own toast.
-            ws.sendOp({ target: [message.edId], kind: 'setText', payload: { text: message.text } }, {}).catch(() => {})
+            ws.sendOp({ target: [message.edId], kind: 'setText', payload: { text: message.text }, actionId: mintActionId() }, {}).catch(() => {})
             break
           case 'textCancelled':
             textEdit.current = null
@@ -261,6 +360,7 @@ export function CanvasView({ ref, store, ws, layout, editorState, platform, tool
         stop()
         client.dispose()
         setProbe(null)
+        setLoad(null)
         onProbe?.(null)
       }
     },
@@ -389,10 +489,11 @@ export function CanvasView({ ref, store, ws, layout, editorState, platform, tool
     if (!used) void selectAt(pointer).catch(() => {})
   }
 
-  function cancelGesture(): void {
+  function cancelGesture(): boolean {
     const current = gesture.current
     gesture.current = null
     if (current?.kind === 'tool') current.tool.onCancel?.(ctx)
+    return current !== null
   }
 
   function onDoubleClick(event: ReactMouseEvent<HTMLDivElement>): void {
@@ -402,7 +503,7 @@ export function CanvasView({ ref, store, ws, layout, editorState, platform, tool
   }
 
   function fitBoard(): void {
-    if (board) store.setViewport(boardFit(board, sizeOf(viewportRef.current)))
+    if (board) store.setViewport(boardFit({ width: frameWidth, height: frameHeight }, sizeOf(viewportRef.current)))
   }
 
   function fitSelection(): void {
@@ -410,36 +511,23 @@ export function CanvasView({ ref, store, ws, layout, editorState, platform, tool
     if (bounds) store.setViewport(fitRect(bounds, sizeOf(viewportRef.current)))
   }
 
-  useImperativeHandle(ref, () => ({
-    fitBoard,
-    fitSelection,
-    zoomTo: (zoom) => store.setViewport(zoomTo(store.getState().view.viewport, zoom, sizeOf(viewportRef.current))),
-  }))
-
-  function selectWith(next: (tree: TemplateNode, selection: readonly EdId[]) => EdId[]): void {
-    const { index, view } = store.getState()
-    if (index) store.select(next(index.tree, view.selection))
+  function zoomToLevel(zoom: number): void {
+    store.setViewport(zoomTo(store.getState().view.viewport, zoom, sizeOf(viewportRef.current)))
   }
 
-  function keyCommand(event: ReactKeyboardEvent): (() => void) | null {
-    if (event.metaKey || event.ctrlKey || event.altKey) return null
-    if (event.shiftKey && event.code === 'Digit1') return fitBoard
-    if (event.shiftKey && event.code === 'Digit2') return fitSelection
-    switch (event.key) {
-      case 'Enter':
-        return () => selectWith(event.shiftKey ? parentSelection : childSelection)
-      case 'Tab':
-        return () => selectWith((tree, selection) => siblingSelection(tree, selection, event.shiftKey ? -1 : 1))
-      case 'Escape':
-        return gesture.current ? cancelGesture : () => store.select([])
-      case 'v':
-        return () => store.setMode('select')
-      case 'h':
-        return () => store.setMode('hand')
-    }
-    return null
+  function fit(kind: FitKind): void {
+    if (kind === 'board') fitBoard()
+    else if (kind === 'selection') fitSelection()
+    else zoomToLevel(1)
   }
 
+  useImperativeHandle(ref, () => ({ fitBoard, fitSelection, zoomTo: zoomToLevel }))
+
+  useLayoutEffect(() => {
+    controls.forwardTo({ fit, cancelGesture, changeEditorState: (next) => onEditorStateChange?.(next) })
+  })
+
+  /** Space and I act while held, so they stay here; every pressed shortcut is an action in the registry. */
   function onKeyDown(event: ReactKeyboardEvent<HTMLDivElement>): void {
     if (textEdit.current) return
     if (event.key === ' ') {
@@ -450,12 +538,7 @@ export function CanvasView({ ref, store, ws, layout, editorState, platform, tool
     if (event.code === 'KeyI' && !event.repeat && !event.metaKey && !event.ctrlKey) {
       interactHeld.current = true
       store.setInteract(true)
-      return
     }
-    const command = keyCommand(event)
-    if (!command) return
-    event.preventDefault()
-    command()
   }
 
   function onKeyUp(event: ReactKeyboardEvent<HTMLDivElement>): void {
@@ -483,7 +566,13 @@ export function CanvasView({ ref, store, ws, layout, editorState, platform, tool
       >
         <div data-canvas-board="" style={{ ...styles.board, transform: viewportTransform(viewport) }}>
           {board && state.index?.board === board.path && (
-            <ArtboardFrame key={board.path} board={board} src={state.index.frameSrc} onFrame={attachFrame} />
+            <ArtboardFrame
+              key={board.path}
+              board={board}
+              size={{ width: frameWidth, height: frameHeight }}
+              src={state.index.frameSrc}
+              onFrame={attachFrame}
+            />
           )}
         </div>
         <div
@@ -499,7 +588,9 @@ export function CanvasView({ ref, store, ws, layout, editorState, platform, tool
           onDoubleClick={onDoubleClick}
         />
         <div style={styles.overlay}>
-          {board && <BoardLabel board={board} viewport={viewport} />}
+          {board && (
+            <BoardLabel board={board} size={{ width: frameWidth, height: frameHeight }} preview={previewWidth !== undefined} viewport={viewport} />
+          )}
           {hoverRects.map((rect, i) => (
             <Outline key={`hover-${i}`} kind="hover" box={screenBoxOf(viewport, rect)} />
           ))}
@@ -516,18 +607,19 @@ export function CanvasView({ ref, store, ws, layout, editorState, platform, tool
 
 interface ArtboardFrameProps {
   readonly board: Board
+  readonly size: Size
   readonly src: string
   readonly onFrame: (frame: HTMLIFrameElement) => () => void
 }
 
-function ArtboardFrame({ board, src, onFrame }: ArtboardFrameProps) {
+function ArtboardFrame({ board, size, src, onFrame }: ArtboardFrameProps) {
   return (
     <iframe
       ref={onFrame}
       src={src}
       sandbox="allow-scripts"
       title={fileName(board.path)}
-      style={{ ...styles.frame, width: board.w, height: board.h }}
+      style={{ ...styles.frame, ...size }}
     />
   )
 }
@@ -536,13 +628,21 @@ function Outline({ kind, box }: { readonly kind: 'hover' | 'selection'; readonly
   return <div data-outline={kind} style={{ ...(kind === 'hover' ? styles.hover : styles.selection), ...box }} />
 }
 
-function BoardLabel({ board, viewport }: { readonly board: Board; readonly viewport: Viewport }) {
-  const box = screenBoxOf(viewport, { x: 0, y: 0, width: board.w, height: board.h })
+interface BoardLabelProps {
+  readonly board: Board
+  readonly size: Size
+  /** Names the width a preview, so a restored preview width is never taken for the authored one. */
+  readonly preview: boolean
+  readonly viewport: Viewport
+}
+
+function BoardLabel({ board, size, preview, viewport }: BoardLabelProps) {
+  const box = screenBoxOf(viewport, { x: 0, y: 0, ...size })
   return (
     <div className="ablabel" data-board-label="" style={{ left: box.left, top: box.top - 24, width: box.width }}>
       <span>{fileName(board.path)}</span>
       <span className="dims">
-        {board.w} × {board.h}
+        {preview ? `${size.width} preview` : size.width} × {size.height}
       </span>
     </div>
   )
