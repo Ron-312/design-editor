@@ -67,3 +67,14 @@ Records what each wave built and where it departed from the plan.
   deviated: refreshing an existing project through /design-pull runs classify, merge and commit with no uploads, and ingest still only checks that the project is synced; the node-diff3 token-level retry and key-level JSON merge are left for Next, as the plan says.
 - t13 M1/M2 editor shell, diff panel, history; M1 and M2 e2e — added the editor shell (top bar with sync strip, undo/redo and theme toggle; Layers and Changes tabs; banners and toasts; properties panel), DiffPanel with per-file revert, history undo/redo actions and the M1 and M2 e2e specs.
   deviated: the token picker gets an empty token list because the server protocol carries no tokens; there is no visible Interact switch (hold-I from t11 remains); after a style-only undo the resolved values are trusted and re-applied as a preview rather than compared with the live values.
+
+## Wave 8 (2026-11-23)
+- t14 M3 direct manipulation: move, nudge, resize, snap, Alt-measure — snap.ts (8/zoom threshold, per-axis snapping with guides), move.tool.ts (absolute, flex/grid reorder and transform moves, arrow nudge, shared overlay helpers), resize.tool.ts (8 handles, size label, box-sizing aware writes) and measure.tool.ts (Alt padding/gap/margin lines).
+  deviated: tools draw their own pointer-events:none overlay layers inside the canvas viewport because CanvasView has no plugin overlay layer or draw hook.
+  deviated: arrow nudge is wired from move.tool.ts with a document keydown listener instead of a *.actions.ts file.
+  deviated: for an absolute element the snap parent is its containing block (worked out from insets and margins); the DOM parent stays a snap target.
+  deviated: during a drag the iframe is not changed; a dashed ghost outline (move) or solid outline with size label (resize) is drawn, since there is no preview-only call.
+  deviated: shared helpers live in move.tool.ts and resize and measure import them.
+  deviated: a short-lived cache of just-written values (cleared on a new index) keeps rapid nudges from reading stale authored values.
+  deviated: n/w resize handles write only width/height; multi-element selections get no move or resize; block-flow elements without a transform do not drag.
+- t15 M4 Auto Layout and M5 layer and style actions — auto-layout.ts (R02 flex mapping), layout.section.tsx (Auto layout order 10, Size order 12), padding.tool.ts, layer.actions.ts (wrap, ungroup, duplicate, delete, hide, lock) and style-clipboard.actions.ts (copy and paste style).
