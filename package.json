@@ -1,0 +1,56 @@
+{
+  "name": "design-editor",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A local, Figma-style visual editor for Claude Design canvases",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "start": "node scripts/start.mjs",
+    "build": "node scripts/build.mjs",
+    "check": "node scripts/check.mjs",
+    "e2e": "node scripts/e2e.mjs",
+    "edsync": "node tools/edsync.mjs"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^6.3.0",
+    "axe-core": "^4.14.1",
+    "chokidar": "^5.0.0",
+    "cross-spawn": "^7.0.6",
+    "magic-string": "^1.4.5",
+    "node-diff3": "^4.0.0",
+    "parse5": "^8.1.1",
+    "pixelmatch": "^8.0.0",
+    "playwright": "^1.65.1",
+    "pngjs": "^7.0.0",
+    "postcss": "^8.5.33",
+    "postcss-selector-parser": "^7.2.1",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "specificity": "^1.0.0",
+    "tsx": "^4.23.15",
+    "vite": "^8.3.8",
+    "write-file-atomic": "^7.0.0",
+    "ws": "^8.23.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.65.1",
+    "@types/cross-spawn": "^6.0.6",
+    "@types/node": "^22.20.5",
+    "@types/pngjs": "^6.0.5",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@types/write-file-atomic": "^4.0.3",
+    "@types/ws": "^8.18.2",
+    "eslint": "^10.15.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.14.0",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.73.0",
+    "vitest": "^5.1.1"
+  }
+}
