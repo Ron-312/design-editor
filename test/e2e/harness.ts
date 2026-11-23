@@ -1,5 +1,6 @@
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { copyDir } from '../copy-dir'
 import http from 'node:http'
 import net from 'node:net'
 import { tmpdir } from 'node:os'
@@ -48,7 +49,7 @@ function git(cwd: string, ...args: string[]): string {
 
 /** The same shape `/design-pull` leaves: the canvas in its own repo, and `.editor/cache` filled by the real `edsync cache`. */
 async function pullFixture(root: string): Promise<void> {
-  cpSync(path.join(CANVAS_FIXTURE, 'project'), path.join(root, 'project'), { recursive: true })
+  copyDir(path.join(CANVAS_FIXTURE, 'project'), path.join(root, 'project'))
   await cacheFixtureAssets(root)
   git(root, 'init', '-q')
   const config: ReadonlyArray<readonly [string, string]> = [

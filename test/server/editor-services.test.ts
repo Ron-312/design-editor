@@ -1,4 +1,5 @@
-import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { copyDir } from '../copy-dir'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -31,7 +32,7 @@ function makeProject(): string {
   const parent = mkdtempSync(path.join(tmpdir(), 'ed services '))
   parents.push(parent)
   const root = path.join(parent, 'Café board ü')
-  cpSync(path.join(CANVAS, 'project'), path.join(root, 'project'), { recursive: true })
+  copyDir(path.join(CANVAS, 'project'), path.join(root, 'project'))
   return root
 }
 

@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto'
-import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { copyDir } from '../../copy-dir'
 import http from 'node:http'
 import net from 'node:net'
 import { tmpdir } from 'node:os'
@@ -42,7 +43,7 @@ async function makeProjectRoot(): Promise<string> {
   const parent = mkdtempSync(path.join(tmpdir(), 'ed serve '))
   const root = path.join(parent, 'Café board ü')
   roots.push(parent)
-  cpSync(path.join(CANVAS, 'project'), path.join(root, 'project'), { recursive: true })
+  copyDir(path.join(CANVAS, 'project'), path.join(root, 'project'))
   await cacheFixtureAssets(root)
   writeFileSync(path.join(root, '.editor', 'server.json'), JSON.stringify({ port: 5300, token: EDITOR_TOKEN, pid: 1, startedAt: 0 }))
   writeFileSync(path.join(root, '.editor', 'state.json'), JSON.stringify({ hidden: [], locked: [], collapsed: [], boards: {} }))

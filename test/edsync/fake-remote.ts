@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process'
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { copyDir } from '../copy-dir'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -98,7 +99,7 @@ export class FakeRemote {
     readonly dir: string,
     private readonly scratchRoot: string,
   ) {
-    cpSync(FIXTURE_PROJECT, path.join(dir, 'project'), { recursive: true })
+    copyDir(FIXTURE_PROJECT, path.join(dir, 'project'))
   }
 
   file(projectPath: string): string {
@@ -148,7 +149,7 @@ export class FakeRemote {
   snapshot(): string {
     this.snapshots += 1
     const folder = path.join(this.scratchRoot, `snapshot-${this.snapshots}`)
-    cpSync(path.join(this.dir, 'project'), path.join(folder, 'project'), { recursive: true })
+    copyDir(path.join(this.dir, 'project'), path.join(folder, 'project'))
     return folder
   }
 
@@ -204,7 +205,7 @@ export class Workspace {
   async pull(): Promise<IngestOutput> {
     const ingested = await this.ingest()
     const fetched = path.join(this.sandbox, 'fetched')
-    cpSync(FIXTURE_FETCHED, fetched, { recursive: true })
+    copyDir(FIXTURE_FETCHED, fetched)
     await this.cache(fetched)
     return ingested
   }

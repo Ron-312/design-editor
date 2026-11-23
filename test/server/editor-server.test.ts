@@ -1,4 +1,5 @@
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { copyDir } from '../copy-dir'
 import http from 'node:http'
 import net from 'node:net'
 import { tmpdir } from 'node:os'
@@ -62,7 +63,7 @@ async function makeProject(): Promise<string> {
   const parent = mkdtempSync(path.join(tmpdir(), 'ed listener '))
   parents.push(parent)
   const root = path.join(parent, 'Café board ü')
-  cpSync(path.join(CANVAS, 'project'), path.join(root, 'project'), { recursive: true })
+  copyDir(path.join(CANVAS, 'project'), path.join(root, 'project'))
   await cacheFixtureAssets(root)
   return root
 }

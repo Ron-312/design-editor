@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process'
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { copyDir } from '../copy-dir'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -59,7 +60,7 @@ beforeEach(() => {
   remoteDir = path.join(sandbox, 'remote')
   projectsDir = path.join(sandbox, 'projects')
   projectDir = path.join(projectsDir, SLUG)
-  cpSync(FIXTURE_PROJECT, path.join(remoteDir, 'project'), { recursive: true })
+  copyDir(FIXTURE_PROJECT, path.join(remoteDir, 'project'))
 })
 
 afterEach(() => {

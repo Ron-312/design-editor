@@ -1,4 +1,5 @@
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { copyDir } from '../copy-dir'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -134,7 +135,7 @@ describe('rewriteBlobs', () => {
 
   beforeEach(() => {
     projectRoot = path.join(projectDir, 'project')
-    cpSync(FIXTURE_PROJECT, projectRoot, { recursive: true })
+    copyDir(FIXTURE_PROJECT, projectRoot)
     mapFile = path.join(sandbox, 'map.json')
     writeFileSync(mapFile, JSON.stringify({ [CSS_BLOB]: NEW_CSS_BLOB, [SVG_BLOB]: NEW_SVG_BLOB }))
   })

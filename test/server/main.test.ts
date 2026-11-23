@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import dns from 'node:dns'
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { copyDir } from '../copy-dir'
 import http from 'node:http'
 import net from 'node:net'
 import { tmpdir } from 'node:os'
@@ -67,7 +68,7 @@ async function makeProject(): Promise<string> {
   const parent = mkdtempSync(path.join(tmpdir(), 'ed main '))
   parents.push(parent)
   const root = path.join(parent, 'Café board ü')
-  cpSync(path.join(CANVAS, 'project'), path.join(root, 'project'), { recursive: true })
+  copyDir(path.join(CANVAS, 'project'), path.join(root, 'project'))
   await cacheFixtureAssets(root)
   return root
 }
