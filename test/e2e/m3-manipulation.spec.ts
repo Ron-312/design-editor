@@ -73,9 +73,8 @@ async function grab(page: Page, at: Point): Promise<Drag> {
 
 async function grabHandle(page: Page, name: string): Promise<Drag> {
   const handle = page.locator(`[data-resize-handle="${name}"]`)
-  await expect(handle).toBeVisible()
-  const box = await handle.boundingBox()
-  if (!box) throw new Error(`the ${name} handle is not rendered`)
+  await expect.poll(() => handle.boundingBox()).not.toBeNull()
+  const box = (await handle.boundingBox())!
   return grab(page, { x: box.x + box.width / 2, y: box.y + box.height / 2 })
 }
 

@@ -238,6 +238,20 @@ describe('resizing from each handle', () => {
     expect(layer(viewport, 'resize')).toEqual([])
   })
 
+  it('drops the ghost on cancel, and a later release writes nothing', async () => {
+    const fake = await selected('box')
+    resize.onPointerDown!(fake.ctx, at(300, 150))
+    await settle()
+    resize.onPointerMove!(fake.ctx, at(320, 160))
+
+    resize.onCancel!(fake.ctx)
+
+    expect(layer(viewport, 'resize')).toEqual([])
+    expect(resize.onPointerUp!(fake.ctx, at(320, 160))).toBe(false)
+    await settle()
+    expect(fake.writes()).toEqual([])
+  })
+
   it('treats a release without a move as a click', async () => {
     const fake = await selected('box')
     resize.onPointerDown!(fake.ctx, at(300, 200))

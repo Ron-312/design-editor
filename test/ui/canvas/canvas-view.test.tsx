@@ -1190,26 +1190,32 @@ describe('dragging with the built-in move tool', () => {
     expect(view.store.getState().view.selection).toEqual(ids('aside'))
   })
 
-  it('ends the drag on pointercancel and goes back to hovering', async () => {
+  it('ends the drag on pointercancel with no write, and goes back to hovering', async () => {
     const view = await asideSelected()
     await startDrag(view)
 
     act(() => dispatchPointer(shieldOf(view.container), 'pointercancel', toScreen(view.store, dropped), { buttons: 0 }))
     await settle()
+    act(() => dispatchPointer(shieldOf(view.container), 'pointerup', toScreen(view.store, dropped)))
+    await settle()
     await hoverAt(view, at.label)
 
+    expect(view.ws.sendOp).not.toHaveBeenCalled()
     expect(view.container.querySelector('[data-move-ghost]')).toBeNull()
     expect(view.store.getState().hover).toBe(edId('card'))
   })
 
-  it('ends the drag when pointer capture is lost and goes back to hovering', async () => {
+  it('ends the drag with no write when pointer capture is lost, and goes back to hovering', async () => {
     const view = await asideSelected()
     await startDrag(view)
 
     act(() => dispatchPointer(shieldOf(view.container), 'lostpointercapture', toScreen(view.store, dropped), { buttons: 0 }))
     await settle()
+    act(() => dispatchPointer(shieldOf(view.container), 'pointerup', toScreen(view.store, dropped)))
+    await settle()
     await hoverAt(view, at.label)
 
+    expect(view.ws.sendOp).not.toHaveBeenCalled()
     expect(view.container.querySelector('[data-move-ghost]')).toBeNull()
     expect(view.store.getState().hover).toBe(edId('card'))
   })
