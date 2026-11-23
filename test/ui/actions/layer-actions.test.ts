@@ -39,8 +39,8 @@ const CARD_DECLARATIONS = [
 ]
 
 const styles: Record<string, readonly StyleSource[]> = {
-  card: [{ target: 'inline', file: board, line: 12, declarations: CARD_DECLARATIONS }],
-  other: [{ target: 'inline', file: board, line: 13, declarations: [decl('border-radius', '4px')] }],
+  card: [{ target: 'inline', file: board, line: 12, range: { start: 0, end: 0 }, declarations: CARD_DECLARATIONS }],
+  other: [{ target: 'inline', file: board, line: 13, range: { start: 0, end: 0 }, declarations: [decl('border-radius', '4px')] }],
 }
 
 /** What getComputedStyle reports for every element: far more than anything authored. */

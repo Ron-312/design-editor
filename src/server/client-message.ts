@@ -9,6 +9,9 @@ const isString = (value: unknown): value is string => typeof value === 'string'
 const isOptional = (value: unknown, check: (value: unknown) => boolean) => value === undefined || check(value)
 const isFiniteNumber = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value)
 const isEdIdList = (value: unknown) => Array.isArray(value) && value.every(isEdId)
+const isPositiveNumber = (value: unknown) => isFiniteNumber(value) && value > 0
+const isInlineDeclaration = (value: unknown) => isObject(value) && isString(value.prop) && isString(value.value)
+const isInlineDeclarationList = (value: unknown) => Array.isArray(value) && value.every(isInlineDeclaration)
 
 const PAYLOAD_CHECKS: Readonly<Record<EditKind, (payload: Fields) => boolean>> = {
   setDecl: (payload) =>
@@ -18,22 +21,26 @@ const PAYLOAD_CHECKS: Readonly<Record<EditKind, (payload: Fields) => boolean>> =
     isOptional(payload.rule, isString),
   removeDecl: (payload) => isString(payload.prop) && isOptional(payload.rule, isString),
   setAttr: (payload) => isString(payload.name) && isString(payload.value),
+  removeAttr: (payload) => isString(payload.name),
   setText: (payload) => isString(payload.text),
   moveNode: (payload) => isEdId(payload.parent) && (payload.before === null || isEdId(payload.before)),
-  wrapNode: (payload) => isString(payload.tag),
+  wrapNode: (payload) => isString(payload.tag) && isOptional(payload.style, isInlineDeclarationList),
   unwrapNode: () => true,
   duplicateNode: () => true,
   deleteNode: () => true,
+  insertHtml: (payload) => (payload.before === null || isEdId(payload.before)) && isString(payload.html),
 }
 
 function isEditOp(value: unknown): value is EditOp {
   if (!isObject(value) || !isString(value.kind) || !Object.hasOwn(PAYLOAD_CHECKS, value.kind)) return false
   if (!Array.isArray(value.target) || value.target.length === 0 || !value.target.every(isEdId)) return false
+  if (!isOptional(value.actionId, isString)) return false
   return isObject(value.payload) && PAYLOAD_CHECKS[value.kind as EditKind](value.payload)
 }
 
 function isBoardView(value: unknown): boolean {
-  return isObject(value) && isFiniteNumber(value.zoom) && value.zoom > 0 && isFiniteNumber(value.panX) && isFiniteNumber(value.panY) && isEdIdList(value.selection)
+  if (!isObject(value) || !isPositiveNumber(value.zoom) || !isFiniteNumber(value.panX) || !isFiniteNumber(value.panY)) return false
+  return isEdIdList(value.selection) && isOptional(value.previewWidth, isPositiveNumber)
 }
 
 export function isEditorState(value: unknown): value is EditorState {

@@ -54,6 +54,8 @@ export interface StyleSource {
   readonly declarations: readonly AuthoredDeclaration[]
   /** The rule's selectorText; absent on an inline style. */
   readonly selector?: string
+  /** The whole rule, selector to closing brace, or the whole inline `style` attribute. */
+  readonly range: SourceRange
 }
 
 export type TemplateNodeKind = 'element' | 'sc-for' | 'sc-if' | 'dc-import'
@@ -89,33 +91,65 @@ export type EditKind =
   | 'setDecl'
   | 'removeDecl'
   | 'setAttr'
+  | 'removeAttr'
   | 'setText'
   | 'moveNode'
   | 'wrapNode'
   | 'unwrapNode'
   | 'duplicateNode'
   | 'deleteNode'
+  | 'insertHtml'
 
 export interface EditPayloads {
   /** `rule` is set only when the user picked a `<helmet><style>` rule in the selector chip. */
   setDecl: { readonly prop: string; readonly value: string; readonly important?: boolean; readonly rule?: RuleId }
   removeDecl: { readonly prop: string; readonly rule?: RuleId }
   setAttr: { readonly name: string; readonly value: string }
+  /** A no-op when the attribute is absent. */
+  removeAttr: { readonly name: string }
   setText: { readonly text: string }
   /** `before: null` appends to `parent`. */
   moveNode: { readonly parent: EdId; readonly before: EdId | null }
-  wrapNode: { readonly tag: string }
+  /** `style` is written as the new wrapper's inline declarations in the same splice. */
+  wrapNode: { readonly tag: string; readonly style?: readonly InlineDeclaration[] }
   unwrapNode: Record<string, never>
   duplicateNode: Record<string, never>
   deleteNode: Record<string, never>
+  /** The target is the parent; `before: null` appends to it. */
+  insertHtml: { readonly before: EdId | null; readonly html: string }
 }
 
-/** UI → server. A multi-element edit is one op with several targets. */
+export interface InlineDeclaration {
+  readonly prop: string
+  readonly value: string
+}
+
+/**
+ * UI → server. A multi-element edit is one op with several targets.
+ * `actionId` names the user action the op belongs to; ops without one never share an undo entry.
+ */
 export type EditOp = {
-  [K in EditKind]: { readonly target: readonly EdId[]; readonly kind: K; readonly payload: EditPayloads[K] }
+  [K in EditKind]: { readonly target: readonly EdId[]; readonly kind: K; readonly payload: EditPayloads[K]; readonly actionId?: string }
 }[EditKind]
 
 export type OpOf<K extends EditKind> = Extract<EditOp, { kind: K }>
+
+/** Ops of one action with the same key set the same thing, so only the last one is planned. */
+export function supersedeKeyOf(op: EditOp): string | null {
+  const targets = op.target.join(',')
+  switch (op.kind) {
+    case 'setDecl':
+    case 'removeDecl':
+      return `decl ${op.payload.rule ?? 'inline'} ${op.payload.prop} ${targets}`
+    case 'setAttr':
+    case 'removeAttr':
+      return `attr ${op.payload.name.toLowerCase()} ${targets}`
+    case 'setText':
+      return `text ${targets}`
+    default:
+      return null
+  }
+}
 
 /** Kinds the canvas previews in the live iframe; every other kind writes the file and reloads. */
 export const PREVIEWABLE_KINDS = ['setDecl', 'removeDecl'] as const satisfies readonly EditKind[]

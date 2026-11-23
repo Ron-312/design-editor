@@ -20,7 +20,7 @@ function decl(prop: string, value: string): AuthoredDeclaration {
 }
 
 export function inline(declarations: Readonly<Record<string, string>>): StyleSource[] {
-  return [{ target: 'inline', file: board, line: 1, declarations: Object.entries(declarations).map(([prop, value]) => decl(prop, value)) }]
+  return [{ target: 'inline', file: board, line: 1, range: { start: 0, end: 0 }, declarations: Object.entries(declarations).map(([prop, value]) => decl(prop, value)) }]
 }
 
 export interface Scene {

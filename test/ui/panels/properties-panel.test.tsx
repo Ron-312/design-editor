@@ -40,12 +40,12 @@ function decl(prop: string, value: string, extra: Partial<AuthoredDeclaration> =
 }
 
 function inline(line: number, declarations: AuthoredDeclaration[]): StyleSource {
-  return { target: 'inline', file: board, line, declarations }
+  return { target: 'inline', file: board, line, range: { start: 0, end: 0 }, declarations }
 }
 
 /** The server sends `<helmet><style>` rules with their selector. */
 function rule(id: RuleId, selector: string, line: number, declarations: AuthoredDeclaration[]): StyleSource {
-  return { target: id, file: board, line, declarations, selector }
+  return { target: id, file: board, line, range: { start: 0, end: 0 }, declarations, selector }
 }
 
 const cardInline = inline(12, [

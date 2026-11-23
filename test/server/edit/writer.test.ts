@@ -85,6 +85,9 @@ function op<K extends keyof EditPayloads>(kind: K, target: readonly EdId[], payl
 
 const setDecl = (target: EdId, prop: string, value: string) => op('setDecl', [target], { prop, value })
 
+/** Every op one user action sends carries that action's id. */
+const inAction = (actionId: string, edit: EditOp): EditOp => ({ ...edit, actionId })
+
 function submit(writer: Writer, edit: EditOp): string {
   const opId = `op-${++nextOpId}`
   writer.submit(opId, edit)
@@ -160,12 +163,12 @@ describe('debounced flush', () => {
     expect(diskText(HOME)).toBe(replaceOnce(HOME_TEXT, H1_STYLE, 'style="margin: 0; font-size: 56px"'))
   })
 
-  it('flushes ops that arrive within 300 ms together, in one write per file', async () => {
+  it("flushes one action's ops that arrive within 300 ms together, in one write per file", async () => {
     const { writer, messages, current, diskText, nativeOf } = await openSession({ 'home.dc.html': HOME_TEXT, 'card.dc.html': CARD_TEXT })
-    const first = submit(writer, setDecl(findId(current(HOME), /^<h1/), 'font-size', '56px'))
+    const first = submit(writer, inAction('align', setDecl(findId(current(HOME), /^<h1/), 'font-size', '56px')))
     await sleep(100)
-    const second = submit(writer, setDecl(findId(current(HOME), /^<main/), 'color', '#000000'))
-    const third = submit(writer, setDecl(findId(current(CARD), /^<article/), 'width', '340px'))
+    const second = submit(writer, inAction('align', setDecl(findId(current(HOME), /^<main/), 'color', '#000000')))
+    const third = submit(writer, inAction('align', setDecl(findId(current(CARD), /^<article/), 'width', '340px')))
     await Promise.all([first, second, third].map((opId) => ackFor(messages, opId)))
 
     expect(writtenFiles().sort()).toEqual([nativeOf(CARD), nativeOf(HOME)].sort())
@@ -174,15 +177,215 @@ describe('debounced flush', () => {
     expect(diskText(CARD)).toBe(replaceOnce(CARD_TEXT, CARD_STYLE, 'style="background-color: #ffffff; width: 340px"'))
   })
 
-  it('writes the last value once when a drag sets one property many times inside the window', async () => {
+  it('writes the last value once when a drag sets one property many times inside the window, and acks every op with it', async () => {
     const { writer, messages, current, diskText } = await openSession({ 'home.dc.html': HOME_TEXT })
     const img = findId(current(HOME), /^<img/)
-    const opIds = [25, 26, 27, 28, 29, 30, 31].map((top) => submit(writer, setDecl(img, 'top', `${top}px`)))
+    const opIds = [25, 26, 27, 28, 29, 30, 31].map((top) => submit(writer, inAction('drag', setDecl(img, 'top', `${top}px`))))
     const acks = await Promise.all(opIds.map((opId) => ackFor(messages, opId)))
 
     expect(atomicWrite).toHaveBeenCalledTimes(1)
     expect(diskText(HOME)).toBe(replaceOnce(HOME_TEXT, 'top: 24px; right', 'top: 31px; right'))
-    expect(acks.at(-1)!.resolved[img]).toBe('31px')
+    for (const ack of acks) {
+      expect(ack.record).toMatchObject({ kind: 'setDecl', prop: 'top', after: '31px' })
+      expect(ack.resolved[img]).toBe('31px')
+    }
+  })
+})
+
+describe('undo boundary per user action', () => {
+  const H1_56 = replaceOnce(HOME_TEXT, H1_STYLE, 'style="margin: 0; font-size: 56px"')
+  const MAIN_BLACK = 'style="color: #000000"'
+
+  async function undoSteps(writer: Writer, diskText: (file: ProjectPath) => string, file: ProjectPath, count: number): Promise<string[]> {
+    const texts: string[] = []
+    for (let step = 0; step < count; step++) {
+      await writer.undo()
+      texts.push(diskText(file))
+    }
+    return texts
+  }
+
+  it('seals an action when the next op carries another actionId, so a flush already queued writes them as two undo entries', async () => {
+    const { writer, undo, messages, current, diskText } = await openSession({ 'home.dc.html': HOME_TEXT })
+    const indexed = current(HOME)
+    const first = submit(writer, inAction('a', setDecl(findId(indexed, /^<h1/), 'font-size', '56px')))
+    const queued = writer.flush()
+    const second = submit(writer, inAction('b', setDecl(findId(indexed, /^<main/), 'color', '#000000')))
+    await queued
+    await writer.flush()
+    await Promise.all([first, second].map((opId) => ackFor(messages, opId)))
+    expect(diskText(HOME)).toBe(replaceOnce(H1_56, MAIN_STYLE, MAIN_BLACK))
+
+    expect(await undoSteps(writer, diskText, HOME, 2)).toEqual([H1_56, HOME_TEXT])
+    expect(undo.state().canUndo).toBe(false)
+  })
+
+  it('drains sealed actions in the order they happened, one write and one undo entry each', async () => {
+    const { writer, messages, current, diskText, nativeOf } = await openSession({ 'home.dc.html': HOME_TEXT })
+    const indexed = current(HOME)
+    const opIds = [
+      submit(writer, inAction('a', setDecl(findId(indexed, /^<h1/), 'font-size', '56px'))),
+      submit(writer, inAction('b', setDecl(findId(indexed, /^<main/), 'color', '#000000'))),
+      submit(writer, inAction('c', op('setAttr', [findId(indexed, /^<img/)], { name: 'alt', value: 'Mark' }))),
+    ]
+    await writer.flush()
+    await Promise.all(opIds.map((opId) => ackFor(messages, opId)))
+    expect(writtenFiles()).toEqual([nativeOf(HOME), nativeOf(HOME), nativeOf(HOME)])
+
+    const afterB = replaceOnce(H1_56, MAIN_STYLE, MAIN_BLACK)
+    expect(await undoSteps(writer, diskText, HOME, 3)).toEqual([afterB, H1_56, HOME_TEXT])
+  })
+
+  it('never batches two ops without an actionId: each click on a toggle is its own undo entry', async () => {
+    const { writer, messages, current, diskText } = await openSession({ 'home.dc.html': HOME_TEXT })
+    const h1 = findId(current(HOME), /^<h1/)
+    const first = submit(writer, setDecl(h1, 'font-size', '56px'))
+    const second = submit(writer, setDecl(h1, 'font-size', '64px'))
+    await writer.flush()
+
+    expect((await ackFor(messages, first)).resolved[h1]).toBe('56px')
+    expect((await ackFor(messages, second)).resolved[h1]).toBe('64px')
+    expect(diskText(HOME)).toBe(replaceOnce(HOME_TEXT, H1_STYLE, 'style="margin: 0; font-size: 64px"'))
+    expect(await undoSteps(writer, diskText, HOME, 2)).toEqual([H1_56, HOME_TEXT])
+  })
+
+  it('plans only the last of a removeAttr and a setAttr of one attribute in an action', async () => {
+    const { writer, messages, current, diskText } = await openSession({ 'home.dc.html': HOME_TEXT })
+    const img = findId(current(HOME), /^<img/)
+    const removed = submit(writer, inAction('rename', op('removeAttr', [img], { name: 'alt' })))
+    const set = submit(writer, inAction('rename', op('setAttr', [img], { name: 'alt', value: 'Mark' })))
+    await writer.flush()
+
+    const acks = await Promise.all([removed, set].map((opId) => ackFor(messages, opId)))
+    expect(atomicWrite).toHaveBeenCalledTimes(1)
+    expect(diskText(HOME)).toBe(replaceOnce(HOME_TEXT, 'alt="Studio mark"', 'alt="Mark"'))
+    for (const ack of acks) expect(ack.record).toMatchObject({ kind: 'setAttr', prop: 'alt', after: 'Mark' })
+  })
+
+  it('records one undo entry for an action that touched two files', async () => {
+    const { writer, undo, messages, current, diskText } = await openSession({ 'home.dc.html': HOME_TEXT, 'card.dc.html': CARD_TEXT })
+    const opIds = [
+      submit(writer, inAction('x', setDecl(findId(current(HOME), /^<h1/), 'font-size', '56px'))),
+      submit(writer, inAction('x', setDecl(findId(current(CARD), /^<article/), 'width', '340px'))),
+    ]
+    await writer.flush()
+    await Promise.all(opIds.map((opId) => ackFor(messages, opId)))
+    expect(undo.peekUndo()!.snapshots.map((snapshot) => snapshot.file).sort()).toEqual([CARD, HOME].sort())
+
+    await writer.undo()
+    expect(diskText(HOME)).toBe(HOME_TEXT)
+    expect(diskText(CARD)).toBe(CARD_TEXT)
+    expect(undo.state().canUndo).toBe(false)
+  })
+
+  it('keeps two actions on different files apart, and undoes the later one first', async () => {
+    const { writer, messages, current, diskText } = await openSession({ 'home.dc.html': HOME_TEXT, 'card.dc.html': CARD_TEXT })
+    const opIds = [
+      submit(writer, inAction('x', setDecl(findId(current(HOME), /^<h1/), 'font-size', '56px'))),
+      submit(writer, inAction('y', setDecl(findId(current(CARD), /^<article/), 'width', '340px'))),
+    ]
+    await writer.flush()
+    await Promise.all(opIds.map((opId) => ackFor(messages, opId)))
+
+    await writer.undo()
+    expect(diskText(CARD)).toBe(CARD_TEXT)
+    expect(diskText(HOME)).toBe(H1_56)
+    await writer.undo()
+    expect(diskText(HOME)).toBe(HOME_TEXT)
+  })
+
+  it('puts an action whose write failed back at the front of the queue, never merged into the next action', async () => {
+    const { writer, messages, current, diskText } = await openSession({ 'home.dc.html': HOME_TEXT })
+    const main = findId(current(HOME), /^<main/)
+    vi.mocked(atomicWrite).mockRejectedValueOnce(new Error('file locked by another program'))
+    const first = submit(writer, inAction('a', setDecl(main, 'color', '#000000')))
+    await writer.flush()
+    await waitForMessage(messages, 'writeFailed')
+    expect(writer.hasPending(HOME)).toBe(true)
+
+    const second = submit(writer, inAction('b', setDecl(main, 'color', '#111111')))
+    await writer.flush()
+
+    expect((await ackFor(messages, first)).resolved[main]).toBe('#000000')
+    expect((await ackFor(messages, second)).resolved[main]).toBe('#111111')
+    expect(diskText(HOME)).toBe(replaceOnce(HOME_TEXT, MAIN_STYLE, 'style="color: #111111"'))
+    expect(await undoSteps(writer, diskText, HOME, 2)).toEqual([replaceOnce(HOME_TEXT, MAIN_STYLE, MAIN_BLACK), HOME_TEXT])
+  })
+
+  it("holds a paused file's sealed actions with its open one, then writes each as its own entry once kept", async () => {
+    const { writer, messages, current, nativeOf, diskText } = await openSession({ 'home.dc.html': HOME_TEXT })
+    const outsideText = replaceOnce(HOME_TEXT, OUTSIDE_EDIT.from, OUTSIDE_EDIT.to)
+    const indexed = current(HOME)
+    const first = submit(writer, inAction('a', setDecl(findId(indexed, /^<h1/), 'font-size', '56px')))
+    const second = submit(writer, inAction('b', setDecl(findId(indexed, /^<main/), 'color', '#000000')))
+    writeFileSync(nativeOf(HOME), outsideText)
+    await writer.outsideChange(HOME)
+    await writer.flush()
+    await sleep(400)
+
+    expect(atomicWrite).not.toHaveBeenCalled()
+    expect(writer.hasPending(HOME)).toBe(true)
+
+    await writer.resolvePending(HOME, true)
+    await writer.flush()
+    await Promise.all([first, second].map((opId) => ackFor(messages, opId)))
+    const outsideH1 = replaceOnce(outsideText, H1_STYLE, 'style="margin: 0; font-size: 56px"')
+    expect(diskText(HOME)).toBe(replaceOnce(outsideH1, MAIN_STYLE, MAIN_BLACK))
+    expect(await undoSteps(writer, diskText, HOME, 2)).toEqual([outsideH1, outsideText])
+  })
+
+  it('counts an action sent back by a failed write as pending when the file changes outside, and rejects it on discard', async () => {
+    const { writer, messages, current, nativeOf, diskText } = await openSession({ 'home.dc.html': HOME_TEXT })
+    const outsideText = replaceOnce(HOME_TEXT, OUTSIDE_EDIT.from, OUTSIDE_EDIT.to)
+    vi.mocked(atomicWrite).mockRejectedValueOnce(new Error('file locked by another program'))
+    const opId = submit(writer, inAction('a', setDecl(findId(current(HOME), /^<main/), 'color', '#000000')))
+    await writer.flush()
+    await waitForMessage(messages, 'writeFailed')
+
+    writeFileSync(nativeOf(HOME), outsideText)
+    await writer.outsideChange(HOME)
+    expect(await waitForMessage(messages, 'outsideChange')).toMatchObject({ file: HOME, pendingOps: true })
+
+    await writer.resolvePending(HOME, false)
+    expect((await waitForMessage(messages, 'rejected', (message) => message.opId === opId)).reason).toMatch(/discarded/)
+    expect(writer.hasPending(HOME)).toBe(false)
+    await writer.flush()
+    expect(atomicWrite).toHaveBeenCalledTimes(1)
+    expect(diskText(HOME)).toBe(outsideText)
+  })
+
+  it('rejects the sealed and the open actions of a discarded file', async () => {
+    const { writer, messages, current, nativeOf, diskText } = await openSession({ 'home.dc.html': HOME_TEXT })
+    const outsideText = replaceOnce(HOME_TEXT, OUTSIDE_EDIT.from, OUTSIDE_EDIT.to)
+    const indexed = current(HOME)
+    const opIds = [
+      submit(writer, inAction('a', setDecl(findId(indexed, /^<h1/), 'font-size', '56px'))),
+      submit(writer, inAction('b', setDecl(findId(indexed, /^<main/), 'color', '#000000'))),
+    ]
+    writeFileSync(nativeOf(HOME), outsideText)
+    await writer.outsideChange(HOME)
+    await writer.resolvePending(HOME, false)
+    await writer.flush()
+
+    for (const opId of opIds) await waitForMessage(messages, 'rejected', (message) => message.opId === opId)
+    expect(writer.hasPending(HOME)).toBe(false)
+    expect(atomicWrite).not.toHaveBeenCalled()
+    expect(diskText(HOME)).toBe(outsideText)
+  })
+
+  it('rejects the sealed and the open actions of a closed board', async () => {
+    const { writer, messages, current, diskText } = await openSession({ 'home.dc.html': HOME_TEXT })
+    const indexed = current(HOME)
+    const opIds = [
+      submit(writer, inAction('a', setDecl(findId(indexed, /^<h1/), 'font-size', '56px'))),
+      submit(writer, inAction('b', setDecl(findId(indexed, /^<main/), 'color', '#000000'))),
+    ]
+    await writer.close(HOME)
+    await writer.flush()
+
+    for (const opId of opIds) expect((await waitForMessage(messages, 'rejected', (message) => message.opId === opId)).reason).toMatch(/gone/)
+    expect(atomicWrite).not.toHaveBeenCalled()
+    expect(diskText(HOME)).toBe(HOME_TEXT)
   })
 })
 

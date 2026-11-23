@@ -56,6 +56,13 @@ function declarationTexts(text: string, declarations: InlineStyle['declarations'
   return declarations.map((declaration) => slice(text, declaration.range))
 }
 
+/** Where `snippet` sits in `text`; it must occur exactly once. */
+function rangeOf(text: string, snippet: string): SourceRange {
+  const start = text.indexOf(snippet)
+  if (start < 0 || text.indexOf(snippet, start + 1) >= 0) throw new Error(`"${snippet}" must occur exactly once`)
+  return { start, end: start + snippet.length }
+}
+
 function indexHome() {
   const text = readFixtureText(HOME_FILE)
   return { text, indexed: new SourceIndex().indexFile(HOME, text) }
@@ -189,5 +196,35 @@ describe.each(VARIANTS)('<helmet><style> rules on edge.%s.dc.html', (variant) =>
     expect(declarationTexts(text, wide.declarations)).toEqual(['border: 1px dashed #a8a29e'])
     expect([sheet.line, wide.line]).toEqual([13, 16])
     expect([sheet.media, wide.media]).toEqual([null, '(min-width: 600px)'])
+  })
+})
+
+describe('source ranges for the code tab and copy', () => {
+  it('ranges an inline style to its whole style attribute', () => {
+    const { text, indexed } = indexHome()
+    expect(inlineStyleOf(indexed, idOf(text, indexed, 'main')).range).toEqual(rangeOf(text, 'style="color: #1c1917"'))
+    expect(inlineStyleOf(indexed, idOf(text, indexed, 'header')).range).toEqual(
+      rangeOf(text, 'style="background-color: {{ accent }}; color: #fff7ed; padding: 24px 32px; border-radius: 12px"'),
+    )
+  })
+
+  it('ranges a <helmet><style> rule to the whole rule, selector to closing brace', () => {
+    const { text, indexed } = indexHome()
+    expect(ruleOf(indexed, 'body').range).toEqual(rangeOf(text, 'body { margin: 0; font-family: Inter, sans-serif; background: #fff7ed; }'))
+    expect(ruleOf(indexed, '.page', 0).range).toEqual(rangeOf(text, '.page { position: relative; min-height: 900px; padding: 48px; }'))
+    expect(ruleOf(indexed, '.page', 1).range).toEqual(rangeOf(text, '.page { padding: 24px; }'))
+  })
+})
+
+describe.each(VARIANTS)('source ranges on edge.%s.dc.html', (variant) => {
+  const text = readFixtureText(edgeFile(variant))
+  const indexed = new SourceIndex().indexFile(EDGE, text)
+
+  it('are offsets into the indexed text, line endings and BOM included', () => {
+    expect(inlineStyleOf(indexed, idOf(text, indexed, 'section')).range).toEqual(
+      rangeOf(text, 'style="font: 600 14px/1.4 Inter, sans-serif; background: #fff7ed"'),
+    )
+    expect(ruleOf(indexed, '.note').range).toEqual(rangeOf(text, '.note { color: var(--brandInk, #1c1917) !important; }'))
+    expect(ruleOf(indexed, '.sheet', 1).range).toEqual(rangeOf(text, '.sheet { border: 1px dashed #a8a29e; }'))
   })
 })

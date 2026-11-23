@@ -84,6 +84,7 @@ export function indexInlineStyle(source: CssSource, attr: SourceRange): InlineSt
     target: 'inline',
     file: source.file,
     line: source.lineOf(attr.start),
+    range: attr,
     declarations: root ? declarationsOf(source.text, value.start, root) : [],
   }
 }
@@ -111,6 +112,7 @@ export function indexHelmetRules(source: CssSource, blocks: readonly SourceRange
         selector: rule.selector,
         media: mediaOf(rule),
         line: source.lineOf(block.start + rule.source!.start!.offset),
+        range: { start: block.start + rule.source!.start!.offset, end: block.start + rule.source!.end!.offset },
         declarations: declarationsOf(source.text, block.start, rule),
       })
     })

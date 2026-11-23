@@ -122,7 +122,7 @@ const homeTree = node('root', 'x-dc', [node('main', 'main', [node('header', 'hea
 })
 
 function inlineAt(file: ProjectPath, line: number, prop: string, value: string): StyleSource {
-  return { target: 'inline', file, line, declarations: [{ prop, value, important: false, hasHole: false }] }
+  return { target: 'inline', file, line, range: { start: 0, end: 0 }, declarations: [{ prop, value, important: false, hasHole: false }] }
 }
 
 const homeIndex: BoardIndex = {

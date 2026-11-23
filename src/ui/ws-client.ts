@@ -1,5 +1,5 @@
 import { WS_PATH, WS_TOKEN_PARAM, type ClientMessage, type ResolvedValues, type ServerMessage } from '../shared/protocol'
-import type { EdId, EditOp } from '../shared/types'
+import { supersedeKeyOf, type EdId, type EditOp } from '../shared/types'
 import type { AckMessage, Unsubscribe } from './plugin-api'
 import type { EditorStore } from './store'
 
@@ -23,6 +23,7 @@ export interface WsClient {
 }
 
 interface PendingOp {
+  readonly op: EditOp
   readonly previewed: ResolvedValues
   readonly resolve: (ack: AckMessage) => void
   readonly reject: (error: Error) => void
@@ -34,11 +35,18 @@ function previewMatchesDisk(previewed: ResolvedValues, resolved: ResolvedValues)
   return Object.entries(previewed).every(([edId, value]) => resolved[edId as EdId] === value)
 }
 
+/** An op without an actionId is an action of its own. */
+function actionOf(opId: string, op: EditOp): string {
+  return op.actionId ?? opId
+}
+
 export function connectWsClient({ host, token, store, reloadFrame }: WsClientOptions): WsClient {
   const url = new URL(`ws://${host}${WS_PATH}`)
   url.searchParams.set(WS_TOKEN_PARAM, token)
   const socket = new WebSocket(url)
   const pending = new Map<string, PendingOp>()
+  /** Actions with an op refused and more still pending: whether the frame was already reloaded for them. */
+  const refusedActions = new Map<string, { readonly reloaded: boolean }>()
   const listeners = new Set<(message: ServerMessage) => void>()
   const unsent: ClientMessage[] = []
   let nextOpId = 1
@@ -48,10 +56,22 @@ export function connectWsClient({ host, token, store, reloadFrame }: WsClientOpt
     else unsent.push(message)
   }
 
+  function hasPendingIn(action: string): boolean {
+    return [...pending].some(([opId, other]) => actionOf(opId, other.op) === action)
+  }
+
+  /** The Writer acks a burst's superseded ops with the final record, so only the newest op is checked and recorded. */
+  function isSuperseded(op: EditOp): boolean {
+    const key = supersedeKeyOf(op)
+    if (op.actionId === undefined || key === null) return false
+    return [...pending.values()].some((other) => other.op.actionId === op.actionId && supersedeKeyOf(other.op) === key)
+  }
+
   function settleAck(ack: AckMessage): void {
     const op = pending.get(ack.opId)
     if (!op) return
     pending.delete(ack.opId)
+    if (isSuperseded(op.op)) return op.resolve(ack)
     store.addRecord(ack.record)
     if (ack.reload) {
       reloadFrame()
@@ -62,12 +82,18 @@ export function connectWsClient({ host, token, store, reloadFrame }: WsClientOpt
     op.resolve(ack)
   }
 
+  /** One toast and at most one reload per action, however many of its ops were refused. */
   function settleRejection(opId: string, reason: string): void {
     const op = pending.get(opId)
     if (!op) return
     pending.delete(opId)
-    store.toast({ message: reason, tone: 'error' })
-    if (Object.keys(op.previewed).length > 0) reloadFrame()
+    const action = actionOf(opId, op.op)
+    const refused = refusedActions.get(action)
+    if (!refused) store.toast({ message: reason, tone: 'error' })
+    const reload = !refused?.reloaded && Object.keys(op.previewed).length > 0
+    if (reload) reloadFrame()
+    if (hasPendingIn(action)) refusedActions.set(action, { reloaded: reload || refused?.reloaded === true })
+    else refusedActions.delete(action)
     op.reject(new Error(reason))
   }
 
@@ -108,7 +134,7 @@ export function connectWsClient({ host, token, store, reloadFrame }: WsClientOpt
     sendOp(op, previewed) {
       if (pushing()) return Promise.reject(new Error(`${PUSH_IN_PROGRESS}: the edit was not applied`))
       const opId = `op-${nextOpId++}`
-      const ack = new Promise<AckMessage>((resolve, reject) => pending.set(opId, { previewed, resolve, reject }))
+      const ack = new Promise<AckMessage>((resolve, reject) => pending.set(opId, { op, previewed, resolve, reject }))
       send({ type: 'op', opId, op })
       return ack
     },

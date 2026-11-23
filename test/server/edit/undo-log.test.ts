@@ -4,13 +4,13 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { atomicWrite } from '../../../src/core/atomic-write'
-import { UndoLog } from '../../../src/server/edit/undo-log'
+import { UndoLog, type FileSnapshot, type UndoEntry } from '../../../src/server/edit/undo-log'
 import { contentHash, Writer } from '../../../src/server/edit/writer'
 import { decodeSource } from '../../../src/server/source/bytes'
 import { SourceIndex, type IndexedFile } from '../../../src/server/source/source-index'
 import { toNativePath } from '../../../src/shared/paths'
 import type { ServerMessage } from '../../../src/shared/protocol'
-import type { EdId, EditOp, EditPayloads, ProjectPath, RuleId, SourceRange } from '../../../src/shared/types'
+import type { EdId, EditOp, EditPayloads, EditRecord, ProjectPath, RuleId, SourceRange } from '../../../src/shared/types'
 
 vi.mock('../../../src/core/atomic-write', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../src/core/atomic-write')>()
@@ -133,6 +133,9 @@ function op<K extends keyof EditPayloads>(kind: K, target: readonly EdId[], payl
 
 const setDecl = (target: EdId, prop: string, value: string) => op('setDecl', [target], { prop, value })
 
+/** Every op one user action sends carries that action's id. */
+const inAction = (actionId: string, edit: EditOp): EditOp => ({ ...edit, actionId })
+
 function submit(writer: Writer, edit: EditOp): string {
   const opId = `op-${++nextOpId}`
   writer.submit(opId, edit)
@@ -200,7 +203,7 @@ describe('snapshots taken before each flush', () => {
     const img = findId(current(HOME), /^<img/)
     const opIds: string[] = []
     for (const top of [25, 26, 27, 28, 29, 30, 31, 32]) {
-      opIds.push(submit(writer, setDecl(img, 'top', `${top}px`)))
+      opIds.push(submit(writer, inAction('drag', setDecl(img, 'top', `${top}px`))))
       await sleep(80)
     }
     await Promise.all(opIds.map((opId) => ackFor(messages, opId)))
@@ -216,7 +219,7 @@ describe('snapshots taken before each flush', () => {
     const h1 = findId(current(HOME), /^<h1/)
     const opIds: string[] = []
     for (const text of ['Studio Weekly!', 'Studio Weekly!!', 'Studio Weekly!!!']) {
-      opIds.push(submit(writer, op('setText', [h1], { text })))
+      opIds.push(submit(writer, inAction('typing', op('setText', [h1], { text }))))
       await sleep(50)
     }
     await Promise.all(opIds.map((opId) => ackFor(messages, opId)))
@@ -255,6 +258,128 @@ describe('snapshots taken before each flush', () => {
     const { undo, current, run } = await openHomeAndCard()
     await run(setDecl(findId(current(CARD), /^<article/), 'width', '340px'))
     expect(undo.peekUndo()!.snapshots.map((snapshot) => snapshot.file)).toEqual([CARD])
+  })
+})
+
+describe('one entry per user action', () => {
+  it('folds two flushes of one action more than 300 ms apart into one entry, and one undo restores the pre-action bytes', async () => {
+    const { writer, undo, current, diskBytes, diskText, run } = await openHomeAndCard()
+    const img = findId(current(HOME), /^<img/)
+    await run(inAction('hold', setDecl(img, 'top', '25px')))
+    await sleep(400)
+    await run(inAction('hold', setDecl(img, 'top', '26px')))
+    expect(diskText(HOME)).toBe(replaceOnce(HOME_TEXT, 'top: 24px; right', 'top: 26px; right'))
+
+    await writer.undo()
+    expect(diskBytes(HOME).equals(canvasBytes('home.dc.html'))).toBe(true)
+    expect(undo.state().canUndo).toBe(false)
+  })
+
+  it('folds a later flush of the action that touches another file into the same entry', async () => {
+    const { writer, undo, current, diskText, run } = await openHomeAndCard()
+    await run(inAction('paste-style', setDecl(findId(current(HOME), /^<h1/), 'font-size', '56px')))
+    await sleep(400)
+    await run(inAction('paste-style', setDecl(findId(current(CARD), /^<article/), 'width', '340px')))
+
+    await writer.undo()
+    expect(diskText(HOME)).toBe(HOME_TEXT)
+    expect(diskText(CARD)).toBe(CARD_TEXT)
+    expect(undo.state().canUndo).toBe(false)
+  })
+})
+
+describe('UndoLog.record folding', () => {
+  const FIRST_OFFSETS = new Map([['e1' as EdId, 10]])
+  const LATER_OFFSETS = new Map([['e1' as EdId, 12]])
+
+  function snapshot(file: ProjectPath, text: string, offsets: ReadonlyMap<EdId, number>, postWriteHash: string): FileSnapshot {
+    return { file, text, offsets, postWriteHash }
+  }
+
+  function record(file: ProjectPath, prop: string, after: string): EditRecord {
+    return { target: ['e1' as EdId], kind: 'setDecl', prop, before: null, after, scope: { kind: 'element' }, files: [file] }
+  }
+
+  const homeTop = record(HOME, 'top', '25px')
+  const homeLeft = record(HOME, 'left', '40px')
+  const cardWidth = record(CARD, 'width', '340px')
+
+  const first = (actionId: string, styleOnly = true): UndoEntry => ({
+    actionId,
+    records: [homeTop],
+    snapshots: [snapshot(HOME, 'home before', FIRST_OFFSETS, 'home-1')],
+    styleOnly,
+  })
+
+  const later = (actionId: string, styleOnly = true): UndoEntry => ({
+    actionId,
+    records: [homeLeft, cardWidth],
+    snapshots: [snapshot(HOME, 'home after first', LATER_OFFSETS, 'home-2'), snapshot(CARD, 'card before', LATER_OFFSETS, 'card-1')],
+    styleOnly,
+  })
+
+  function snapshotOf(entry: UndoEntry, file: ProjectPath): FileSnapshot {
+    const found = entry.snapshots.find((candidate) => candidate.file === file)
+    if (!found) throw new Error(`no snapshot of ${file}`)
+    return found
+  }
+
+  it("keeps each file's earliest pre-image and latest post-write hash, adds new files and appends the records", () => {
+    const undo = new UndoLog()
+    undo.record(first('a'))
+    undo.record(later('a'))
+
+    const entry = undo.popUndo()!
+    expect(undo.peekUndo()).toBeNull()
+    expect(entry.actionId).toBe('a')
+    expect(entry.records).toEqual([homeTop, homeLeft, cardWidth])
+    expect(entry.snapshots).toHaveLength(2)
+    expect(snapshotOf(entry, HOME)).toEqual(snapshot(HOME, 'home before', FIRST_OFFSETS, 'home-2'))
+    expect(snapshotOf(entry, CARD)).toEqual(snapshot(CARD, 'card before', LATER_OFFSETS, 'card-1'))
+  })
+
+  it.each([
+    [true, true, true],
+    [true, false, false],
+    [false, true, false],
+  ])('ANDs styleOnly: %s then %s folds to %s', (firstStyleOnly, laterStyleOnly, folded) => {
+    const undo = new UndoLog()
+    undo.record(first('a', firstStyleOnly))
+    undo.record(later('a', laterStyleOnly))
+
+    expect(undo.peekUndo()!.styleOnly).toBe(folded)
+  })
+
+  it('keeps flushes of different actions as separate entries', () => {
+    const undo = new UndoLog()
+    undo.record(first('a'))
+    undo.record(later('b'))
+
+    expect(undo.popUndo()!.actionId).toBe('b')
+    expect(undo.popUndo()!.actionId).toBe('a')
+    expect(undo.peekUndo()).toBeNull()
+  })
+
+  it('does not fold into an entry once an undo has run since it was recorded', () => {
+    const undo = new UndoLog()
+    undo.record(first('a'))
+    undo.record(first('b'))
+    undo.pushRedo(undo.popUndo()!)
+    undo.record(later('a'))
+
+    expect(undo.popUndo()!.records).toEqual([homeLeft, cardWidth])
+    expect(undo.popUndo()!.records).toEqual([homeTop])
+  })
+
+  it('does not fold into an entry a redo has put back', () => {
+    const undo = new UndoLog()
+    undo.record(first('a'))
+    undo.pushRedo(undo.popUndo()!)
+    undo.pushUndo(undo.popRedo()!)
+    undo.record(later('a'))
+
+    expect(undo.popUndo()!.records).toEqual([homeLeft, cardWidth])
+    expect(undo.popUndo()!.records).toEqual([homeTop])
   })
 })
 

@@ -39,7 +39,7 @@ function decl(prop: string, value: string): AuthoredDeclaration {
 }
 
 function inline(...declarations: Array<readonly [string, string]>): StyleSource[] {
-  return [{ target: 'inline', file: board, line: 10, declarations: declarations.map(([prop, value]) => decl(prop, value)) }]
+  return [{ target: 'inline', file: board, line: 10, range: { start: 0, end: 0 }, declarations: declarations.map(([prop, value]) => decl(prop, value)) }]
 }
 
 type Styles = Record<string, readonly StyleSource[]>

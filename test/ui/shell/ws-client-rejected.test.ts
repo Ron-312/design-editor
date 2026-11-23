@@ -29,6 +29,10 @@ class FakeSocket extends EventTarget {
 
 const setColor: EditOp = { target: ['e1' as EdId], kind: 'setDecl', payload: { prop: 'color', value: 'red' } }
 
+function setDeclIn(actionId: string, prop: string, value: string): EditOp {
+  return { target: ['e1' as EdId], kind: 'setDecl', payload: { prop, value }, actionId }
+}
+
 let store: EditorStore
 let reloadFrame: ReturnType<typeof vi.fn<() => void>>
 let client: WsClient
@@ -52,6 +56,46 @@ function sentOpId(): string {
   if (sent?.type !== 'op') throw new Error('no op was sent')
   return sent.opId
 }
+
+function sentOpIds(): string[] {
+  return socket.sent.flatMap((message) => (message.type === 'op' ? [message.opId] : []))
+}
+
+describe('a refused action', () => {
+  it('shows one toast and reloads once however many of its ops were refused', async () => {
+    const ops = [setDeclIn('act-1', 'border-top-left-radius', '8px'), setDeclIn('act-1', 'border-top-right-radius', '8px'), setDeclIn('act-1', 'border-radius', '')]
+    const acks = ops.map((op) => client.sendOp(op, { ['e1' as EdId]: '8px' }))
+
+    for (const opId of sentOpIds()) socket.receive({ type: 'rejected', opId, reason: 'overlapping patches' })
+
+    await Promise.all(acks.map((ack) => expect(ack).rejects.toThrow('overlapping patches')))
+    expect(store.getState().toasts).toEqual([expect.objectContaining({ message: 'overlapping patches', tone: 'error' })])
+    expect(reloadFrame).toHaveBeenCalledTimes(1)
+  })
+
+  it('reloads once when only a later op of the action previewed', async () => {
+    const first = client.sendOp(setDeclIn('act-2', 'display', 'flex'), {})
+    const second = client.sendOp(setDeclIn('act-2', 'gap', '8px'), { ['e1' as EdId]: '8px' })
+
+    for (const opId of sentOpIds()) socket.receive({ type: 'rejected', opId, reason: 'refused' })
+
+    await Promise.all([first, second].map((ack) => expect(ack).rejects.toThrow('refused')))
+    expect(store.getState().toasts).toHaveLength(1)
+    expect(reloadFrame).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows a toast for each of two separate actions', async () => {
+    const first = client.sendOp(setDeclIn('act-3', 'color', 'red'), { ['e1' as EdId]: 'red' })
+    const second = client.sendOp(setDeclIn('act-4', 'color', 'blue'), { ['e1' as EdId]: 'blue' })
+
+    const [firstId, secondId] = sentOpIds()
+    socket.receive({ type: 'rejected', opId: firstId!, reason: 'first' })
+    socket.receive({ type: 'rejected', opId: secondId!, reason: 'second' })
+
+    await Promise.all([expect(first).rejects.toThrow('first'), expect(second).rejects.toThrow('second')])
+    expect(store.getState().toasts.map((toast) => toast.message)).toEqual(['first', 'second'])
+  })
+})
 
 describe('a rejected op', () => {
   it('rejects its promise with the reason, shows it as an error toast and reloads the previewed frame', async () => {

@@ -9,8 +9,10 @@ export interface FileSnapshot {
   readonly postWriteHash: string
 }
 
-/** One flush (a drag or typing burst lands in one), restored by writing its snapshots back. */
+/** One user action, however many flushes it took, restored by writing its snapshots back. */
 export interface UndoEntry {
+  /** Absent for an op sent without one: such an entry never folds. */
+  readonly actionId?: string | undefined
   readonly records: readonly EditRecord[]
   readonly snapshots: readonly FileSnapshot[]
   /** Only inline `style` declarations changed, so undo previews the old values instead of reloading. */
@@ -35,6 +37,21 @@ function latestHashOf(stack: readonly UndoEntry[], file: ProjectPath): string | 
   return undefined
 }
 
+/** Each file keeps its earliest pre-image and its latest post-write hash. */
+function folded(entry: UndoEntry, later: UndoEntry): UndoEntry {
+  const snapshots = entry.snapshots.map((snapshot) => {
+    const latest = snapshotOf(later, snapshot.file)
+    return latest ? { ...snapshot, postWriteHash: latest.postWriteHash } : snapshot
+  })
+  const added = later.snapshots.filter((snapshot) => !snapshotOf(entry, snapshot.file))
+  return {
+    ...entry,
+    records: [...entry.records, ...later.records],
+    snapshots: [...snapshots, ...added],
+    styleOnly: entry.styleOnly && later.styleOnly,
+  }
+}
+
 function withoutFile(stack: readonly UndoEntry[], file: ProjectPath): UndoEntry[] {
   return stack
     .map((entry) => ({
@@ -49,11 +66,20 @@ function withoutFile(stack: readonly UndoEntry[], file: ProjectPath): UndoEntry[
 export class UndoLog {
   private undoStack: UndoEntry[] = []
   private redoStack: UndoEntry[] = []
+  /** The entry the last flush recorded, while no undo or redo has run since: a later flush of its action folds into it. */
+  private openEntry: UndoEntry | null = null
 
   /** A new flush: it starts a fresh history ahead, so redo is gone. */
   record(entry: UndoEntry): void {
-    this.undoStack.push(entry)
     this.redoStack = []
+    const top = this.undoStack.at(-1)
+    if (top && top === this.openEntry && entry.actionId !== undefined && entry.actionId === top.actionId) {
+      this.openEntry = folded(top, entry)
+      this.undoStack[this.undoStack.length - 1] = this.openEntry
+      return
+    }
+    this.undoStack.push(entry)
+    this.openEntry = entry
   }
 
   peekUndo(): UndoEntry | null {
@@ -65,10 +91,12 @@ export class UndoLog {
   }
 
   popUndo(): UndoEntry | null {
+    this.openEntry = null
     return this.undoStack.pop() ?? null
   }
 
   popRedo(): UndoEntry | null {
+    this.openEntry = null
     return this.redoStack.pop() ?? null
   }
 

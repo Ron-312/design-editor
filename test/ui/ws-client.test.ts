@@ -12,6 +12,10 @@ const TOKEN = 'launch-token-6f1c'
 const setColor: EditOp = { target: [edId('e1'), edId('e2')], kind: 'setDecl', payload: { prop: 'color', value: 'red' } }
 const setWidth: EditOp = { target: [edId('e3')], kind: 'setDecl', payload: { prop: 'width', value: '10px' } }
 
+function setDeclIn(actionId: string, prop: string, value: string): EditOp {
+  return { target: [edId('e3')], kind: 'setDecl', payload: { prop, value }, actionId }
+}
+
 interface ServerSide {
   readonly requestUrl: URL
   readonly received: ClientMessage[]
@@ -135,6 +139,71 @@ describe('ops and acks', () => {
 
     expect(store.getState().toasts).toHaveLength(1)
     expect(reloadFrame).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe("one action's ops", () => {
+  async function sendAll(ops: readonly EditOp[], previewedValues: readonly string[]) {
+    const server = await connected
+    const acks = ops.map((op, i) => client.sendOp(op, { [edId('e3')]: previewedValues[i]! }))
+    await vi.waitFor(() => expect(opsReceived(server)).toHaveLength(ops.length))
+    return { server, acks, opIds: opsReceived(server).map((sent) => sent.opId) }
+  }
+
+  it("sends the op's actionId with it", async () => {
+    const op = setDeclIn('act-1', 'width', '10px')
+    const { server, opIds } = await sendAll([op], ['10px'])
+
+    expect(opsReceived(server)).toEqual([{ type: 'op', opId: opIds[0], op }])
+  })
+
+  it('gives a burst of three ops on one property one record, no toast and no reload', async () => {
+    const burst = ['25px', '26px', '27px'].map((value) => setDeclIn('drag-1', 'top', value))
+    const { server, acks, opIds } = await sendAll(burst, ['25px', '26px', '27px'])
+    for (const opId of opIds) server.send(ackFor(opId, burst[2]!, { [edId('e3')]: '27px' }))
+
+    const settled = await Promise.all(acks)
+    expect(settled.map((ack) => ack.opId)).toEqual(opIds)
+    expect(store.getState().records).toEqual([expect.objectContaining({ prop: 'top', after: '27px' })])
+    expect(store.getState().toasts).toEqual([])
+    expect(reloadFrame).not.toHaveBeenCalled()
+  })
+
+  it("still checks the burst's newest op against its preview", async () => {
+    const burst = ['25px', '26px', '27px'].map((value) => setDeclIn('drag-1', 'top', value))
+    const { server, acks, opIds } = await sendAll(burst, ['25px', '26px', '27px'])
+    for (const opId of opIds) server.send(ackFor(opId, burst[2]!, { [edId('e3')]: '30px' }))
+
+    await Promise.all(acks)
+    expect(store.getState().toasts).toHaveLength(1)
+    expect(reloadFrame).toHaveBeenCalledTimes(1)
+    expect(store.getState().records).toHaveLength(1)
+  })
+
+  it('stays quiet when a held-arrow nudge has its earlier acks arrive superseded by a later press', async () => {
+    const nudge = ['11px', '12px', '13px'].map((value) => setDeclIn('nudge-1', 'left', value))
+    const { server, acks, opIds } = await sendAll(nudge, ['11px', '12px', '13px'])
+    server.send(ackFor(opIds[0]!, nudge[1]!, { [edId('e3')]: '12px' }))
+    server.send(ackFor(opIds[1]!, nudge[1]!, { [edId('e3')]: '12px' }))
+    server.send(ackFor(opIds[2]!, nudge[2]!, { [edId('e3')]: '13px' }))
+
+    await Promise.all(acks)
+    expect(store.getState().toasts).toEqual([])
+    expect(reloadFrame).not.toHaveBeenCalled()
+    expect(store.getState().records).toEqual([expect.objectContaining({ prop: 'left', after: '13px' })])
+  })
+
+  it('checks and records an op whose newer neighbour sets another property', async () => {
+    const ops = [setDeclIn('act-2', 'top', '25px'), setDeclIn('act-2', 'left', '40px')]
+    const { server, acks, opIds } = await sendAll(ops, ['25px', '40px'])
+
+    server.send(ackFor(opIds[0]!, ops[0]!, { [edId('e3')]: '30px' }))
+    server.send(ackFor(opIds[1]!, ops[1]!, { [edId('e3')]: '40px' }))
+
+    await Promise.all(acks)
+    expect(store.getState().toasts).toHaveLength(1)
+    expect(reloadFrame).toHaveBeenCalledTimes(1)
+    expect(store.getState().records.map((record) => record.prop)).toEqual(['top', 'left'])
   })
 })
 

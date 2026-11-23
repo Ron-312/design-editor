@@ -407,8 +407,9 @@ describe('the edit session over the ws', () => {
 
   it('names every declaration a multi-declaration style-only undo restored', async () => {
     const { client, firstCol } = await sessionOn()
-    const width = sendOp(client, op('setDecl', [firstCol], { prop: 'width', value: '200px' }))
-    const padding = sendOp(client, op('setDecl', [firstCol], { prop: 'padding', value: '4px' }))
+    const action = { actionId: 'resize-and-pad' }
+    const width = sendOp(client, { ...op('setDecl', [firstCol], { prop: 'width', value: '200px' }), ...action })
+    const padding = sendOp(client, { ...op('setDecl', [firstCol], { prop: 'padding', value: '4px' }), ...action })
     await settled(client, width)
     await settled(client, padding)
 

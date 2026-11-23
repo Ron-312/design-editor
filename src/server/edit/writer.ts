@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises'
 import { atomicWrite } from '../../core/atomic-write'
 import { toNativePath } from '../../shared/paths'
 import type { ResolvedValues, RestoredDeclaration, ServerMessage } from '../../shared/protocol'
-import type { EdId, EditOp, EditRecord, ElementLocation, ProjectPath } from '../../shared/types'
+import { supersedeKeyOf, type EdId, type EditOp, type EditRecord, type ElementLocation, type ProjectPath } from '../../shared/types'
 import { decodeSource, encodeSource } from '../source/bytes'
 import type { IndexedFile, SourceIndex } from '../source/source-index'
 import { attrValue } from '../source/template-tree'
@@ -37,40 +37,32 @@ interface PendingOp {
   readonly op: EditOp
 }
 
+/** One action's ops on one file, sealed once another action starts or a flush begins; it is one write. */
+interface ActionBatch {
+  readonly file: ProjectPath
+  readonly actionId: string | undefined
+  readonly ops: readonly PendingOp[]
+}
+
 interface OpenFile {
   indexed: IndexedFile
   /** Hash of the bytes the editor last read or wrote: the watcher's own-write filter. */
   hash: string
+  /** The open action's ops on this file. */
   pending: PendingOp[]
   /** An outside change arrived with ops pending; nothing is written until the user keeps or discards them. */
   paused: boolean
 }
 
-interface FlushedFile {
-  readonly snapshot: FileSnapshot
-  readonly records: readonly EditRecord[]
-  readonly acks: readonly ServerMessage[]
-}
-
-function supersedeKey(op: EditOp): string | null {
-  const targets = op.target.join(',')
-  switch (op.kind) {
-    case 'setDecl':
-    case 'removeDecl':
-      return `decl ${op.payload.rule ?? 'inline'} ${op.payload.prop} ${targets}`
-    case 'setAttr':
-      return `attr ${op.payload.name.toLowerCase()} ${targets}`
-    case 'setText':
-      return `text ${targets}`
-    default:
-      return null
-  }
+/** An op without an actionId is an action of its own. */
+function isSameAction(actionId: string | undefined, openActionId: string | undefined): boolean {
+  return actionId !== undefined && actionId === openActionId
 }
 
 /** A drag or typing burst sets one thing many times inside the window; only its last value is planned. */
 function withOp(pending: readonly PendingOp[], next: PendingOp): PendingOp[] {
-  const key = supersedeKey(next.op)
-  const at = key === null ? -1 : pending.findIndex((entry) => supersedeKey(entry.op) === key)
+  const key = supersedeKeyOf(next.op)
+  const at = key === null ? -1 : pending.findIndex((entry) => supersedeKeyOf(entry.op) === key)
   if (at < 0) return [...pending, next]
   return pending.map((entry, i) => (i === at ? { opIds: [...entry.opIds, ...next.opIds], op: next.op } : entry))
 }
@@ -105,6 +97,7 @@ function resolvedValues(indexed: IndexedFile, record: EditRecord): ResolvedValue
         if (record.scope.kind === 'rule') return null
         return lastDeclaration(indexed.inlineStyle(id)?.declarations ?? [], record.prop!)?.value ?? null
       case 'setAttr':
+      case 'removeAttr':
         return attrValue(parsed().element(id), record.prop!) ?? null
       case 'setText':
         return textOf(parsed(), id)
@@ -115,9 +108,12 @@ function resolvedValues(indexed: IndexedFile, record: EditRecord): ResolvedValue
   return Object.fromEntries(record.target.filter((id) => indexed.locate(id)).map((id) => [id, valueOf(id)]))
 }
 
-/** Debounces ops per file, splices them through the PatchEngine, writes atomically and keeps the snapshot undo log. */
+/** Debounces ops per action and file, splices them through the PatchEngine, writes atomically and keeps the snapshot undo log. */
 export class Writer {
   private readonly files = new Map<ProjectPath, OpenFile>()
+  /** Sealed batches in the order their actions happened; a batch whose write failed waits at the front. */
+  private sealed: ActionBatch[] = []
+  private openActionId: string | undefined
   private readonly engine: PatchEngine
   private mintedCount = 0
   private timer: ReturnType<typeof setTimeout> | undefined
@@ -146,12 +142,15 @@ export class Writer {
   }
 
   hasPending(file: ProjectPath): boolean {
-    return (this.files.get(file)?.pending.length ?? 0) > 0
+    return (this.files.get(file)?.pending.length ?? 0) > 0 || this.sealed.some((batch) => batch.file === file)
   }
 
+  /** Seals synchronously, so the next action's op never joins this one's flush however late that flush runs. */
   submit(opId: string, op: EditOp): void {
     const open = this.ownerOf(op.target[0])
     if (!open) return this.options.send({ type: 'rejected', opId, reason: GONE })
+    if (!isSameAction(op.actionId, this.openActionId)) this.sealOpenBatches()
+    this.openActionId = op.actionId
     open.pending = withOp(open.pending, { opIds: [opId], op })
     this.armDebounce()
   }
@@ -195,7 +194,7 @@ export class Writer {
       const { indexed, restoreByPath } = reconcile(this.options.index, open.indexed, decodeSource(bytes))
       open.indexed = indexed
       open.hash = hash
-      open.paused = open.pending.length > 0
+      open.paused = this.hasPending(file)
       this.options.undo.outsideChange(file, hash)
       this.options.send({ type: 'outsideChange', file, pendingOps: open.paused, replacedIds: Object.fromEntries(restoreByPath) })
       this.sendUndoState()
@@ -208,7 +207,7 @@ export class Writer {
       const open = this.files.get(file)
       if (!open) return
       this.files.delete(file)
-      this.reject(open.pending, GONE)
+      this.reject(this.takePending(file, open), GONE)
       this.options.undo.dropFile(file)
       this.sendUndoState()
     })
@@ -220,8 +219,7 @@ export class Writer {
       if (!open) return
       open.paused = false
       if (keep) return this.armDebounce()
-      this.reject(open.pending, DISCARDED)
-      open.pending = []
+      this.reject(this.takePending(file, open), DISCARDED)
     })
   }
 
@@ -232,6 +230,21 @@ export class Writer {
   private ownerOf(id: EdId | undefined): OpenFile | undefined {
     if (!id) return undefined
     return [...this.files.values()].find((open) => open.indexed.locate(id))
+  }
+
+  private takePending(file: ProjectPath, open: OpenFile): PendingOp[] {
+    const taken = [...this.sealed.filter((batch) => batch.file === file).flatMap((batch) => batch.ops), ...open.pending]
+    this.sealed = this.sealed.filter((batch) => batch.file !== file)
+    open.pending = []
+    return taken
+  }
+
+  private sealOpenBatches(): void {
+    for (const [file, open] of this.files) {
+      if (open.pending.length === 0) continue
+      this.sealed.push({ file, actionId: this.openActionId, ops: open.pending })
+      open.pending = []
+    }
   }
 
   private armDebounce(): void {
@@ -245,41 +258,45 @@ export class Writer {
     return run
   }
 
-  /** Every touched file is written once, and the flush becomes one undo entry before any op is acked. */
+  /**
+   * Drains the queue in order, one write and one undo entry per batch, all recorded before any op is acked.
+   * A paused file's batches, and those behind a failed write, wait in order for a later flush.
+   */
   private async flushAll(): Promise<void> {
     clearTimeout(this.timer)
-    const flushed: FlushedFile[] = []
-    for (const [file, open] of this.files) {
-      if (open.paused || open.pending.length === 0) continue
-      const result = await this.flushFile(file, open)
-      if (result) flushed.push(result)
+    this.sealOpenBatches()
+    const waiting: ActionBatch[] = []
+    const acks: ServerMessage[] = []
+    for (const batch of this.sealed.splice(0)) {
+      const open = this.files.get(batch.file)!
+      const blocked = open.paused || waiting.some((other) => other.file === batch.file)
+      const batchAcks = blocked ? null : await this.flushBatch(batch, open)
+      if (batchAcks) acks.push(...batchAcks)
+      else waiting.push(batch)
     }
-    if (flushed.length === 0) return
-    const records = flushed.flatMap((result) => result.records)
-    this.options.undo.record({ records, snapshots: flushed.map((result) => result.snapshot), styleOnly: records.every(isInlineStyleRecord) })
-    for (const ack of flushed.flatMap((result) => result.acks)) this.options.send(ack)
+    this.sealed = [...waiting, ...this.sealed]
+    if (acks.length === 0) return
+    for (const ack of acks) this.options.send(ack)
     this.sendUndoState()
   }
 
-  private async flushFile(file: ProjectPath, open: OpenFile): Promise<FlushedFile | null> {
-    const batch = open.pending
-    open.pending = []
+  /** Records the batch as an undo entry and returns its acks; null when the write failed and the batch must wait. */
+  private async flushBatch(batch: ActionBatch, open: OpenFile): Promise<ServerMessage[] | null> {
     const before = open.indexed
-    const outcome = this.plan(before, batch)
+    const outcome = this.plan(before, batch.ops)
     if (!outcome.ok) {
-      this.reject(batch, outcome.reason)
-      return null
+      this.reject(batch.ops, outcome.reason)
+      return []
     }
-    if (!(await this.writeText(file, open, outcome.text))) {
-      open.pending = open.pending.reduce(withOp, batch)
-      return null
-    }
-    open.indexed = this.options.index.indexFile(file, outcome.text, outcome.offsets)
-    return {
-      snapshot: { file, text: before.text, offsets: before.startOffsets(), postWriteHash: open.hash },
+    if (!(await this.writeText(batch.file, open, outcome.text))) return null
+    open.indexed = this.options.index.indexFile(batch.file, outcome.text, outcome.offsets)
+    this.options.undo.record({
+      actionId: batch.actionId,
       records: outcome.records,
-      acks: batch.flatMap((pending, i) => this.acks(open.indexed, pending, outcome.records[i]!, outcome.minted, outcome.warnings)),
-    }
+      snapshots: [{ file: batch.file, text: before.text, offsets: before.startOffsets(), postWriteHash: open.hash }],
+      styleOnly: outcome.records.every(isInlineStyleRecord),
+    })
+    return batch.ops.flatMap((pending, i) => this.acks(open.indexed, pending, outcome.records[i]!, outcome.minted, outcome.warnings))
   }
 
   private plan(indexed: IndexedFile, batch: readonly PendingOp[]): PatchOutcome {
