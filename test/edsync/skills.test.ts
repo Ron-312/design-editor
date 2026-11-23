@@ -93,6 +93,11 @@ describe('the design-pull skill', () => {
     expect(text.indexOf(`${EDSYNC} ingest`)).toBeLessThan(text.indexOf(`${EDSYNC} cache`))
     expect(paragraphsMatching(text, /missing/).some((paragraph) => /repeat|again|until|re-run/i.test(paragraph))).toBe(true)
   })
+
+  it('says the start script builds the UI when dist/ui is missing, so the editor never starts without one', () => {
+    const starting = paragraphsMatching(skillText('design-pull'), /Start the editor/)
+    expect(starting.some((paragraph) => paragraph.includes('dist/ui') && /\bbuilds?\b/.test(paragraph))).toBe(true)
+  })
 })
 
 describe('the design-push skill', () => {

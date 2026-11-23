@@ -23,7 +23,8 @@ export const TOKEN_META = 'design-editor-token'
 
 export interface EditorEndpoints {
   accept(socket: WebSocket): void
-  beginPush(): Promise<string | null>
+  /** `nonce` is the caller's own, so a caller that gave up waiting can still end the push it asked for. */
+  beginPush(nonce?: string): Promise<string | null>
   endPush(nonce: string): Promise<boolean>
 }
 
@@ -164,7 +165,7 @@ class EditorRoutes {
       case HTTP_ROUTES.health:
         return json({ ok: true, pid: process.pid })
       case HTTP_ROUTES.pushBegin:
-        return this.pushBegin()
+        return this.pushBegin(await readBody(request))
       case HTTP_ROUTES.pushEnd:
         return this.pushEnd(await readBody(request))
       default:
@@ -172,8 +173,8 @@ class EditorRoutes {
     }
   }
 
-  private async pushBegin(): Promise<Reply> {
-    const nonce = await this.endpoints.beginPush()
+  private async pushBegin(body: string): Promise<Reply> {
+    const nonce = await this.endpoints.beginPush(nonceOf(body) ?? undefined)
     return nonce === null ? plain(409, 'push.lock is held by another push') : json({ nonce })
   }
 

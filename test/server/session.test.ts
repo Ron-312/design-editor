@@ -10,6 +10,7 @@ import WebSocket from 'ws'
 import { gitOutput } from '../../src/core/git'
 import { acquirePushLock, readPushLock, releasePushLock } from '../../src/core/push-lock'
 import { startEditor } from '../../src/server/main'
+import { EditSession } from '../../src/server/session'
 import {
   HTTP_ROUTES,
   TOKEN_HEADER,
@@ -514,6 +515,32 @@ describe('the push lock endpoints', () => {
     expect((await post(editor, HTTP_ROUTES.pushEnd, { nonce })).status).toBe(200)
     await delay(QUIET_MS)
     expect(diskText(root, HOME)).toBe(flushed)
+  })
+
+  it('takes the lock under the nonce the caller sends, and answers a repeat begin with it', async () => {
+    const { root, editor } = await sessionOn()
+
+    const reply = await post(editor, HTTP_ROUTES.pushBegin, { nonce: 'cli-nonce' })
+    const again = await post(editor, HTTP_ROUTES.pushBegin, { nonce: 'cli-nonce' })
+
+    expect(JSON.parse(reply.body)).toEqual({ nonce: 'cli-nonce' })
+    expect(JSON.parse(again.body)).toEqual({ nonce: 'cli-nonce' })
+    expect((await readPushLock(root))?.nonce).toBe('cli-nonce')
+  })
+
+  it('a push/end under the nonce of a begin still flushing cancels it, so no lock is left behind', async () => {
+    const root = await makeProject()
+    const session = await EditSession.open(root)
+    try {
+      const begun = session.beginPush('given-up')
+      expect(await session.endPush('given-up')).toBe(true)
+
+      expect(await begun).toBeNull()
+      expect(await readPushLock(root)).toBeNull()
+      expect(await session.beginPush()).not.toBeNull()
+    } finally {
+      await session.close()
+    }
   })
 
   it('refuses push/end with a wrong nonce or without the token, and keeps the lock', async () => {

@@ -1,10 +1,11 @@
+import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { parseArgs } from 'node:util'
 import { ensureSupportedGit } from '../core/git'
 import { acquirePushLock, readPushLock, releasePushLock } from '../core/push-lock'
-import { EDITOR_FILES, HTTP_ROUTES, LOOPBACK_HOST, TOKEN_HEADER, type PushBeginResponse, type ServerInfo } from '../shared/protocol'
+import { EDITOR_FILES, HTTP_ROUTES, LOOPBACK_HOST, TOKEN_HEADER, type PushBeginRequest, type PushBeginResponse, type ServerInfo } from '../shared/protocol'
 import { EDSYNC_VERBS, LEASE, type ClassifyOutput, type EdsyncVerb, type FileClassification, type MergeOutcome, type PushLock } from '../shared/sync'
 import { cacheFetched, rewriteBlobs } from './cache'
 import { blockingEntries, classifyProject, missingBlobs } from './classify'
@@ -97,12 +98,15 @@ async function runningEditor(projectDir: string): Promise<ServerInfo | null> {
   }
 }
 
+/** The nonce is ours, so when the editor is too slow to answer, ending the push under it cancels the begin it is still running. */
 async function lockThroughEditor(editor: ServerInfo): Promise<Pick<PushLock, 'nonce' | 'holder'>> {
+  const request: PushBeginRequest = { nonce: randomUUID() }
   let response: Response
   try {
-    response = await callEditor(editor, HTTP_ROUTES.pushBegin, { method: 'POST' }, LEASE.pushBeginTimeoutMs)
+    response = await callEditor(editor, HTTP_ROUTES.pushBegin, { method: 'POST', body: JSON.stringify(request) }, LEASE.pushBeginTimeoutMs)
   } catch (error) {
     if ((error as Error).name !== 'TimeoutError') throw error
+    await unlockThroughEditor(editor, request.nonce!).catch(() => undefined)
     throw new Error(`The editor did not flush its edits within ${LEASE.pushBeginTimeoutMs / 1000} s: retry /design-push.`, { cause: error })
   }
   if (!response.ok) throw new Error(`The editor refused the push lock: ${await response.text()}`)

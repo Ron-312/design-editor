@@ -37,6 +37,21 @@ export async function gitOutput(args: readonly string[], options: { cwd: string 
   return result.stdout
 }
 
+/** A blob's exact bytes: read as a Buffer, since a UTF-8 decode would replace any byte that is not valid UTF-8. */
+export function gitBlobBytes(hash: string, options: { cwd: string }): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      'git',
+      ['cat-file', 'blob', hash],
+      { cwd: options.cwd, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }, encoding: 'buffer', maxBuffer: MAX_OUTPUT_BYTES, windowsHide: true },
+      (error, stdout, stderr) => {
+        if (!error) return resolve(stdout)
+        reject(new Error(`git cat-file blob ${hash} failed (${String(error.code)}): ${stderr.toString('utf8').trim()}`, { cause: error }))
+      },
+    )
+  })
+}
+
 const VERSION_PATTERN = /git version (\d+)\.(\d+)(?:\.(\d+))?/
 
 function upgradeHint(platform: NodeJS.Platform): string {

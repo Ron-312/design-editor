@@ -1,11 +1,13 @@
 import { spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import http from 'node:http'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { acquirePushLock } from '../../src/core/push-lock'
+import { HTTP_ROUTES } from '../../src/shared/protocol'
 import { EDSYNC_VERBS, LEASE, type CacheOutput, type IngestOutput } from '../../src/shared/sync'
 import {
   CSS_BLOB,
@@ -175,6 +177,46 @@ describe('edsync lock', () => {
     expect(nonce).not.toBe('expired-holder')
     expect(space.pushLock()?.nonce).toBe(nonce)
   })
+})
+
+describe('edsync lock through a slow editor', () => {
+  beforeEach(async () => {
+    await space.pull()
+  })
+
+  it('asks /push/begin for its own nonce and ends the push under that nonce when the editor answers too late', async () => {
+    const begun: string[] = []
+    const ended: string[] = []
+    const editor = http.createServer((request, response) => {
+      const chunks: Buffer[] = []
+      request.on('data', (chunk: Buffer) => chunks.push(chunk))
+      request.on('end', () => {
+        const body = Buffer.concat(chunks).toString('utf8')
+        if (request.url === HTTP_ROUTES.health) return response.end(JSON.stringify({ ok: true, pid: 1 }))
+        if (request.url === HTTP_ROUTES.pushEnd) {
+          ended.push((JSON.parse(body) as { nonce: string }).nonce)
+          return response.end(JSON.stringify({ ok: true }))
+        }
+        begun.push((JSON.parse(body) as { nonce: string }).nonce)
+        setTimeout(() => response.end(JSON.stringify({ nonce: begun.at(-1) })), LEASE.pushBeginTimeoutMs + 1_000)
+      })
+    })
+    await new Promise<void>((resolve) => editor.listen(0, '127.0.0.1', resolve))
+    try {
+      writeServerJson((editor.address() as net.AddressInfo).port)
+
+      const run = await space.edsync('lock', '--slug', SLUG)
+
+      expect(run.exitCode).not.toBe(0)
+      expect(run.stderr).toMatch(/retry \/design-push/)
+      expect(begun).toHaveLength(1)
+      expect(begun[0]).toMatch(/^[0-9a-f-]{36}$/)
+      expect(ended).toEqual(begun)
+    } finally {
+      editor.closeAllConnections()
+      await new Promise<void>((resolve) => editor.close(() => resolve()))
+    }
+  }, 20_000)
 })
 
 describe('edsync unlock', () => {

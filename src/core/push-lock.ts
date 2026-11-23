@@ -1,14 +1,19 @@
 import { randomUUID } from 'node:crypto'
-import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, stat, unlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { EDITOR_FILES } from '../shared/protocol'
-import type { PushLock } from '../shared/sync'
+import { LEASE, type PushLock } from '../shared/sync'
 import { atomicWrite, retryWhileLocked } from './atomic-write'
 
 export interface AcquireOptions {
   readonly holder: PushLock['holder']
   readonly leaseMs: number
+  /** The nonce to hold the lock under; a fresh one by default. */
+  readonly nonce?: string
 }
+
+/** A lock is written in the same call that creates it, so one still unparsable a lease later was never going to be. */
+const UNWRITTEN_LOCK_LEASE_MS = LEASE.editorMs
 
 function lockFileOf(projectDir: string): string {
   return path.join(projectDir, ...EDITOR_FILES.pushLock.split('/'))
@@ -54,6 +59,15 @@ async function createExclusively(file: string, lock: PushLock): Promise<boolean>
 async function deleteIfNonce(file: string, nonce: string): Promise<boolean> {
   const text = await readLockText(file)
   if (text === null || parseLock(text)?.nonce !== nonce) return false
+  return deleteLockFile(file)
+}
+
+async function deleteIfStillReads(file: string, text: string): Promise<boolean> {
+  if ((await readLockText(file)) !== text) return false
+  return deleteLockFile(file)
+}
+
+async function deleteLockFile(file: string): Promise<boolean> {
   try {
     await retryWhileLocked(() => unlink(file))
     return true
@@ -63,13 +77,36 @@ async function deleteIfNonce(file: string, nonce: string): Promise<boolean> {
   }
 }
 
+async function ageOf(file: string): Promise<number> {
+  try {
+    return Date.now() - (await stat(file)).mtimeMs
+  } catch (error) {
+    if (isErrorCode(error, 'ENOENT')) return Infinity
+    throw error
+  }
+}
+
+/** Live while its lease runs; one that never became valid JSON lapses a lease after it was last written. */
+async function isLive(file: string, text: string): Promise<boolean> {
+  const held = parseLock(text)
+  if (held) return held.expiresAt > Date.now()
+  return (await ageOf(file)) <= UNWRITTEN_LOCK_LEASE_MS
+}
+
 /** Free means gone or removed here because its lease lapsed; the holder's PID is never consulted (R11 #13). */
 async function freeIfStale(file: string): Promise<boolean> {
   const text = await readLockText(file)
   if (text === null) return true
+  if (await isLive(file, text)) return false
   const held = parseLock(text)
-  if (!held || held.expiresAt > Date.now()) return false
-  return deleteIfNonce(file, held.nonce)
+  return held ? deleteIfNonce(file, held.nonce) : deleteIfStillReads(file, text)
+}
+
+/** True while some holder's lease on push.lock is running. */
+export async function isPushLockLive(projectDir: string): Promise<boolean> {
+  const file = lockFileOf(projectDir)
+  const text = await readLockText(file)
+  return text !== null && (await isLive(file, text))
 }
 
 /** Returns the new lock, or null while another holder's lease is live. */
@@ -78,7 +115,7 @@ export async function acquirePushLock(projectDir: string, options: AcquireOption
   await mkdir(path.dirname(file), { recursive: true })
   const startedAt = Date.now()
   const lock: PushLock = {
-    nonce: randomUUID(),
+    nonce: options.nonce ?? randomUUID(),
     holder: options.holder,
     pid: process.pid,
     startedAt,

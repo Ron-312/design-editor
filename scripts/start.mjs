@@ -1,10 +1,12 @@
 import { register } from 'tsx/esm/api'
 
 register()
-const { parseArgs, startEditor } = await import('../src/server/main.ts')
+const { ensureUiBuilt, parseArgs, startEditor } = await import('../src/server/main.ts')
 
 try {
-  const editor = await startEditor(parseArgs(process.argv.slice(2)))
+  const args = parseArgs(process.argv.slice(2))
+  if (!args.dev && (await ensureUiBuilt())) console.log('built the editor UI into dist/ui')
+  const editor = await startEditor(args)
   const stop = () => void editor.close()
   // SIGTERM runs no handler on Windows, so shutdown rides on SIGINT, SIGBREAK, stdin close and POST /shutdown.
   for (const signal of ['SIGINT', 'SIGBREAK']) process.on(signal, stop)

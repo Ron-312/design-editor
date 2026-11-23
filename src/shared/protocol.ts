@@ -66,6 +66,11 @@ export interface HealthResponse {
   readonly pid: number
 }
 
+/** The CLI picks the nonce, so a `/push/end` sent after it timed out cancels the begin it gave up on. */
+export interface PushBeginRequest {
+  readonly nonce?: string
+}
+
 /** Sent once the debounce is flushed to disk and the canvas is locked. */
 export interface PushBeginResponse {
   readonly nonce: string

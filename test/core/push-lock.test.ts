@@ -1,12 +1,12 @@
 import { spawn, type ChildProcess } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { acquirePushLock, readPushLock, releasePushLock, renewPushLock } from '../../src/core/push-lock'
+import { acquirePushLock, isPushLockLive, readPushLock, releasePushLock, renewPushLock } from '../../src/core/push-lock'
 import { EDITOR_FILES } from '../../src/shared/protocol'
-import type { PushLock } from '../../src/shared/sync'
+import { LEASE, type PushLock } from '../../src/shared/sync'
 
 const REPO_ROOT = fileURLToPath(new URL('../../', import.meta.url))
 const PUSH_LOCK_MODULE = pathToFileURL(path.join(REPO_ROOT, 'src', 'core', 'push-lock.ts')).href
@@ -116,6 +116,31 @@ describe('acquirePushLock', () => {
     const heldBytes = readFileSync(lockFile)
     await expect(acquirePushLock(projectDir, { holder: 'edsync', leaseMs: 60_000 })).resolves.toBeNull()
     expect(readFileSync(lockFile).equals(heldBytes)).toBe(true)
+  })
+
+  it('treats a push.lock that never became valid JSON as held while it is younger than the lease', async () => {
+    mkdirSync(path.dirname(lockFile), { recursive: true })
+    writeFileSync(lockFile, '')
+    await expect(acquirePushLock(projectDir, { holder: 'edsync', leaseMs: 60_000 })).resolves.toBeNull()
+    await expect(isPushLockLive(projectDir)).resolves.toBe(true)
+    expect(readFileSync(lockFile, 'utf8')).toBe('')
+  })
+
+  it('takes over a push.lock that never became valid JSON once its mtime is older than the lease', async () => {
+    mkdirSync(path.dirname(lockFile), { recursive: true })
+    writeFileSync(lockFile, '{"nonce": "half')
+    const longAgo = new Date(Date.now() - LEASE.editorMs - 1_000)
+    utimesSync(lockFile, longAgo, longAgo)
+
+    await expect(isPushLockLive(projectDir)).resolves.toBe(false)
+    const taken = mustAcquire(await acquirePushLock(projectDir, { holder: 'edsync', leaseMs: 60_000 }))
+    expect(lockOnDisk()).toEqual(taken)
+  })
+
+  it('holds the lock under the nonce it is given', async () => {
+    const taken = mustAcquire(await acquirePushLock(projectDir, { holder: 'editor', leaseMs: 60_000, nonce: 'cli-chosen' }))
+    expect(taken.nonce).toBe('cli-chosen')
+    expect(lockOnDisk().nonce).toBe('cli-chosen')
   })
 
   it('takes over a lock once expiresAt has passed, even though its holder is alive', async () => {

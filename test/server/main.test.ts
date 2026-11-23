@@ -8,7 +8,7 @@ import path from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
-import { parseArgs, startEditor } from '../../src/server/main'
+import { ensureUiBuilt, parseArgs, startEditor } from '../../src/server/main'
 import { DEFAULT_EDITOR_PORT, HTTP_ROUTES, TOKEN_HEADER } from '../../src/shared/protocol'
 
 const REPO = fileURLToPath(new URL('../../', import.meta.url))
@@ -197,6 +197,21 @@ describe('parseArgs', () => {
 
   it('takes the editor port from --port', () => {
     expect(parseArgs(['--project', 'projects/test-site', '--port', '6200']).port).toBe(6200)
+  })
+})
+
+describe('ensureUiBuilt', () => {
+  it('builds the UI when the build folder has no index.html, and leaves a built one alone', async () => {
+    const empty = mkdtempSync(path.join(tmpdir(), 'ed no ui '))
+    parents.push(empty)
+    let builds = 0
+    const build = async () => {
+      builds++
+    }
+
+    expect(await ensureUiBuilt(empty, build)).toBe(true)
+    expect(await ensureUiBuilt(uiDir, build)).toBe(false)
+    expect(builds).toBe(1)
   })
 })
 

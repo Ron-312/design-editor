@@ -53,7 +53,9 @@ node tools/edsync.mjs cache --slug <slug> --from "<fetched folder>" --release <t
    still lacks. While `missing` is not empty, read those ids into the scratchpad the same way and
    re-run the cache command on the new folder. Repeat until it prints no missing ids.
 
-4. **Start the editor** on `projects/<slug>` for the user (the npm `start` script), and tell them the pull is
-   done and which project it made or refreshed.
+4. **Start the editor** on `projects/<slug>` for the user (the npm `start` script with `--project projects/<slug>`),
+   and tell them the pull is done and which project it made or refreshed. No build step comes first: on a fresh
+   checkout, where `dist/ui` does not exist yet, the `start` script builds the UI into it (the same build as the
+   npm `build` script, under a minute) before it starts the editor.
 
 Pulling only ever reads the remote. It never publishes.

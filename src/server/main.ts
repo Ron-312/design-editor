@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import dns from 'node:dns'
+import { existsSync } from 'node:fs'
 import { chmod, mkdir, rm } from 'node:fs/promises'
 import type { AddressInfo } from 'node:net'
 import path from 'node:path'
@@ -37,6 +38,18 @@ const UI_SOURCE = path.join(REPO, 'src', 'ui')
 const UI_BUILD = path.join(REPO, 'dist', 'ui')
 
 let probeBundle: Promise<string> | undefined
+
+async function buildUi(): Promise<void> {
+  const { build } = await import('vite')
+  await build({ configFile: path.join(REPO, 'vite.config.ts'), root: UI_SOURCE, build: { outDir: UI_BUILD, emptyOutDir: true }, logLevel: 'warn' })
+}
+
+/** A fresh checkout has no built UI, so `npm start` builds it once instead of serving a 500; true when it built. */
+export async function ensureUiBuilt(uiDir = UI_BUILD, build: () => Promise<void> = buildUi): Promise<boolean> {
+  if (existsSync(path.join(uiDir, 'index.html'))) return false
+  await build()
+  return true
+}
 
 /** Imported lazily: loading vite takes long enough for another process to take the port pair first. */
 function loadProbeBundle(): Promise<string> {

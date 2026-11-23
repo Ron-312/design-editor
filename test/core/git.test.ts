@@ -2,7 +2,7 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { assertSupportedGit, ensureSupportedGit, runGit } from '../../src/core/git'
+import { assertSupportedGit, ensureSupportedGit, gitBlobBytes, gitOutput, runGit } from '../../src/core/git'
 
 let workDir: string
 
@@ -42,6 +42,22 @@ describe('runGit', () => {
     const result = await runGit(['rev-parse', '--verify', 'HEAD'], { cwd: workDir })
     expect(result.exitCode).toBeGreaterThan(0)
     expect(result.stderr).not.toBe('')
+  })
+})
+
+describe('gitBlobBytes', () => {
+  it('returns a blob byte for byte, bytes that are not valid UTF-8 included', async () => {
+    await runGit(['init', '-q'], { cwd: workDir })
+    const bytes = Buffer.from([0xef, 0xbb, 0xbf, 0x43, 0x61, 0x66, 0xe9, 0x0d, 0x0a, 0xff, 0xfe, 0x00, 0x80])
+    writeFileSync(path.join(workDir, 'latin1.dc.html'), bytes)
+    const hash = (await gitOutput(['hash-object', '-w', 'latin1.dc.html'], { cwd: workDir })).trim()
+
+    expect((await gitBlobBytes(hash, { cwd: workDir })).equals(bytes)).toBe(true)
+  })
+
+  it('throws with git stderr for a blob that does not exist', async () => {
+    await runGit(['init', '-q'], { cwd: workDir })
+    await expect(gitBlobBytes('0'.repeat(40), { cwd: workDir })).rejects.toThrow(/cat-file/)
   })
 })
 

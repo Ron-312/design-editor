@@ -1,5 +1,5 @@
 import type WebSocket from 'ws'
-import { acquirePushLock, readPushLock, releasePushLock, renewPushLock } from '../core/push-lock'
+import { acquirePushLock, isPushLockLive, releasePushLock, renewPushLock } from '../core/push-lock'
 import { findStoredPath } from '../shared/paths'
 import type { BoardIndex, ClientMessage, EditorState, ServerMessage } from '../shared/protocol'
 import { LEASE, type PushLock } from '../shared/sync'
@@ -20,19 +20,9 @@ const OWN_WRITE_RECHECK_MS = 250
 
 /** `pending` covers the flush before push.lock exists: ops are already refused, so none can land under the push. */
 type LockState =
-  | { readonly kind: 'pending' }
+  | { readonly kind: 'pending'; readonly nonce: string | undefined; cancelled: boolean }
   | { readonly kind: 'own'; readonly lock: PushLock; readonly renewal: ReturnType<typeof setInterval>; askedStale: boolean }
   | { readonly kind: 'foreign'; readonly poll: ReturnType<typeof setInterval> }
-
-/** A lock caught between its exclusive create and its write does not parse yet, so it counts as live. */
-async function isForeignLockLive(root: string): Promise<boolean> {
-  try {
-    const lock = await readPushLock(root)
-    return lock !== null && lock.expiresAt > Date.now()
-  } catch {
-    return true
-  }
-}
 
 function stylesOf(indexed: IndexedFile): Record<EdId, readonly StyleSource[]> {
   return Object.fromEntries(indexed.ids.flatMap((id) => {
@@ -70,7 +60,7 @@ export class EditSession {
   static async open(root: string): Promise<EditSession> {
     const session = new EditSession(root, await readCanvasLayout(root), await readEditorState(root))
     for (const board of session.layout.order) await session.writer.open(board)
-    if (await isForeignLockLive(root)) session.watchForeignLock()
+    if (await isPushLockLive(root)) session.watchForeignLock()
     return session
   }
 
@@ -108,13 +98,19 @@ export class EditSession {
   }
 
   /** Flushes the debounce to disk, then takes push.lock; null while any lock is held. */
-  async beginPush(): Promise<string | null> {
+  async beginPush(nonce?: string): Promise<string | null> {
+    if (this.lock?.kind === 'own' && nonce !== undefined && this.lock.lock.nonce === nonce) return nonce
     if (this.lock) return null
-    this.lock = { kind: 'pending' }
+    const pending: LockState = { kind: 'pending', nonce, cancelled: false }
+    this.lock = pending
     let lock: PushLock | null = null
     try {
       await this.writer.flush()
-      lock = await acquirePushLock(this.root, { holder: 'editor', leaseMs: LEASE.editorMs })
+      lock = await acquirePushLock(this.root, { holder: 'editor', leaseMs: LEASE.editorMs, ...(nonce === undefined ? {} : { nonce }) })
+      if (lock && pending.cancelled) {
+        await releasePushLock(this.root, lock.nonce)
+        lock = null
+      }
     } finally {
       if (!lock) this.lock = null
     }
@@ -125,6 +121,10 @@ export class EditSession {
   }
 
   async endPush(nonce: string): Promise<boolean> {
+    if (this.lock?.kind === 'pending' && this.lock.nonce === nonce) {
+      this.lock.cancelled = true
+      return true
+    }
     if (this.lock?.kind !== 'own' || this.lock.lock.nonce !== nonce) return false
     await releasePushLock(this.root, nonce)
     await this.resume()
@@ -238,7 +238,7 @@ export class EditSession {
   }
 
   private async resumeOnceForeignLockEnds(): Promise<void> {
-    if (this.lock?.kind !== 'foreign' || (await isForeignLockLive(this.root))) return
+    if (this.lock?.kind !== 'foreign' || (await isPushLockLive(this.root))) return
     await this.resume()
   }
 

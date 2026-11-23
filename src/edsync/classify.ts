@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { readdir, readFile } from 'node:fs/promises'
 import path from 'node:path'
-import { gitOutput } from '../core/git'
+import { gitBlobBytes } from '../core/git'
 import { toProjectPath } from '../shared/paths'
 import { CANVAS_JSON, type ConflictCause, type FileClassification, type StopCause } from '../shared/sync'
 import type { ProjectPath } from '../shared/types'
@@ -78,7 +78,7 @@ function localOnlyChange(file: ProjectPath, sides: Sides): FileOutcome {
 
 async function baseBytes(projectDir: string, hash: string | undefined): Promise<Buffer> {
   if (hash === undefined) return Buffer.alloc(0)
-  return Buffer.from(await gitOutput(['cat-file', 'blob', hash], { cwd: projectDir }), 'utf8')
+  return gitBlobBytes(hash, { cwd: projectDir })
 }
 
 async function bothChanged(projectDir: string, file: ProjectPath, sides: Sides & { local: Buffer; remote: Buffer }): Promise<FileOutcome> {
