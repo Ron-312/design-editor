@@ -10,6 +10,8 @@ export interface ProbeClient {
   readonly read: <R extends ProbeRead>(read: R) => Promise<ReadResultFor<R>>
   readonly previewDecl: (edIds: readonly EdId[], prop: string, value: string | null) => void
   readonly scrollTo: (x: number, y: number) => void
+  /** Re-send on every probe `ready`: a reload drops the stylesheet with the old document. */
+  readonly setEditorStyles: (css: string | null) => void
   /** Returns the session id; only commits for this session and element are delivered. */
   readonly beginTextEdit: (edId: EdId) => string
   readonly endTextEdit: (session: string) => void
@@ -102,6 +104,9 @@ export function createProbeClient(frame: HTMLIFrameElement): ProbeClient {
     },
     scrollTo(x, y) {
       post({ type: 'scrollTo', x, y })
+    },
+    setEditorStyles(css) {
+      post({ type: 'setEditorStyles', css })
     },
     beginTextEdit(edId) {
       const session = `text-${nextSession++}`

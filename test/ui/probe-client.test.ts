@@ -201,6 +201,26 @@ describe('reads', () => {
   })
 })
 
+describe('matches and document-height reads', () => {
+  it('resolves each from the batched result', async () => {
+    const probe = loadAndAttach()
+    const matchesRead: ProbeRead = { kind: 'matches', edId: edId('e1'), selectors: ['.card', '.card:hover'] }
+    const matchesResult: ProbeReadResult = { kind: 'matches', matched: [true, false] }
+    const heightResult: ProbeReadResult = { kind: 'documentHeight', scrollHeight: 1460 }
+
+    const matches = client.read(matchesRead)
+    const height = client.read({ kind: 'documentHeight' })
+
+    await vi.waitFor(() => expect(probe.received.some((message) => message.type === 'read')).toBe(true))
+    const request = probe.received.find((message) => message.type === 'read')!
+    expect(request.reads).toEqual([matchesRead, { kind: 'documentHeight' }])
+    probe.send({ type: 'readResult', id: request.id, results: [matchesResult, heightResult] })
+
+    await expect(matches).resolves.toEqual(matchesResult)
+    await expect(height).resolves.toEqual(heightResult)
+  })
+})
+
 describe('reads that fail', () => {
   const rectsRead: ProbeRead = { kind: 'rects', edId: edId('e1') }
 
@@ -276,6 +296,19 @@ describe('editor-to-probe commands', () => {
       { type: 'previewDecl', edIds: ['e1', 'e2'], prop: 'color', value: 'red' },
       { type: 'previewDecl', edIds: ['e1'], prop: 'color', value: null },
       { type: 'scrollTo', x: 12, y: 340 },
+    ])
+  })
+
+  it('posts the editor-only stylesheet and its removal over the port', async () => {
+    const probe = loadAndAttach()
+
+    client.setEditorStyles('[data-ed-id] { outline: 1px solid #0d99ff }')
+    client.setEditorStyles(null)
+
+    await vi.waitFor(() => expect(probe.received).toHaveLength(2))
+    expect(probe.received).toEqual([
+      { type: 'setEditorStyles', css: '[data-ed-id] { outline: 1px solid #0d99ff }' },
+      { type: 'setEditorStyles', css: null },
     ])
   })
 

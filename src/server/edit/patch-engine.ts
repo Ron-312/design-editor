@@ -3,21 +3,28 @@ import type { DefaultTreeAdapterTypes } from 'parse5'
 import type { EdId, EditOp, EditRecord, EditScope, OpOf, ReadOnlyReason, RuleId, TemplateNode } from '../../shared/types'
 import { dominantEol, lineLocator } from '../source/bytes'
 import type { IndexedFile } from '../source/source-index'
-import { hasHole, indexHelmetRules, parsesAsOneDeclaration, type HelmetRule, type IndexedDeclaration } from '../source/style-index'
+import { hasHole, indexHelmetRules, type HelmetRule, type IndexedDeclaration } from '../source/style-index'
 import { attrValue } from '../source/template-tree'
 import { ParsedSource, shapeMismatch, type Shape } from './shape-check'
-import { planStructuralOp, STRUCTURAL_KINDS, type StructuralContext, type StructuralKind } from './structural-ops'
+import { planInsertHtml, planStructuralOp, STRUCTURAL_KINDS, type StructuralContext, type StructuralKind, type StructuralPlan } from './structural-ops'
 import {
   appendDeclarationSplice,
   attrValueOf,
+  inlineStyleValue,
   lastDeclaration,
   LIVE_VALUE,
   refuse,
   Refusal,
+  removeAttrSplice,
   removeDeclarationSplice,
   replaceValueSplice,
+  requireCssPropertyName,
+  requireSingleDeclaration,
+  rewriteDeclarationsSplice,
   setAttrSplice,
   setTextSplice,
+  type DeclarationListEdits,
+  type NewDeclaration,
   type Splice,
 } from './text-splice'
 
@@ -50,25 +57,7 @@ const READ_ONLY: Readonly<Record<ReadOnlyReason, string>> = {
 
 const INLINE_CHILDREN = 'this text has inline children; edit in source'
 
-const CSS_PROPERTY_NAME = /^(?:--[\w-]+|-?[a-z][a-z0-9-]*)$/i
 const RULE_VALUE_BREAKOUT = /[;{}]|<\/style/i
-
-function requireCssPropertyName(prop: string): void {
-  if (!CSS_PROPERTY_NAME.test(prop)) refuse(`${JSON.stringify(prop)} is not a CSS property name`)
-}
-
-function requireSingleDeclaration(prop: string, value: string): void {
-  if (!parsesAsOneDeclaration(prop, value)) refuse(`${JSON.stringify(value)} is not a single ${prop} value; edit in source`)
-}
-
-/** The value as it can sit inside a style attribute: CSS strings take the other quote, and no character reference may appear, since the style index reads the raw attribute. */
-function inlineStyleValue(value: string, quote: '"' | "'" | ''): string {
-  const attrQuote = quote || '"'
-  const otherQuote = attrQuote === '"' ? "'" : '"'
-  const written = value.includes(otherQuote) ? value : value.replaceAll(attrQuote, otherQuote)
-  if (written.includes(attrQuote) || written.includes('&')) refuse('this value has characters a style attribute cannot hold; edit in source')
-  return written
-}
 
 type DeclarationOp = OpOf<'setDecl'> | OpOf<'removeDecl'>
 
@@ -116,6 +105,53 @@ function shiftedOffset(offset: number, ordered: readonly Splice[]): number | nul
   return offset + delta
 }
 
+/** One inline style or rule as the flush edits it: its declaration ops fold here and are written as one splice. */
+class DeclarationList implements DeclarationListEdits {
+  readonly removed = new Set<IndexedDeclaration>()
+  readonly replaced = new Map<IndexedDeclaration, { readonly value: string; readonly important: boolean | undefined }>()
+  readonly appended: NewDeclaration[] = []
+
+  constructor(
+    private readonly text: string,
+    private readonly declarations: readonly IndexedDeclaration[],
+    /** Where a declaration goes while the list has none; null when it cannot take one. */
+    private readonly emptyAt: number | null,
+    private readonly wrap: (list: string) => string,
+    private readonly escape: (value: string) => string,
+  ) {}
+
+  /** Folds the op in and returns the value the property had. */
+  edit(op: DeclarationOp): string | null {
+    const { prop } = op.payload
+    const existing = lastDeclaration(this.declarations.filter((declaration) => !this.removed.has(declaration)), prop)
+    if (existing?.hasHole) refuse(LIVE_VALUE)
+    if (op.kind === 'removeDecl') {
+      if (!existing) refuse(`there is no ${prop} declaration to remove`)
+      this.removed.add(existing)
+      this.replaced.delete(existing)
+      return existing.value
+    }
+    const { value, important } = op.payload
+    if (existing) this.replaced.set(existing, { value: this.escape(value), important })
+    else this.appended.push({ prop, value: this.escape(value), ...(important ? { important } : {}) })
+    return existing?.value ?? null
+  }
+
+  splice(): Splice {
+    const changes = this.removed.size + this.replaced.size + this.appended.length
+    const splice = changes === 1 ? this.singleSplice() : rewriteDeclarationsSplice(this.text, this.declarations, this.emptyAt, this)
+    return { ...splice, content: this.wrap(splice.content) }
+  }
+
+  private singleSplice(): Splice {
+    const [removed] = this.removed
+    if (removed) return removeDeclarationSplice(this.text, this.declarations, removed)
+    const [replaced] = this.replaced
+    if (replaced) return replaceValueSplice(this.text, replaced[0], replaced[1].value, replaced[1].important)
+    return appendDeclarationSplice(this.text, this.declarations, this.emptyAt, this.appended[0]!)
+  }
+}
+
 /** Untouched ids shift by the deltas before them, ids inside a removed span retire, carried ids land inside their splice. */
 function shiftedOffsets(original: ReadonlyMap<EdId, number>, ordered: readonly Splice[]): Map<EdId, number> {
   const offsets = new Map<EdId, number>()
@@ -143,8 +179,7 @@ class Flush {
   private readonly warnings: string[] = []
   private restructured = false
   private rules: HelmetRule[] | undefined
-  /** Declaration lists this flush starts from nothing, by insertion offset, so a second declaration joins the first. */
-  private readonly startedLists = new Map<number, { readonly splice: number; readonly wrap: (list: string) => string; readonly written: string[] }>()
+  private readonly lists = new Map<string, DeclarationList>()
 
   constructor(
     private readonly indexed: IndexedFile,
@@ -164,13 +199,17 @@ class Flush {
       case 'removeDecl':
         return this.planDeclaration(op)
       case 'setAttr':
+      case 'removeAttr':
         return this.planAttr(op)
       case 'setText':
         return this.planText(op)
+      case 'insertHtml':
+        return this.planInsertHtml(op)
     }
   }
 
   finish(): PatchOutcome {
+    for (const list of this.lists.values()) this.splices.push(list.splice())
     const ordered = orderedSplices(this.splices)
     const text = applySplices(this.text, ordered)
     const offsets = shiftedOffsets(this.indexed.startOffsets(), ordered)
@@ -207,60 +246,36 @@ class Flush {
     if (after !== null) requireSingleDeclaration(prop, after)
     if (rule) {
       if (after !== null && RULE_VALUE_BREAKOUT.test(after)) refuse(`${JSON.stringify(after)} cannot be written into a rule; edit in source`)
-      const before = this.patchDeclarations(op, this.ruleById(rule).declarations, null, (value) => value)
+      const before = this.ruleList(rule).edit(op)
       return this.record(op, prop, before, after, { kind: 'rule', rule })
     }
-    const before = op.target.map((id) => this.patchInlineStyle(op, id))
+    const before = op.target.map((id) => this.inlineList(id).edit(op))
     this.record(op, prop, sharedValue(before), after, this.elementScope(op.target))
   }
 
-  private patchInlineStyle(op: DeclarationOp, id: EdId): string | null {
-    const location = this.indexed.locate(id)!
-    const style = this.indexed.inlineStyle(id)
-    const attr = location.attrs['style']
-    if (!style || !attr) {
-      if (op.kind === 'removeDecl') refuse(`there is no ${op.payload.prop} declaration to remove`)
-      const { prop, value, important } = op.payload
-      const declaration = `${prop}: ${inlineStyleValue(value, '"')}${important ? ' !important' : ''}`
-      const { start } = setAttrSplice(this.text, location.startTag, undefined, 'style', declaration)
-      this.startList(start, (list) => ` style="${list}"`, declaration)
-      return null
-    }
-    const styleValue = attrValueOf(this.text, attr)!
-    const emptyAt = this.text.slice(styleValue.range.start, styleValue.range.end).trim() === '' ? styleValue.range.start : null
-    return this.patchDeclarations(op, style.declarations, emptyAt, (value) => inlineStyleValue(value, styleValue.quote))
+  private declarationList(key: string, create: () => DeclarationList): DeclarationList {
+    const list = this.lists.get(key) ?? create()
+    this.lists.set(key, list)
+    return list
   }
 
-  /** Splices one declaration list and returns the value it had. */
-  private patchDeclarations(
-    op: DeclarationOp,
-    declarations: readonly IndexedDeclaration[],
-    emptyAt: number | null,
-    escape: (value: string) => string,
-  ): string | null {
-    const existing = lastDeclaration(declarations, op.payload.prop)
-    if (existing?.hasHole) refuse(LIVE_VALUE)
-    if (op.kind === 'removeDecl') {
-      if (!existing) refuse(`there is no ${op.payload.prop} declaration to remove`)
-      this.splices.push(removeDeclarationSplice(this.text, declarations, existing))
-      return existing.value
-    }
-    const { prop, value, important } = op.payload
-    if (existing) {
-      this.splices.push(replaceValueSplice(this.text, existing, escape(value), important))
-      return existing.value
-    }
-    const appended = appendDeclarationSplice(this.text, declarations, emptyAt, { prop, value: escape(value), ...(important ? { important } : {}) })
-    if (declarations.length === 0) this.startList(appended.start, (list) => list, appended.content)
-    else this.splices.push(appended)
-    return null
+  private ruleList(rule: RuleId): DeclarationList {
+    return this.declarationList(`rule ${rule}`, () => new DeclarationList(this.text, this.ruleById(rule).declarations, null, (list) => list, (value) => value))
   }
 
-  private startList(at: number, wrap: (list: string) => string, declaration: string): void {
-    const started = this.startedLists.get(at) ?? { splice: this.splices.push({ start: at, end: at, content: '' }) - 1, wrap, written: [] }
-    this.startedLists.set(at, started)
-    started.written.push(declaration)
-    this.splices[started.splice] = { start: at, end: at, content: started.wrap(started.written.join('; ')) }
+  private inlineList(id: EdId): DeclarationList {
+    return this.declarationList(`inline ${id}`, () => {
+      const location = this.indexed.locate(id)!
+      const style = this.indexed.inlineStyle(id)
+      const attr = location.attrs['style']
+      if (!style || !attr) {
+        const { start } = setAttrSplice(this.text, location.startTag, undefined, 'style', '')
+        return new DeclarationList(this.text, [], start, (list) => ` style="${list}"`, (value) => inlineStyleValue(value, '"'))
+      }
+      const styleValue = attrValueOf(this.text, attr)!
+      const emptyAt = this.text.slice(styleValue.range.start, styleValue.range.end).trim() === '' ? styleValue.range.start : null
+      return new DeclarationList(this.text, style.declarations, emptyAt, (list) => list, (value) => inlineStyleValue(value, styleValue.quote))
+    })
   }
 
   private helmetRules(): HelmetRule[] {
@@ -289,15 +304,18 @@ class Flush {
     return refuse("only rules in this file's <helmet><style> can be edited")
   }
 
-  private planAttr(op: OpOf<'setAttr'>): void {
+  private planAttr(op: OpOf<'setAttr'> | OpOf<'removeAttr'>): void {
     const name = op.payload.name.toLowerCase()
+    const after = op.kind === 'setAttr' ? op.payload.value : null
     const before = op.target.map((id) => {
       if (!this.indexed.isAttrEditable(id, name)) refuse(LIVE_VALUE)
       const location = this.indexed.locate(id)!
-      this.splices.push(setAttrSplice(this.text, location.startTag, location.attrs[name], name, op.payload.value))
+      const attr = location.attrs[name]
+      if (after !== null) this.splices.push(setAttrSplice(this.text, location.startTag, attr, name, after))
+      else if (attr) this.splices.push(removeAttrSplice(this.text, attr))
       return attrValue(this.source.element(id), name) ?? null
     })
-    this.record(op, name, sharedValue(before), op.payload.value, this.elementScope(op.target))
+    this.record(op, name, sharedValue(before), after, this.elementScope(op.target))
   }
 
   private planText(op: OpOf<'setText'>): void {
@@ -320,12 +338,23 @@ class Flush {
       if (id === this.indexed.tree?.edId) refuse(READ_ONLY['artboard-root'])
     }
     if (op.kind === 'moveNode') this.requireRow(op.payload.parent)
-    const plan = planStructuralOp(this.structuralContext(), op)
+    this.restructure(planStructuralOp(this.structuralContext(), op))
+    this.record(op, null, null, op.kind === 'wrapNode' ? op.payload.tag : null, this.elementScope(op.target))
+  }
+
+  /** The artboard root is the default paste parent, so unlike the other structural ops this one takes it. */
+  private planInsertHtml(op: OpOf<'insertHtml'>): void {
+    const parent = op.target[0]!
+    this.requireRow(parent)
+    this.restructure(planInsertHtml(this.structuralContext(), parent, op.payload))
+    this.record(op, null, null, null, this.elementScope(op.target))
+  }
+
+  private restructure(plan: StructuralPlan): void {
     this.splices.push(...plan.splices)
     this.minted.push(...plan.minted)
     this.warnings.push(...plan.warnings)
     this.restructured = true
-    this.record(op, null, null, op.kind === 'wrapNode' ? op.payload.tag : null, this.elementScope(op.target))
   }
 
   private structuralContext(): StructuralContext {
@@ -348,10 +377,10 @@ export class PatchEngine {
     const flush = new Flush(indexed, this.options)
     try {
       for (const op of ops) flush.plan(op)
+      return flush.finish()
     } catch (error) {
       if (error instanceof Refusal) return { ok: false, reason: error.message }
       throw error
     }
-    return flush.finish()
   }
 }

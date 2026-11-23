@@ -4,10 +4,12 @@ import { isVoidElement, nestingViolation } from '../../shared/content-model'
 import type { EdId, OpOf, SourceRange } from '../../shared/types'
 import type { Eol } from '../source/bytes'
 import { attrValue, elementChildren } from '../source/template-tree'
+import { pastedFragment } from './insert-html'
 import type { ParsedSource, Shape } from './shape-check'
-import { refuse, type Splice } from './text-splice'
+import { newStyleAttr, refuse, type Splice } from './text-splice'
 
 type Element = DefaultTreeAdapterTypes.Element
+type ParentNode = DefaultTreeAdapterTypes.ParentNode
 
 export type StructuralKind = 'moveNode' | 'wrapNode' | 'unwrapNode' | 'duplicateNode' | 'deleteNode'
 export const STRUCTURAL_KINDS: ReadonlySet<string> = new Set<StructuralKind>(['moveNode', 'wrapNode', 'unwrapNode', 'duplicateNode', 'deleteNode'])
@@ -139,7 +141,7 @@ function siblingRun(shape: Shape, targets: readonly EdId[]): { parent: EdId; run
   return { parent, run: indexes.map((index) => siblings[index]!) }
 }
 
-function wrapNode(context: StructuralContext, targets: readonly EdId[], tag: string): StructuralPlan {
+function wrapNode(context: StructuralContext, targets: readonly EdId[], { tag, style = [] }: OpOf<'wrapNode'>['payload']): StructuralPlan {
   const { text, source, shape, eol } = context
   if (!TAG_NAME.test(tag)) refuse(`<${tag}> is not a tag name`)
   refuseVoidParent(tag)
@@ -150,17 +152,18 @@ function wrapNode(context: StructuralContext, targets: readonly EdId[], tag: str
   for (const id of run) refuseNesting([...ancestors, tag], source.element(id).tagName)
   refuseNesting(ancestors, tag)
 
+  const startTag = `<${tag}${newStyleAttr(style)}>`
   const wrapper = context.mintId()
   const indent = indentBefore(text, rangeOf(first).start)
   const lineEnd = lineEndAfter(text, rangeOf(last).end)
   const splices: Splice[] =
     indent !== null && lineEnd !== null
       ? [
-          { start: lineStartOf(text, rangeOf(first).start), end: lineStartOf(text, rangeOf(first).start), content: `${indent}<${tag}>${eol}`, carried: [{ id: wrapper, at: indent.length }] },
+          { start: lineStartOf(text, rangeOf(first).start), end: lineStartOf(text, rangeOf(first).start), content: `${indent}${startTag}${eol}`, carried: [{ id: wrapper, at: indent.length }] },
           { start: lineEnd, end: lineEnd, content: `${indent}</${tag}>${eol}` },
         ]
       : [
-          { start: rangeOf(first).start, end: rangeOf(first).start, content: `<${tag}>`, carried: [{ id: wrapper, at: 0 }] },
+          { start: rangeOf(first).start, end: rangeOf(first).start, content: startTag, carried: [{ id: wrapper, at: 0 }] },
           { start: rangeOf(last).end, end: rangeOf(last).end, content: `</${tag}>` },
         ]
 
@@ -241,6 +244,39 @@ function duplicateNode(context: StructuralContext, target: EdId): StructuralPlan
   return { splices: [{ start: at, end: at, content: lines ? `${indent}${copy}${eol}` : copy, carried }], minted, warnings: [] }
 }
 
+/** Adds the pasted elements to the shape under `parent`, looking through the ones the parser made up, and returns the top-level ids. */
+function attachPasted(shape: Shape, node: ParentNode, parent: EdId, ids: ReadonlyMap<Element, EdId>): EdId[] {
+  return elementChildren(node).flatMap((child) => {
+    const id = ids.get(child)
+    if (!id) return attachPasted(shape, child, parent, ids)
+    shape.set(id, { tag: child.tagName, parent, children: [] })
+    shape.get(id)!.children = attachPasted(shape, child, id, ids)
+    return [id]
+  })
+}
+
+/** Splices the cleaned fragment before `before` (or the parent's end tag) on its own line when that sits alone, indented like it. */
+export function planInsertHtml(context: StructuralContext, parent: EdId, { before, html }: OpOf<'insertHtml'>['payload']): StructuralPlan {
+  const { text, source, shape, eol } = context
+  const parentElement = source.element(parent)
+  refuseVoidParent(parentElement.tagName)
+  if (before !== null && shape.get(before)?.parent !== parent) refuse('the paste position is not inside that layer')
+  const fragment = pastedFragment(html, parentElement, eol, () => `${context.mintId()}-`)
+  const ids = new Map(fragment.elements.map((element) => [element, context.mintId()]))
+
+  const parentLocation = parentElement.sourceCodeLocation!
+  const point = before === null ? (parentLocation.endTag?.startOffset ?? parentLocation.endOffset) : rangeOf(source.element(before)).start
+  const indent = indentBefore(text, point)
+  const at = indent === null ? point : lineStartOf(text, point)
+  const content = indent === null ? fragment.html : `${indent}${fragment.html}${eol}`
+  const carried = [...ids].map(([element, id]) => ({ id, at: (indent?.length ?? 0) + element.sourceCodeLocation!.startOffset }))
+
+  const pasted = attachPasted(shape, fragment.root, parent, ids)
+  const siblings = shape.get(parent)!.children
+  siblings.splice(before === null ? siblings.length : siblings.indexOf(before), 0, ...pasted)
+  return { splices: [{ start: at, end: at, content, carried }], minted: [...ids.values()], warnings: [] }
+}
+
 function deleteNode(context: StructuralContext, target: EdId): StructuralPlan {
   const { text, source, shape } = context
   detach(shape, target)
@@ -261,7 +297,7 @@ export function planStructuralOp(context: StructuralContext, op: OpOf<Structural
     case 'moveNode':
       return merged(op.target.map((id) => moveNode(context, id, op.payload)))
     case 'wrapNode':
-      return wrapNode(context, op.target, op.payload.tag)
+      return wrapNode(context, op.target, op.payload)
     case 'unwrapNode':
       return merged(op.target.map((id) => unwrapNode(context, id)))
     case 'duplicateNode':

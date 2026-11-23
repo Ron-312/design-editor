@@ -37,6 +37,10 @@ const probes = vi.hoisted(() => {
       }
       case 'supports':
         return { kind: 'supports', supported: true }
+      case 'matches':
+        return { kind: 'matches', matched: read.selectors.map(() => false) }
+      case 'documentHeight':
+        return { kind: 'documentHeight', scrollHeight: 0 }
     }
   }
 
@@ -139,7 +143,7 @@ const at = {
 }
 
 function indexFor(board: ProjectPath, tree: TemplateNode): BoardIndex {
-  return { board, frameSrc: `/project/secret/${board}`, tree, locations: {}, styles: {} }
+  return { board, frameSrc: `/project/secret/${board}`, tree, text: '', locations: {}, styles: {}, rules: [] }
 }
 
 function editorStateWith(locked: readonly EdId[] = []): EditorState {

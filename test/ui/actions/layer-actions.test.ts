@@ -85,6 +85,10 @@ function answer(read: ProbeRead): ProbeReadResult {
       return { kind: 'snapRects', self: { x: 0, y: 0, width: 240, height: 40 }, parent: null, siblings: [] }
     case 'supports':
       return { kind: 'supports', supported: true }
+    case 'matches':
+      return { kind: 'matches', matched: read.selectors.map(() => false) }
+    case 'documentHeight':
+      return { kind: 'documentHeight', scrollHeight: 0 }
   }
 }
 
@@ -123,7 +127,7 @@ type Modifiers = Partial<Pick<KeyboardEvent, 'metaKey' | 'ctrlKey' | 'shiftKey' 
 function editor(selection: readonly string[], platform: Platform = 'windows'): Editor {
   const store = createEditorStore()
   store.setBoard(board)
-  const index: BoardIndex = { board, frameSrc: `/project/secret/${board}`, tree, locations: {}, styles: styles as BoardIndex['styles'] }
+  const index: BoardIndex = { board, frameSrc: `/project/secret/${board}`, tree, text: '', locations: {}, styles: styles as BoardIndex['styles'], rules: [] }
   store.setIndex(index)
   store.select(selection.map(edId))
   const ctx = contextFor(store)

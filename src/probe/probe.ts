@@ -12,6 +12,7 @@ import type { EdId } from '../shared/types'
 type ReadRequest = Extract<EditorToProbe, { type: 'read' }>
 type PreviewDecl = Extract<EditorToProbe, { type: 'previewDecl' }>
 type HitTest = Extract<ProbeRead, { kind: 'hitTest' }>
+type Matches = Extract<ProbeRead, { kind: 'matches' }>
 
 interface TextEdit {
   readonly session: string
@@ -27,6 +28,8 @@ const ID_ATTR = 'data-ed-id'
 const TEMPLATE_ROOT = 'x-dc'
 const GOOGLE_FONTS_CSS2 = 'link[rel~="stylesheet"][href^="https://fonts.googleapis.com/css2"]'
 const EMPTY_RECT: Rect = { x: 0, y: 0, width: 0, height: 0 }
+// `matches()` never sees a state as active and throws on a pseudo-element, so both are matched as if absent.
+const STATES_AND_PSEUDO_ELEMENTS = /::?(?:before|after|placeholder)(?![\w-])|:(?:hover|focus-visible|focus|active)(?![\w-])/g
 
 // Taken before any project script runs, so a script that patches them later never sees the port.
 const listen = EventTarget.prototype.addEventListener
@@ -38,6 +41,7 @@ const editorWindow = window.parent
 
 let port: MessagePort | null = null
 let textEdit: TextEdit | null = null
+let editorStyles: HTMLStyleElement | null = null
 const pendingReads: ReadRequest[] = []
 const failedFamilies = new Set<string>()
 const unreportedFamilies: string[] = []
@@ -94,6 +98,22 @@ function snapRects(edId: EdId): Extract<ProbeReadResult, { kind: 'snapRects' }> 
   return { kind: 'snapRects', self: rectOf(self), parent: parent ? rectOf(parent) : null, siblings }
 }
 
+function matchesSafely(element: Element, selector: string): boolean {
+  try {
+    return element.matches(selector)
+  } catch {
+    return false
+  }
+}
+
+function matchedSelectors({ edId, selectors }: Matches): boolean[] {
+  const elements = rendered(edId)
+  return selectors.map((selector) => {
+    const stripped = selector.replace(STATES_AND_PSEUDO_ELEMENTS, '')
+    return elements.some((element) => matchesSafely(element, stripped))
+  })
+}
+
 function answer(read: ProbeRead): ProbeReadResult {
   switch (read.kind) {
     case 'rects':
@@ -106,6 +126,10 @@ function answer(read: ProbeRead): ProbeReadResult {
       return snapRects(read.edId)
     case 'supports':
       return { kind: 'supports', supported: CSS.supports(read.condition) }
+    case 'matches':
+      return { kind: 'matches', matched: matchedSelectors(read) }
+    case 'documentHeight':
+      return { kind: 'documentHeight', scrollHeight: document.documentElement.scrollHeight }
   }
 }
 
@@ -123,6 +147,17 @@ function previewDecl({ edIds, prop, value }: PreviewDecl): void {
     if (value === null) element.style.removeProperty(prop)
     else element.style.setProperty(prop, value)
   }
+}
+
+function setEditorStyles(css: string | null): void {
+  if (css === null) {
+    editorStyles?.remove()
+    editorStyles = null
+    return
+  }
+  editorStyles ??= document.createElement('style')
+  editorStyles.textContent = css
+  if (!editorStyles.isConnected) document.head.append(editorStyles)
 }
 
 function finishTextEdit(edit: TextEdit): void {
@@ -199,6 +234,8 @@ function onEditorMessage(message: EditorToProbe): void {
       return endTextEdit(message.session)
     case 'scrollTo':
       return window.scrollTo(message.x, message.y)
+    case 'setEditorStyles':
+      return setEditorStyles(message.css)
   }
 }
 

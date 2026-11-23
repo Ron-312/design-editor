@@ -15,7 +15,7 @@ function node(id: string, children: TemplateNode[] = []): TemplateNode {
 const tree = node('root', [node('card', [node('title'), node('button', [node('label')])]), node('aside')])
 
 function indexFor(board: ProjectPath): BoardIndex {
-  return { board, frameSrc: `/project/secret/${board}`, tree, locations: {}, styles: {} }
+  return { board, frameSrc: `/project/secret/${board}`, tree, text: '', locations: {}, styles: {}, rules: [] }
 }
 
 function record(after: string): EditRecord {

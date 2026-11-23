@@ -28,6 +28,9 @@ describe('parseProbeToEditor', () => {
         { kind: 'snapRects', self: RECT, parent: RECT, siblings: [RECT] },
         { kind: 'snapRects', self: RECT, parent: null, siblings: [] },
         { kind: 'supports', supported: false },
+        { kind: 'matches', matched: [true, false] },
+        { kind: 'matches', matched: [] },
+        { kind: 'documentHeight', scrollHeight: 1460.5 },
       ],
     },
   ])('accepts a well-formed $type message as is', (message) => {
@@ -53,6 +56,12 @@ describe('parseProbeToEditor', () => {
     ['snap rects with a bad parent', readResult({ kind: 'snapRects', self: RECT, parent: {}, siblings: [] })],
     ['snap rects with bad siblings', readResult({ kind: 'snapRects', self: RECT, parent: null, siblings: [null] })],
     ['supports that is not a boolean', readResult({ kind: 'supports', supported: 'yes' })],
+    ['matches that are not booleans', readResult({ kind: 'matches', matched: [true, 'yes'] })],
+    ['matches that are not a list', readResult({ kind: 'matches', matched: true })],
+    ['matches with no list', readResult({ kind: 'matches' })],
+    ['a document height that is a string', readResult({ kind: 'documentHeight', scrollHeight: '900' })],
+    ['a document height that is not finite', readResult({ kind: 'documentHeight', scrollHeight: Infinity })],
+    ['a document height with no value', readResult({ kind: 'documentHeight' })],
   ])('rejects %s', (_case, payload) => {
     expect(parseProbeToEditor(payload)).toBeNull()
   })

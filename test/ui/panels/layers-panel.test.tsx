@@ -62,6 +62,10 @@ function answer(read: ProbeRead): ProbeReadResult {
       return { kind: 'snapRects', self: box, parent: null, siblings: [] }
     case 'supports':
       return { kind: 'supports', supported: true }
+    case 'matches':
+      return { kind: 'matches', matched: read.selectors.map(() => false) }
+    case 'documentHeight':
+      return { kind: 'documentHeight', scrollHeight: 0 }
   }
 }
 
@@ -120,7 +124,7 @@ interface Mounted {
 async function mountPanel(editorState: EditorState = editorStateWith(), readError: Error | null = null): Promise<Mounted> {
   const store = createEditorStore()
   store.setBoard(home)
-  const index: BoardIndex = { board: home, frameSrc: `/project/secret/${home}`, tree, locations: {}, styles: {} }
+  const index: BoardIndex = { board: home, frameSrc: `/project/secret/${home}`, tree, text: '', locations: {}, styles: {}, rules: [] }
   store.setIndex(index)
   const ctx = contextFor(store, editorState)
   if (readError) ctx.read = () => Promise.reject(readError)

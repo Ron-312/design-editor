@@ -23,7 +23,7 @@ import {
   type ServerMessage,
 } from '../../src/shared/protocol'
 import { LEASE } from '../../src/shared/sync'
-import type { EdId, EditOp, EditPayloads, ProjectPath } from '../../src/shared/types'
+import type { EdId, EditOp, EditPayloads, ProjectPath, RuleId, SourceRange } from '../../src/shared/types'
 import { cacheFixtureAssets } from '../pulled-fixture'
 
 type MessageOf<T extends ServerMessage['type']> = Extract<ServerMessage, { type: T }>
@@ -441,6 +441,87 @@ describe('the edit session over the ws', () => {
   })
 })
 
+describe('the board index carries its source text and helmet rules', () => {
+  const H1_ELEMENT = '<h1 style="margin: 0; font-size: 48px">Studio Weekly</h1>'
+  const PADDED_PAGE_RULE = '.page { position: relative; min-height: 900px; padding: 40px; }'
+  const HOME_RULES = [
+    { selector: 'body', media: null, source: 'body { margin: 0; font-family: Inter, sans-serif; background: #fff7ed; }' },
+    { selector: '.page', media: null, source: '.page { position: relative; min-height: 900px; padding: 48px; }' },
+    { selector: '.page', media: '(max-width: 720px)', source: '.page { padding: 24px; }' },
+  ]
+
+  function sliceOf(text: string, range: SourceRange): string {
+    return text.slice(range.start, range.end)
+  }
+
+  function rulesOf(index: BoardIndex) {
+    return index.rules.map((rule) => ({ selector: rule.selector, media: rule.media, source: sliceOf(index.text, rule.range) }))
+  }
+
+  async function nextHomeIndex(client: Client, after: number): Promise<BoardIndex> {
+    return (await client.waitFor('index', (message) => message.index.board === HOME, after)).index
+  }
+
+  it('sends the board source exactly as indexed, and its element and inline style ranges slice it', async () => {
+    const { home, h1 } = await sessionOn()
+
+    expect(home.text).toBe(HOME_TEXT)
+    expect(sliceOf(home.text, home.locations[h1]!.element)).toBe(H1_ELEMENT)
+    expect(sliceOf(home.text, home.styles[h1]![0]!.range)).toBe('style="margin: 0; font-size: 48px"')
+  })
+
+  it('keeps the BOM and CRLF endings in the text, so the same offsets still slice it', async () => {
+    const crlfWithBom = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(HOME_TEXT.replace(/\n/g, '\r\n'))])
+    const { home, h1 } = await sessionOn(crlfWithBom)
+
+    expect(home.text).toBe(`\ufeff${HOME_TEXT.replace(/\n/g, '\r\n')}`)
+    expect(sliceOf(home.text, home.locations[h1]!.element)).toBe(H1_ELEMENT)
+    expect(rulesOf(home)).toEqual(HOME_RULES)
+  })
+
+  it('lists the <helmet><style> rules with selector, media and a range over the whole rule, and keeps styles inline-only', async () => {
+    const { home } = await sessionOn()
+
+    expect(rulesOf(home)).toEqual(HOME_RULES)
+    expect(home.rules.map((rule) => rule.file)).toEqual([HOME, HOME, HOME])
+    expect(new Set(Object.values(home.styles).flat().map((style) => style.target))).toEqual(new Set(['inline']))
+  })
+
+  it('re-sends text and rules that match the file after a flush, an undo, a redo and an outside edit', async () => {
+    const { root, client, home, h1 } = await sessionOn()
+    const main = idOf(home, HOME_TEXT, /^<main\b/)
+    const pageRule = home.rules.find((rule) => rule.selector === '.page' && rule.media === null)!
+    const padded = replaceOnce(HOME_TEXT, 'padding: 48px', 'padding: 40px')
+
+    let at = client.messages.length
+    await acked(client, op('setDecl', [main], { prop: 'padding', value: '40px', rule: pageRule.target as RuleId }))
+    const flushed = await nextHomeIndex(client, at)
+    expect(flushed.text).toBe(padded)
+    expect(rulesOf(flushed)[1]?.source).toBe(PADDED_PAGE_RULE)
+    expect(sliceOf(flushed.text, flushed.locations[h1]!.element)).toBe(H1_ELEMENT)
+
+    at = client.messages.length
+    client.send({ type: 'undo' })
+    const undone = await nextHomeIndex(client, at)
+    expect(undone.text).toBe(HOME_TEXT)
+    expect(rulesOf(undone)).toEqual(HOME_RULES)
+
+    at = client.messages.length
+    client.send({ type: 'redo' })
+    const redone = await nextHomeIndex(client, at)
+    expect(redone.text).toBe(padded)
+    expect(rulesOf(redone)[1]?.source).toBe(PADDED_PAGE_RULE)
+
+    const outside = replaceOnce(padded, OUTSIDE_EDIT.from, OUTSIDE_EDIT.to)
+    at = client.messages.length
+    writeOutside(root, HOME, outside)
+    const reconciled = await nextHomeIndex(client, at)
+    expect(reconciled.text).toBe(outside)
+    expect(sliceOf(reconciled.text, reconciled.locations[h1]!.element)).toBe(H1_ELEMENT)
+    expect(rulesOf(reconciled)[1]?.source).toBe(PADDED_PAGE_RULE)
+  })
+})
+
 describe('outside edits seen by the watcher', () => {
   it('reconciles the file, re-sends the board index with matching ids kept, and drops that file’s undo', async () => {
     const { root, client, h1 } = await sessionOn()
@@ -790,6 +871,21 @@ describe('editor state and revert through the session', () => {
     expect((await (await connect(editor)).waitFor('hello')).editorState).toEqual(state)
     const served = await get(editor.projectPort, home.frameSrc)
     expect(served.body).toMatch(new RegExp(`\\[data-ed-id="${h1}"\\][^{]*\\{display:\\s*none`))
+  })
+
+  it('hands the next client a board view with its preview width as saved', async () => {
+    const { editor, client } = await sessionOn()
+    const state: EditorState = {
+      hidden: [],
+      locked: [],
+      collapsed: [],
+      boards: { [HOME]: { zoom: 1, panX: 0, panY: 0, selection: [], previewWidth: 375 } },
+    }
+
+    client.send({ type: 'saveEditorState', state })
+    await delay(QUIET_MS)
+
+    expect((await (await connect(editor)).waitFor('hello')).editorState).toEqual(state)
   })
 
   it('brings hide, collapse, zoom and selection back onto the same elements after a restart, whose ids differ', async () => {

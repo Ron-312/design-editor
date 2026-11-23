@@ -90,6 +90,10 @@ function answer(probe: Probe, read: ProbeRead): ProbeReadResult {
       return { kind: 'snapRects', self: box, parent: null, siblings: [] }
     case 'supports':
       return { kind: 'supports', supported: read.condition.includes('text-box') ? probe.textBoxSupported : true }
+    case 'matches':
+      return { kind: 'matches', matched: read.selectors.map(() => false) }
+    case 'documentHeight':
+      return { kind: 'documentHeight', scrollHeight: 0 }
   }
 }
 
@@ -162,6 +166,8 @@ async function mountPanel(options: MountOptions = {}): Promise<Mounted> {
     board,
     frameSrc: `/project/secret/${board}`,
     tree,
+    text: '',
+    rules: [],
     locations: {},
     styles: (options.styles ?? defaultStyles) as BoardIndex['styles'],
   }

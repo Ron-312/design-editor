@@ -43,7 +43,8 @@ export class IndexedFile {
     readonly text: string,
     private readonly elements: ReadonlyMap<EdId, IndexedElement>,
     readonly tree: TemplateNode | null,
-    private readonly rules: readonly HelmetRule[],
+    /** The `<helmet><style>` rules in source order. */
+    readonly rules: readonly HelmetRule[],
   ) {
     this.ids = [...elements.keys()]
     this.lineOf = lineLocator(text)

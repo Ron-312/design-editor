@@ -57,6 +57,10 @@ function answer(scene: Scene, read: ProbeRead): ProbeReadResult {
     }
     case 'supports':
       return { kind: 'supports', supported: true }
+    case 'matches':
+      return { kind: 'matches', matched: read.selectors.map(() => false) }
+    case 'documentHeight':
+      return { kind: 'documentHeight', scrollHeight: 0 }
   }
 }
 
@@ -79,7 +83,7 @@ export function fakeContext(scene: Scene, options: ContextOptions = {}) {
   let selection = (options.selection ?? []).map(edId)
   let readOnly = options.readOnly ?? false
   const viewport = options.viewport ?? { zoom: 1, panX: 0, panY: 0 }
-  const index: BoardIndex = { board, frameSrc: `/project/s/${board}`, tree: scene.tree, locations: {}, styles: scene.styles ?? {} }
+  const index: BoardIndex = { board, frameSrc: `/project/s/${board}`, tree: scene.tree, text: '', locations: {}, styles: scene.styles ?? {}, rules: [] }
 
   const ctx = {
     index: vi.fn(() => index),

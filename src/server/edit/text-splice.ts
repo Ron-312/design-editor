@@ -1,7 +1,7 @@
 import { parseFragment, type DefaultTreeAdapterTypes } from 'parse5'
-import type { EdId, SourceRange } from '../../shared/types'
+import type { EdId, InlineDeclaration, SourceRange } from '../../shared/types'
 import type { Eol } from '../source/bytes'
-import type { IndexedDeclaration } from '../source/style-index'
+import { parsesAsOneDeclaration, type IndexedDeclaration } from '../source/style-index'
 
 type TextNode = DefaultTreeAdapterTypes.TextNode
 
@@ -58,6 +58,13 @@ function attrInsertionPoint(text: string, startTag: SourceRange): number {
 
 const HTML_ATTRIBUTE_NAME = /^[^\s"'<>/=\p{Cc}]+$/u
 
+/** Deletes the attribute with the whitespace before it, so removing what `setAttrSplice` added restores the bytes. */
+export function removeAttrSplice(text: string, attr: SourceRange): Splice {
+  let start = attr.start
+  while (/\s/.test(text[start - 1] ?? '')) start -= 1
+  return { start, end: attr.end, content: '' }
+}
+
 export function setAttrSplice(text: string, startTag: SourceRange, attr: SourceRange | undefined, name: string, value: string): Splice {
   if (!HTML_ATTRIBUTE_NAME.test(name)) refuse(`${JSON.stringify(name)} is not an attribute name`)
   if (!attr) {
@@ -68,6 +75,36 @@ export function setAttrSplice(text: string, startTag: SourceRange, attr: SourceR
   if (!current) return { start: attr.end, end: attr.end, content: `="${escapeAttr(value, '"')}"` }
   const content = current.quote === '' ? `"${escapeAttr(value, '"')}"` : escapeAttr(value, current.quote)
   return { start: current.range.start, end: current.range.end, content }
+}
+
+const CSS_PROPERTY_NAME = /^(?:--[\w-]+|-?[a-z][a-z0-9-]*)$/i
+
+export function requireCssPropertyName(prop: string): void {
+  if (!CSS_PROPERTY_NAME.test(prop)) refuse(`${JSON.stringify(prop)} is not a CSS property name`)
+}
+
+export function requireSingleDeclaration(prop: string, value: string): void {
+  if (!parsesAsOneDeclaration(prop, value)) refuse(`${JSON.stringify(value)} is not a single ${prop} value; edit in source`)
+}
+
+/** The value as it can sit inside a style attribute: CSS strings take the other quote, and no character reference may appear, since the style index reads the raw attribute. */
+export function inlineStyleValue(value: string, quote: Quote): string {
+  const attrQuote = quote || '"'
+  const otherQuote = attrQuote === '"' ? "'" : '"'
+  const written = value.includes(otherQuote) ? value : value.replaceAll(attrQuote, otherQuote)
+  if (written.includes(attrQuote) || written.includes('&')) refuse('this value has characters a style attribute cannot hold; edit in source')
+  return written
+}
+
+/** ` style="…"` holding the declarations, for a new start tag; empty when there are none. */
+export function newStyleAttr(declarations: readonly InlineDeclaration[]): string {
+  if (declarations.length === 0) return ''
+  const written = declarations.map(({ prop, value }) => {
+    requireCssPropertyName(prop)
+    requireSingleDeclaration(prop, value)
+    return `${prop}: ${inlineStyleValue(value, '"')}`
+  })
+  return ` style="${written.join('; ')}"`
 }
 
 export function lastDeclaration(declarations: readonly IndexedDeclaration[], prop: string): IndexedDeclaration | undefined {
@@ -94,18 +131,30 @@ function separatorsOf(text: string, declarations: readonly IndexedDeclaration[])
   return { gap: colon.endsWith(' ') ? ' ' : '', colon }
 }
 
+export interface NewDeclaration {
+  readonly prop: string
+  readonly value: string
+  readonly important?: boolean
+}
+
+function writtenDeclaration(declaration: NewDeclaration, colon: string): string {
+  return `${declaration.prop}${colon}${declaration.value}${declaration.important ? ' !important' : ''}`
+}
+
+const NO_DECLARATIONS = 'there are no declarations here to add to; edit in source'
+
 /** Appends after the last declaration, keeping a trailing `;` last; `emptyAt` is where an empty list starts. */
 export function appendDeclarationSplice(
   text: string,
   declarations: readonly IndexedDeclaration[],
   emptyAt: number | null,
-  declaration: { prop: string; value: string; important?: boolean },
+  declaration: NewDeclaration,
 ): Splice {
   const last = declarations.at(-1)
   const { gap, colon } = separatorsOf(text, declarations)
-  const written = `${declaration.prop}${colon}${declaration.value}${declaration.important ? ' !important' : ''}`
+  const written = writtenDeclaration(declaration, colon)
   if (!last) {
-    if (emptyAt === null) refuse('there are no declarations here to add to; edit in source')
+    if (emptyAt === null) refuse(NO_DECLARATIONS)
     return { start: emptyAt, end: emptyAt, content: written }
   }
   const trailing = /^\s*;/.exec(text.slice(last.range.end))
@@ -123,6 +172,53 @@ export function removeDeclarationSplice(text: string, declarations: readonly Ind
   if (previous) return { start: previous.range.end, end: declaration.range.end, content: '' }
   const trailing = /^\s*;/.exec(text.slice(declaration.range.end))?.[0] ?? ''
   return { start: declaration.range.start, end: declaration.range.end + trailing.length, content: '' }
+}
+
+export interface DeclarationListEdits {
+  readonly removed: ReadonlySet<IndexedDeclaration>
+  readonly replaced: ReadonlyMap<IndexedDeclaration, { readonly value: string; readonly important: boolean | undefined }>
+  readonly appended: readonly NewDeclaration[]
+}
+
+function editedDeclaration(text: string, declaration: IndexedDeclaration, edits: DeclarationListEdits): string {
+  const replacement = edits.replaced.get(declaration)
+  const raw = text.slice(declaration.range.start, declaration.range.end)
+  if (!replacement) return raw
+  const value = replaceValueSplice(text, declaration, replacement.value, replacement.important)
+  const at = declaration.range.start
+  return raw.slice(0, value.start - at) + value.content + raw.slice(value.end - at)
+}
+
+/**
+ * Several edits of one declaration list as one splice from the first changed declaration to the last, so they cannot overlap.
+ * Untouched declarations keep their bytes, joins use the list's own separators, and a trailing `;` stays unless the list ends empty.
+ */
+export function rewriteDeclarationsSplice(
+  text: string,
+  declarations: readonly IndexedDeclaration[],
+  emptyAt: number | null,
+  edits: DeclarationListEdits,
+): Splice {
+  const { gap, colon } = separatorsOf(text, declarations)
+  const separator = `;${gap}`
+  const appended = edits.appended.map((declaration) => writtenDeclaration(declaration, colon))
+  if (declarations.length === 0) {
+    if (emptyAt === null) refuse(NO_DECLARATIONS)
+    return { start: emptyAt, end: emptyAt, content: appended.join(separator) }
+  }
+  const touched = declarations.flatMap((declaration, index) => (edits.removed.has(declaration) || edits.replaced.has(declaration) ? [index] : []))
+  const first = touched[0] ?? declarations.length
+  const last = appended.length > 0 ? declarations.length - 1 : touched.at(-1)!
+  const written = [
+    ...declarations.slice(first, last + 1).filter((declaration) => !edits.removed.has(declaration)).map((declaration) => editedDeclaration(text, declaration, edits)),
+    ...appended,
+  ]
+  const lastEnd = declarations[last]!.range.end
+  if (first > 0) return { start: declarations[first - 1]!.range.end, end: lastEnd, content: written.map((item) => separator + item).join('') }
+  const following = declarations[last + 1]
+  if (following) return { start: declarations[0]!.range.start, end: following.range.start, content: written.map((item) => item + separator).join('') }
+  const trailing = written.length === 0 ? (/^\s*;/.exec(text.slice(lastEnd))?.[0].length ?? 0) : 0
+  return { start: declarations[0]!.range.start, end: lastEnd + trailing, content: written.join(separator) }
 }
 
 interface TextUnit {

@@ -110,6 +110,10 @@ function answer(computed: Computed, read: ProbeRead): ProbeReadResult {
       return { kind: 'snapRects', self: defaultRects[read.edId] ?? defaultRects.root!, parent: null, siblings: [] }
     case 'supports':
       return { kind: 'supports', supported: true }
+    case 'matches':
+      return { kind: 'matches', matched: read.selectors.map(() => false) }
+    case 'documentHeight':
+      return { kind: 'documentHeight', scrollHeight: 0 }
   }
 }
 
@@ -172,6 +176,8 @@ function editorWith(setup: Setup): { store: EditorStore; ctx: Context } {
     board,
     frameSrc: `/project/secret/${board}`,
     tree,
+    text: '',
+    rules: [],
     locations: {},
     styles: { ...defaultStyles, ...setup.styles } as BoardIndex['styles'],
   }

@@ -5,6 +5,7 @@ import type {
   EditRecord,
   ElementLocation,
   ProjectPath,
+  RuleId,
   StyleSource,
   TemplateNode,
 } from './types'
@@ -53,12 +54,21 @@ export interface DesignToken {
   readonly source: 'tokens.json' | ':root'
 }
 
+export interface BoardView {
+  readonly zoom: number
+  readonly panX: number
+  readonly panY: number
+  readonly selection: readonly EdId[]
+  /** View-only canvas width; the file is never written for it. */
+  readonly previewWidth?: number
+}
+
 /** Editor-only state; never written into the source. */
 export interface EditorState {
   readonly hidden: readonly EdId[]
   readonly locked: readonly EdId[]
   readonly collapsed: readonly EdId[]
-  readonly boards: Readonly<Record<ProjectPath, { readonly zoom: number; readonly panX: number; readonly panY: number; readonly selection: readonly EdId[] }>>
+  readonly boards: Readonly<Record<ProjectPath, BoardView>>
 }
 
 /** An outside edit re-ids the nodes it replaced; editor-only state follows them to the node now at each element path. */
@@ -115,7 +125,18 @@ export interface BoardIndex {
   readonly frameSrc: string
   readonly tree: TemplateNode
   readonly locations: Readonly<Record<EdId, ElementLocation>>
+  /** The board's source exactly as indexed; every range in this message slices it. */
+  readonly text: string
+  /** Inline styles only; helmet rules are listed in `rules`, since the server has no selector matcher. */
   readonly styles: Readonly<Record<EdId, readonly StyleSource[]>>
+  /** The `<helmet><style>` rules in source order. */
+  readonly rules: readonly HelmetRuleSource[]
+}
+
+export interface HelmetRuleSource extends StyleSource {
+  readonly target: RuleId
+  readonly selector: string
+  readonly media: string | null
 }
 
 /** The value the re-indexed source now resolves for each target, for the ack-vs-live check. */
@@ -195,6 +216,9 @@ export type ProbeRead =
   | { readonly kind: 'hitTest'; readonly x: number; readonly y: number; readonly depth: HitDepth; readonly within: EdId | null }
   | { readonly kind: 'snapRects'; readonly edId: EdId }
   | { readonly kind: 'supports'; readonly condition: string }
+  /** Per selector, whether any rendered instance matches it once states and pseudo-elements are stripped. */
+  | { readonly kind: 'matches'; readonly edId: EdId; readonly selectors: readonly string[] }
+  | { readonly kind: 'documentHeight' }
 
 export type ProbeReadResult =
   | { readonly kind: 'rects'; readonly rects: readonly Rect[] }
@@ -202,6 +226,8 @@ export type ProbeReadResult =
   | { readonly kind: 'hitTest'; readonly edId: EdId | null }
   | { readonly kind: 'snapRects'; readonly self: Rect; readonly parent: Rect | null; readonly siblings: readonly Rect[] }
   | { readonly kind: 'supports'; readonly supported: boolean }
+  | { readonly kind: 'matches'; readonly matched: readonly boolean[] }
+  | { readonly kind: 'documentHeight'; readonly scrollHeight: number }
 
 export type EditorToProbe =
   | { readonly type: 'read'; readonly id: number; readonly reads: readonly ProbeRead[] }
@@ -209,6 +235,8 @@ export type EditorToProbe =
   | { readonly type: 'beginTextEdit'; readonly session: string; readonly edId: EdId }
   | { readonly type: 'endTextEdit'; readonly session: string }
   | { readonly type: 'scrollTo'; readonly x: number; readonly y: number }
+  /** One editor-only stylesheet, replaced by `css` or removed on null; never serialised. */
+  | { readonly type: 'setEditorStyles'; readonly css: string | null }
 
 export type TextCancelReason = 'redrawn' | 'detached' | 'escape'
 

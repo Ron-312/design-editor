@@ -378,6 +378,152 @@ describe('reads', () => {
   })
 })
 
+describe('matches', () => {
+  beforeEach(() => {
+    html(
+      '<section class="row"><button class="btn primary" data-ed-id="btn">a</button><button class="btn ghost" data-ed-id="btn">b</button></section>' +
+        '<input class="field" data-ed-id="field">',
+    )
+  })
+
+  function matched(editor: Editor, id: string, selectors: readonly string[]): ProbeReadResult {
+    return readOne(editor, { kind: 'matches', edId: edId(id), selectors })[0]!
+  }
+
+  it('answers, per selector, whether any rendered instance of the element matches it', async () => {
+    const editor = await connect()
+
+    expect(matched(editor, 'btn', ['.btn', '.primary', '.ghost', '.row > .btn', '.missing', 'input'])).toEqual({
+      kind: 'matches',
+      matched: [true, true, true, true, false, false],
+    })
+  })
+
+  it('answers no match for every selector of an id that renders nothing', async () => {
+    const editor = await connect()
+
+    expect(matched(editor, 'missing', ['.btn', '*'])).toEqual({ kind: 'matches', matched: [false, false] })
+  })
+
+  it('counts a selector that throws as no match and still answers the others', async () => {
+    const editor = await connect()
+
+    expect(matched(editor, 'btn', ['[[', '.btn', '.btn >'])).toEqual({ kind: 'matches', matched: [false, true, false] })
+  })
+
+  it.each([':hover', ':focus', ':active', ':focus-visible'])('strips the %s state before matching', async (state) => {
+    const editor = await connect()
+
+    expect(matched(editor, 'btn', [`.btn${state}`, `.row${state} .ghost`, `.missing${state}`])).toEqual({
+      kind: 'matches',
+      matched: [true, true, false],
+    })
+  })
+
+  it.each([
+    ['btn', '.btn::before'],
+    ['btn', '.primary::after'],
+    ['field', '.field::placeholder'],
+  ])('strips the pseudo-element before matching %s against %s', async (id, selector) => {
+    const editor = await connect()
+
+    expect(matched(editor, id, [selector, `.missing${selector.slice(selector.indexOf('::'))}`])).toEqual({
+      kind: 'matches',
+      matched: [true, false],
+    })
+  })
+
+  it('strips states and pseudo-elements from every selector of a list', async () => {
+    const editor = await connect()
+
+    expect(matched(editor, 'btn', ['.missing:hover, .ghost::after'])).toEqual({ kind: 'matches', matched: [true] })
+  })
+})
+
+describe('document height', () => {
+  afterEach(() => {
+    Reflect.deleteProperty(document.documentElement, 'scrollHeight')
+  })
+
+  it('answers the document scrollHeight as measured in the read frame, alongside the other reads', async () => {
+    let scrollHeight = 900
+    Object.defineProperty(document.documentElement, 'scrollHeight', { configurable: true, get: () => scrollHeight })
+    const editor = await connect()
+
+    editor.send({ type: 'read', id: 5, reads: [{ kind: 'supports', condition: '(display: grid)' }, { kind: 'documentHeight' }] })
+    scrollHeight = 1460
+    expect(ofType(editor, 'readResult')).toEqual([])
+    runFrame()
+
+    expect(ofType(editor, 'readResult')).toEqual([
+      { type: 'readResult', id: 5, results: [{ kind: 'supports', supported: true }, { kind: 'documentHeight', scrollHeight: 1460 }] },
+    ])
+  })
+})
+
+describe('editor styles', () => {
+  const OUTLINE = '[data-ed-id] { color: rgb(1, 2, 3) }'
+  const PAGE_STYLE = 'h1 { margin: 0 }'
+
+  beforeEach(() => {
+    document.head.innerHTML = `<style>${PAGE_STYLE}</style>`
+    html('<h1 data-ed-id="h1">Title</h1>')
+  })
+
+  afterEach(() => {
+    for (const style of document.querySelectorAll('style')) style.remove()
+  })
+
+  function styleTexts(): string[] {
+    return [...document.querySelectorAll('style')].map((style) => style.textContent ?? '').sort()
+  }
+
+  function colorOf(editor: Editor): ProbeReadResult {
+    return readOne(editor, { kind: 'computed', edId: edId('h1'), props: ['color'] })[0]!
+  }
+
+  it("adds one editor-only stylesheet next to the page's own, and the page renders with it", async () => {
+    const editor = await connect()
+
+    editor.send({ type: 'setEditorStyles', css: OUTLINE })
+
+    expect(styleTexts()).toEqual([OUTLINE, PAGE_STYLE].sort())
+    expect(colorOf(editor)).toEqual({ kind: 'computed', values: { color: 'rgb(1, 2, 3)' } })
+  })
+
+  it('replaces the editor stylesheet on the next message instead of adding another', async () => {
+    const editor = await connect()
+    const hidden = '[data-ed-id] { visibility: hidden }'
+
+    editor.send({ type: 'setEditorStyles', css: OUTLINE })
+    editor.send({ type: 'setEditorStyles', css: hidden })
+
+    expect(styleTexts()).toEqual([hidden, PAGE_STYLE].sort())
+  })
+
+  it('removes the editor stylesheet on null and leaves the page as authored', async () => {
+    const editor = await connect()
+    editor.send({ type: 'setEditorStyles', css: OUTLINE })
+
+    editor.send({ type: 'setEditorStyles', css: null })
+
+    expect(styleTexts()).toEqual([PAGE_STYLE])
+    expect(colorOf(editor)).not.toEqual({ kind: 'computed', values: { color: 'rgb(1, 2, 3)' } })
+  })
+
+  it('does nothing on null when no editor stylesheet is in place, and adds one again after a removal', async () => {
+    const editor = await connect()
+
+    editor.send({ type: 'setEditorStyles', css: null })
+    expect(styleTexts()).toEqual([PAGE_STYLE])
+    editor.send({ type: 'setEditorStyles', css: OUTLINE })
+    editor.send({ type: 'setEditorStyles', css: null })
+    editor.send({ type: 'setEditorStyles', css: OUTLINE })
+
+    expect(styleTexts()).toEqual([OUTLINE, PAGE_STYLE].sort())
+  })
+})
+
 describe('previewDecl', () => {
   beforeEach(() => {
     html('<li data-ed-id="li" style="border-bottom: 1px solid red">a</li><li data-ed-id="li">b</li><h1 data-ed-id="h1">t</h1><p data-ed-id="p">p</p>')

@@ -31,6 +31,10 @@ const probes = vi.hoisted(() => {
         return { kind: 'computed', values: {} }
       case 'supports':
         return { kind: 'supports', supported: true }
+      case 'matches':
+        return { kind: 'matches', matched: read.selectors.map(() => false) }
+      case 'documentHeight':
+        return { kind: 'documentHeight', scrollHeight: 0 }
     }
   }
 
@@ -129,6 +133,8 @@ const homeIndex: BoardIndex = {
   board: home,
   frameSrc: '/project/secret/home.dc.html',
   tree: homeTree,
+  text: '',
+  rules: [],
   locations: {},
   styles: {
     [edId('header')]: [inlineAt(home, 47, 'border-radius', '12px')],

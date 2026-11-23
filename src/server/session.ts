@@ -216,8 +216,10 @@ export class EditSession {
       board,
       frameSrc: `${this.frameBase}${framePath}`,
       tree: indexed.tree!,
+      text: indexed.text,
       locations: Object.fromEntries(indexed.ids.map((id) => [id, indexed.locate(id)!])),
       styles: stylesOf(indexed),
+      rules: indexed.rules,
     }
   }
 

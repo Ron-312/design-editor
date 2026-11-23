@@ -12,6 +12,10 @@ function isNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value)
 }
 
+function isBoolean(value: unknown): value is boolean {
+  return typeof value === 'boolean'
+}
+
 function isString(value: unknown): value is string {
   return typeof value === 'string'
 }
@@ -40,7 +44,11 @@ function isReadResult(value: unknown): value is ProbeReadResult {
     case 'snapRects':
       return isRect(value.self) && (value.parent === null || isRect(value.parent)) && isArrayOf(value.siblings, isRect)
     case 'supports':
-      return typeof value.supported === 'boolean'
+      return isBoolean(value.supported)
+    case 'matches':
+      return isArrayOf(value.matched, isBoolean)
+    case 'documentHeight':
+      return isNumber(value.scrollHeight)
     default:
       return false
   }

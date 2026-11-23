@@ -3,6 +3,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { PatchEngine } from '../../../src/server/edit/patch-engine'
+import { STRUCTURAL_KINDS } from '../../../src/server/edit/structural-ops'
 import { SourceIndex } from '../../../src/server/source/source-index'
 import type { EdId, EditOp, EditPayloads, ProjectPath, RuleId, SourceRange } from '../../../src/shared/types'
 
@@ -77,6 +78,8 @@ const setDecl = (target: EdId, prop: string, value: string) => op('setDecl', [ta
 const setRuleDecl = (target: EdId, rule: RuleId, prop: string, value: string) => op('setDecl', [target], { prop, value, rule })
 const removeDecl = (target: EdId, prop: string) => op('removeDecl', [target], { prop })
 const setAttr = (target: EdId, name: string, value: string) => op('setAttr', [target], { name, value })
+const removeAttr = (target: EdId, name: string) => op('removeAttr', [target], { name })
+const removeRuleDecl = (target: EdId, rule: RuleId, prop: string) => op('removeDecl', [target], { prop, rule })
 const setText = (target: EdId, text: string) => op('setText', [target], { text })
 
 describe('setDecl on an inline style', () => {
@@ -506,5 +509,221 @@ describe('edId -> start offset map', () => {
     const outcome = applied(engine.apply(indexed, [setDecl(findId(indexed, /^<h1/), 'font-size', '56px')]))
     expect(outcome.minted).toEqual([])
     expect(outcome.warnings).toEqual([])
+  })
+})
+
+describe('removeAttr', () => {
+  it('deletes the attribute with the whitespace before it', () => {
+    const { indexed, engine, text } = open(canvas('<p class="a" title="Note">x</p>'))
+    const outcome = applied(engine.apply(indexed, [removeAttr(findId(indexed, /^<p/), 'title')]))
+    expect(outcome.text).toBe(replaceOnce(text, '<p class="a" title="Note">', '<p class="a">'))
+  })
+
+  it('takes a line break before the attribute with it', () => {
+    const { indexed, engine, text } = open(canvas('<p class="a"\n   title="Note">x</p>'))
+    const outcome = applied(engine.apply(indexed, [removeAttr(findId(indexed, /^<p/), 'title')]))
+    expect(outcome.text).toBe(replaceOnce(text, '<p class="a"\n   title="Note">', '<p class="a">'))
+  })
+
+  it('deletes a bare attribute', () => {
+    const { indexed, engine, text } = open(canvas('<button class="b" disabled>Go</button>'))
+    const outcome = applied(engine.apply(indexed, [removeAttr(findId(indexed, /^<button/), 'disabled')]))
+    expect(outcome.text).toBe(replaceOnce(text, '<button class="b" disabled>', '<button class="b">'))
+  })
+
+  it('restores the file byte-for-byte after removing what setAttr added', () => {
+    const { index, indexed, engine, text } = open(canvas('<p class="a">x</p>'))
+    const p = findId(indexed, /^<p/)
+    const added = applied(engine.apply(indexed, [setAttr(p, 'data-layer-name', 'Intro')]))
+    const reindexed = index.indexFile(SNIPPET, added.text, added.offsets)
+    expect(applied(engine.apply(reindexed, [removeAttr(p, 'data-layer-name')])).text).toBe(text)
+  })
+
+  it('leaves the file as it is when the attribute is absent', () => {
+    const { indexed, engine, text } = open(canvas('<p class="a">x</p>'))
+    expect(applied(engine.apply(indexed, [removeAttr(findId(indexed, /^<p/), 'title')])).text).toBe(text)
+  })
+
+  it('records the removed value with no after value', () => {
+    const { indexed, engine } = openHome()
+    const img = findId(indexed, /^<img/)
+    const [record] = applied(engine.apply(indexed, [removeAttr(img, 'alt')])).records
+    expect(record).toMatchObject({ target: [img], kind: 'removeAttr', prop: 'alt', before: 'Studio mark', after: null })
+  })
+
+  it('clears the artboard root\'s layer name', () => {
+    const text = '<!doctype html>\n<html>\n<body>\n<x-dc data-layer-name="Home">\n<section>s</section>\n</x-dc>\n</body>\n</html>\n'
+    const { indexed, engine } = open(text)
+    const outcome = applied(engine.apply(indexed, [removeAttr(indexed.tree!.edId, 'data-layer-name')]))
+    expect(outcome.text).toBe(replaceOnce(text, '<x-dc data-layer-name="Home">', '<x-dc>'))
+  })
+
+  it('is not a structural kind', () => {
+    expect(STRUCTURAL_KINDS.has('removeAttr')).toBe(false)
+  })
+
+  it('refuses an attribute that holds a hole, with the live-value hint', () => {
+    const { indexed, engine } = open(canvas('<p x="a {{p}} b">Hello</p>'))
+    expect(refusalOf(engine.apply(indexed, [removeAttr(findId(indexed, /^<p/), 'x')]))).toMatch(/live value/)
+  })
+
+  it('refuses a layer inside a <dc-import>', () => {
+    const { indexed, engine } = open(canvas('<dc-import src="./card.dc.html"><div title="t">x</div></dc-import>'))
+    expect(engine.apply(indexed, [removeAttr(findId(indexed, /^<div/), 'title')]).ok).toBe(false)
+  })
+
+  it('refuses a layer that is gone', () => {
+    const { indexed, engine } = open(canvas('<p class="a">x</p>'))
+    expect(refusalOf(engine.apply(indexed, [removeAttr('e9999' as EdId, 'class')]))).toMatch(/gone/)
+  })
+})
+
+describe('several declaration ops on one inline style in one flush', () => {
+  const THREE = '<div style="width: 10px; height: 20px; color: red">x</div>'
+
+  function flush(before: string, ops: (div: EdId) => EditOp[]) {
+    const { indexed, engine, text } = open(canvas(before))
+    const outcome = applied(engine.apply(indexed, ops(findId(indexed, /^<div/))))
+    return { outcome, text }
+  }
+
+  it('removes the last two of three', () => {
+    const { outcome, text } = flush(THREE, (div) => [removeDecl(div, 'height'), removeDecl(div, 'color')])
+    expect(outcome.text).toBe(replaceOnce(text, THREE, '<div style="width: 10px">x</div>'))
+  })
+
+  it('removes all of two', () => {
+    const before = '<div style="width: 10px; height: 20px">x</div>'
+    const { outcome, text } = flush(before, (div) => [removeDecl(div, 'width'), removeDecl(div, 'height')])
+    expect(outcome.text).toBe(replaceOnce(text, before, '<div style="">x</div>'))
+  })
+
+  it('removes the only declaration and sets the four corner longhands with no leading separator', () => {
+    const before = '<div style="border-radius: 4px">x</div>'
+    const { outcome, text } = flush(before, (div) => [
+      removeDecl(div, 'border-radius'),
+      setDecl(div, 'border-top-left-radius', '1px'),
+      setDecl(div, 'border-top-right-radius', '2px'),
+      setDecl(div, 'border-bottom-right-radius', '3px'),
+      setDecl(div, 'border-bottom-left-radius', '4px'),
+    ])
+    expect(outcome.text).toBe(
+      replaceOnce(
+        text,
+        before,
+        '<div style="border-top-left-radius: 1px; border-top-right-radius: 2px; border-bottom-right-radius: 3px; border-bottom-left-radius: 4px">x</div>',
+      ),
+    )
+  })
+
+  it('starts a compact list afresh in its compact form', () => {
+    const before = '<div style="border-radius:4px">x</div>'
+    const { outcome, text } = flush(before, (div) => [
+      removeDecl(div, 'border-radius'),
+      setDecl(div, 'border-top-left-radius', '1px'),
+      setDecl(div, 'border-bottom-left-radius', '2px'),
+    ])
+    expect(outcome.text).toBe(replaceOnce(text, before, '<div style="border-top-left-radius:1px;border-bottom-left-radius:2px">x</div>'))
+  })
+
+  it('removes all of two and sets two new declarations', () => {
+    const before = '<div style="width: 10px; height: 20px">x</div>'
+    const { outcome, text } = flush(before, (div) => [
+      removeDecl(div, 'width'),
+      removeDecl(div, 'height'),
+      setDecl(div, 'flex-grow', '1'),
+      setDecl(div, 'align-self', 'stretch'),
+    ])
+    expect(outcome.text).toBe(replaceOnce(text, before, '<div style="flex-grow: 1; align-self: stretch">x</div>'))
+  })
+
+  it('removes one declaration while setting another', () => {
+    const { outcome, text } = flush(THREE, (div) => [removeDecl(div, 'width'), setDecl(div, 'color', 'blue')])
+    expect(outcome.text).toBe(replaceOnce(text, THREE, '<div style="height: 20px; color: blue">x</div>'))
+  })
+
+  it('removes the last declaration while appending a new one', () => {
+    const { outcome, text } = flush(THREE, (div) => [removeDecl(div, 'color'), setDecl(div, 'opacity', '0.5')])
+    expect(outcome.text).toBe(replaceOnce(text, THREE, '<div style="width: 10px; height: 20px; opacity: 0.5">x</div>'))
+  })
+
+  it('removes the first and last of three while setting the middle one', () => {
+    const { outcome, text } = flush(THREE, (div) => [removeDecl(div, 'width'), removeDecl(div, 'color'), setDecl(div, 'height', '30px')])
+    expect(outcome.text).toBe(replaceOnce(text, THREE, '<div style="height: 30px">x</div>'))
+  })
+
+  it('keeps the bytes of an untouched declaration and the trailing semicolon', () => {
+    const before = '<div style="width:10px;height : 20px;color:red;">x</div>'
+    const { outcome, text } = flush(before, (div) => [removeDecl(div, 'width'), removeDecl(div, 'color')])
+    expect(outcome.text).toBe(replaceOnce(text, before, '<div style="height : 20px;">x</div>'))
+  })
+
+  it('sets one value and appends another', () => {
+    const before = '<div style="width: 10px; height: 20px">x</div>'
+    const { outcome, text } = flush(before, (div) => [setDecl(div, 'width', '5px'), setDecl(div, 'color', 'red')])
+    expect(outcome.text).toBe(replaceOnce(text, before, '<div style="width: 5px; height: 20px; color: red">x</div>'))
+  })
+
+  it('records each op with the value it had', () => {
+    const { outcome } = flush(THREE, (div) => [removeDecl(div, 'height'), removeDecl(div, 'color')])
+    expect(outcome.records.map(({ kind, prop, before, after }) => ({ kind, prop, before, after }))).toEqual([
+      { kind: 'removeDecl', prop: 'height', before: '20px', after: null },
+      { kind: 'removeDecl', prop: 'color', before: 'red', after: null },
+    ])
+  })
+
+  it('binds every id to the same element after a coalesced splice', () => {
+    const { index, indexed, engine } = open(canvas(`${THREE}\n<p style="margin: 0">y</p>`))
+    const div = findId(indexed, /^<div/)
+    const outcome = applied(engine.apply(indexed, [removeDecl(div, 'height'), removeDecl(div, 'color')]))
+    const reindexed = index.indexFile(SNIPPET, outcome.text, outcome.offsets)
+    expect(startTagOf(reindexed, div)).toBe('<div style="width: 10px">')
+    expect(startTagOf(reindexed, findId(indexed, /^<p/))).toBe('<p style="margin: 0">')
+  })
+})
+
+describe('several declaration ops on one rule in one flush', () => {
+  it('removes the last two of three declarations of a rule and keeps its trailing semicolon', () => {
+    const { indexed, engine, text } = openHome()
+    const rule = indexed.findRule('.page', 0)!.id
+    const main = findId(indexed, /^<main/)
+    const outcome = applied(engine.apply(indexed, [removeRuleDecl(main, rule, 'min-height'), removeRuleDecl(main, rule, 'padding')]))
+    expect(outcome.text).toBe(
+      replaceOnce(text, '.page { position: relative; min-height: 900px; padding: 48px; }', '.page { position: relative; }'),
+    )
+  })
+
+  it('replaces a rule\'s only declaration with the four corner longhands', () => {
+    const { indexed, engine, text } = open(canvas('<helmet><style>.box { border-radius: 4px; }</style></helmet>\n<div class="box">x</div>'))
+    const rule = indexed.findRule('.box', 0)!.id
+    const div = findId(indexed, /^<div/)
+    const outcome = applied(
+      engine.apply(indexed, [
+        removeRuleDecl(div, rule, 'border-radius'),
+        setRuleDecl(div, rule, 'border-top-left-radius', '1px'),
+        setRuleDecl(div, rule, 'border-top-right-radius', '2px'),
+        setRuleDecl(div, rule, 'border-bottom-right-radius', '3px'),
+        setRuleDecl(div, rule, 'border-bottom-left-radius', '4px'),
+      ]),
+    )
+    expect(outcome.text).toBe(
+      replaceOnce(
+        text,
+        '.box { border-radius: 4px; }',
+        '.box { border-top-left-radius: 1px; border-top-right-radius: 2px; border-bottom-right-radius: 3px; border-bottom-left-radius: 4px; }',
+      ),
+    )
+  })
+
+  it('folds a rule and an inline style of the same element as two separate lists', () => {
+    const { indexed, engine, text } = openHome()
+    const rule = indexed.findRule('.page', 0)!.id
+    const main = findId(indexed, /^<main/)
+    const outcome = applied(
+      engine.apply(indexed, [removeRuleDecl(main, rule, 'min-height'), removeRuleDecl(main, rule, 'padding'), setDecl(main, 'color', '#000000')]),
+    )
+    let expected = replaceOnce(text, '.page { position: relative; min-height: 900px; padding: 48px; }', '.page { position: relative; }')
+    expected = replaceOnce(expected, 'style="color: #1c1917"', 'style="color: #000000"')
+    expect(outcome.text).toBe(expected)
   })
 })

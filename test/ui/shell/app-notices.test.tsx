@@ -22,6 +22,10 @@ vi.mock('../../../src/ui/probe-client', () => ({
           return { kind: 'computed', values: {} }
         case 'supports':
           return { kind: 'supports', supported: true }
+        case 'matches':
+          return { kind: 'matches', matched: [] }
+        case 'documentHeight':
+          return { kind: 'documentHeight', scrollHeight: 0 }
       }
     }
     return {
@@ -76,6 +80,8 @@ const homeIndex: BoardIndex = {
   tree: { ...node('root', 'x-dc', [node('header', 'header'), node('footer', 'footer')]), readOnly: 'artboard-root' },
   locations: {},
   styles: {},
+  text: '',
+  rules: [],
 }
 
 interface Shell {

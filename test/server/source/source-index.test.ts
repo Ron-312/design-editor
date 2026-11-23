@@ -389,3 +389,24 @@ describe('SourceIndex flags', () => {
     expect(indexed.isAttrEditable(idOf(text, indexed, 'sc-for'), 'list')).toBe(false)
   })
 })
+
+describe('SourceIndex helmet rules', () => {
+  it('exposes the <helmet><style> rules in source order, with selector, media and a range over the whole rule', () => {
+    const { text, indexed } = indexHome()
+    expect(indexed.rules.map((rule) => ({ selector: rule.selector, media: rule.media, source: slice(text, rule.range) }))).toEqual([
+      { selector: 'body', media: null, source: 'body { margin: 0; font-family: Inter, sans-serif; background: #fff7ed; }' },
+      { selector: '.page', media: null, source: '.page { position: relative; min-height: 900px; padding: 48px; }' },
+      { selector: '.page', media: '(max-width: 720px)', source: '.page { padding: 24px; }' },
+    ])
+  })
+
+  it('leaves out a <style> outside <helmet>', () => {
+    const { indexed } = indexText('<x-dc><helmet><style>.a { color: red }</style></helmet><style>.b { color: blue }</style></x-dc>')
+    expect(indexed.rules.map((rule) => rule.selector)).toEqual(['.a'])
+  })
+
+  it('has no rules for a board without <helmet>', () => {
+    const { indexed } = indexText('<x-dc><p style="color: red">plain</p></x-dc>')
+    expect(indexed.rules).toEqual([])
+  })
+})
