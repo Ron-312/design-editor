@@ -3,14 +3,19 @@ import { _electron as electron } from 'playwright'
 const [executablePath, project] = process.argv.slice(2)
 if (!executablePath || !project) throw new Error('usage: node scripts/electron-suite.mjs <app executable> <pulled canvas folder>')
 
-/** Runs an Edit menu item the way its accelerator does, so the packaged menu itself is under test. */
+/**
+ * Runs an Edit menu item the way its accelerator does, so the packaged menu itself is under test.
+ * On macOS a role item goes through the key window, which a window launched behind the test runner
+ * never is, so a role is run as the webContents call Electron makes for it on Windows.
+ */
 async function clickEditMenu(app, label) {
   await app.evaluate(({ BrowserWindow, Menu }, wanted) => {
     const edit = Menu.getApplicationMenu().items.find((item) => item.label === 'Edit')
     const item = edit.submenu.items.find((entry) => entry.label === wanted)
     if (!item) throw new Error(`the Edit menu has no ${wanted} item`)
     const [window] = BrowserWindow.getAllWindows()
-    item.click(undefined, window, window.webContents)
+    if (['cut', 'copy', 'paste'].includes(item.role)) window.webContents[item.role]()
+    else item.click(undefined, window, window.webContents)
   }, label)
 }
 
