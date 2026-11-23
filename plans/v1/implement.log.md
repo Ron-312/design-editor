@@ -57,3 +57,7 @@ Records what each wave built and where it departed from the plan.
   deviated: the post-write script-override warning only sees px values; the text-box trim switch is always shown with a warning when unsupported.
   deviated: the token picker lists every token without a kind filter and the selector chip lists only rules shared by every selected element.
   deviated: panel CSS lives in scoped style blocks and depends on B Warm CSS variables defined by the app shell.
+
+## Wave 6 (2026-11-23)
+- t8 Editor server, edit session, push endpoints, services, main — adds the 127.0.0.1 editor listener (Host, Origin and token checks, /health, /shutdown, /push/begin, /push/end, path-scoped WebSocket edit session, Vite middleware in dev), the edit session over Writer, UndoLog and Watcher with the push lock, editor services (tokens, state.json, diff/revert), the startEditor composition root and scripts/start.mjs.
+  deviated: startEditor binds the editor and project ports before the slow startup work (git check, probe bundle, session open) finishes and the editor answers 503 until the session is attached, instead of running the steps one after another; this narrows the window in which another process can take a port.
