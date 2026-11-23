@@ -128,7 +128,7 @@ async function mountPanel(editorState: EditorState = editorStateWith()): Promise
   document.body.append(container)
   const root = createRoot(container)
   mounted = { root, container }
-  act(() => root.render(<LayersPanel ctx={ctx} onEditorStateChange={onEditorStateChange} />))
+  act(() => root.render(<LayersPanel ctx={ctx} platform="mac" onEditorStateChange={onEditorStateChange} />))
   await settle()
   return { store, ctx, onEditorStateChange, container }
 }
@@ -295,6 +295,58 @@ describe('the tree is the template tree', () => {
       .map((element) => element.dataset.layerId)
 
     expect(dimmed).toEqual(['banner'])
+  })
+})
+
+describe('find layer', () => {
+  function findInput(): HTMLInputElement {
+    const input = document.querySelector<HTMLInputElement>('input[aria-label="Find layer"]')
+    if (!input) throw new Error('no Find layer box')
+    return input
+  }
+
+  async function find(query: string) {
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(findInput(), query)
+      findInput().dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await settle()
+  }
+
+  it('shows the layers whose name or tag matches, under their ancestors, even inside collapsed layers', async () => {
+    await mountPanel(editorStateWith({ collapsed: [edId('cards')] }))
+
+    await find('title')
+
+    expect(rowElements().map((element) => element.dataset.layerId)).toEqual(['root', 'hero', 'title', 'cards', 'card', 'cardTitle'])
+
+    await find('h3')
+    expect(rowElements().map((element) => element.dataset.layerId)).toEqual(['root', 'cards', 'card', 'cardTitle'])
+  })
+
+  it('says so when nothing matches, and Escape clears the search', async () => {
+    const view = await mountPanel()
+
+    await find('nothing here')
+    expect(rowElements()).toEqual([])
+    expect(view.container.textContent).toContain('No layers match')
+
+    act(() => {
+      findInput().dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    })
+    await settle()
+    expect(findInput().value).toBe('')
+    expect(rowElements().length).toBeGreaterThan(1)
+  })
+
+  it('Cmd-F focuses the search box', async () => {
+    await mountPanel()
+
+    act(() => {
+      document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', metaKey: true, bubbles: true, cancelable: true }))
+    })
+
+    expect(document.activeElement).toBe(findInput())
   })
 })
 

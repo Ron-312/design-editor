@@ -109,3 +109,59 @@ test.describe('M1: the shell follows the B Warm studio mockup', () => {
     expect(await styleOf('aside[aria-label="Properties"] [data-section]', 'padding-bottom')).toBe('12px')
   })
 })
+
+test.describe("M1: the mockup's canvas chrome", () => {
+  test('opens with the board fitted whole inside the canvas, its zoom shown in the top bar', async ({ page, editor }) => {
+    await goOffline(page)
+    await openEditor(page, editor)
+
+    const canvas = await page.locator('[aria-label="Canvas"]').boundingBox()
+    const frame = await page.locator('[aria-label="Canvas"] iframe').boundingBox()
+    if (!canvas || !frame) throw new Error('the canvas or its board is not laid out')
+    expect(frame.x).toBeGreaterThan(canvas.x + 20)
+    expect(frame.y).toBeGreaterThan(canvas.y + 20)
+    expect(frame.x + frame.width).toBeLessThan(canvas.x + canvas.width)
+    expect(frame.y + frame.height).toBeLessThan(canvas.y + canvas.height)
+    const zoom = Math.round((frame.width / 1280) * 100)
+    await expect(page.locator('header [data-zoom-percent]')).toHaveText(`${zoom}%`)
+    await expect(page.locator('[data-board-label]')).toHaveText(/home\.dc\.html\s*1280 × 900/)
+  })
+
+  test('Push only says to run /design-push in Claude Code, with the count of waiting changes', async ({ page, editor, project }) => {
+    await goOffline(page)
+    await openEditor(page, editor)
+    const before = project.status()
+
+    await page.locator('header').getByRole('button', { name: /^Push/ }).click()
+
+    const dialog = page.getByRole('dialog', { name: 'Push' })
+    await expect(dialog).toContainText('Run /design-push in Claude Code')
+    await expect(dialog).toContainText('No changes waiting to push yet')
+    expect(project.status()).toBe(before)
+    await page.keyboard.press('Escape')
+    await expect(dialog).toBeHidden()
+  })
+
+  test('the dock pans with the hand tool, and shows the tools still to come as disabled', async ({ page, editor }) => {
+    await goOffline(page)
+    await openEditor(page, editor)
+    const dock = page.getByRole('toolbar', { name: 'Tools' })
+    const frame = page.locator('[aria-label="Canvas"] iframe')
+    const start = (await frame.boundingBox())!
+
+    await dock.getByRole('button', { name: 'Hand' }).click()
+    await page.mouse.move(600, 400)
+    await page.mouse.down()
+    await page.mouse.move(660, 440, { steps: 4 })
+    await page.mouse.up()
+
+    const moved = (await frame.boundingBox())!
+    expect(moved.x - start.x).toBeCloseTo(60, 0)
+    expect(moved.y - start.y).toBeCloseTo(40, 0)
+    await expect(dock.getByRole('button', { name: 'Hand' })).toHaveAttribute('aria-pressed', 'true')
+    for (const name of ['Frame', 'Box', 'Text', 'Image', 'Code view']) {
+      await expect(dock.getByRole('button', { name })).toHaveAttribute('aria-disabled', 'true')
+      await expect(dock.getByRole('button', { name })).toHaveAttribute('title', /coming soon/)
+    }
+  })
+})

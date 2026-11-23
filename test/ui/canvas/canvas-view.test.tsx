@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BoardIndex, ClientMessage, EditorState, ProbeRead, ProbeReadResult, ProbeToEditor, Rect } from '../../../src/shared/protocol'
 import type { Board, CanvasLayout, EdId, ProjectPath, TemplateNode } from '../../../src/shared/types'
 import type { Platform } from '../../../src/ui/actions/registry'
-import { CanvasView, defaultCanvasTools, loadCanvasTools, type ToolModule } from '../../../src/ui/canvas/CanvasView'
+import { CanvasView, defaultCanvasTools, loadCanvasTools, openBoard, type CanvasCommands, type ToolModule } from '../../../src/ui/canvas/CanvasView'
 import type { CanvasPointer, CanvasTool, EditorContext, PointerHandler } from '../../../src/ui/plugin-api'
 import { createEditorStore, type EditorStore } from '../../../src/ui/store'
 import type { WsClient } from '../../../src/ui/ws-client'
@@ -89,6 +89,7 @@ const boards: Board[] = [
 ]
 const layout: CanvasLayout = { boards, order: [home, card], pages: [home] }
 const VIEWPORT_SIZE = { width: 800, height: 600 }
+const RULER = 20
 
 function node(id: string, children: TemplateNode[] = [], extra: Partial<TemplateNode> = {}): TemplateNode {
   return { edId: edId(id), kind: 'element', tag: 'div', name: id, children, ...extra }
@@ -185,18 +186,21 @@ interface MountOptions {
   readonly locked?: readonly EdId[]
   readonly platform?: Platform
   readonly tools?: readonly CanvasTool[]
+  readonly store?: EditorStore
+  readonly commands?: { current: CanvasCommands | null }
 }
 
 function mount(options: MountOptions = {}): Mounted {
   const container = document.createElement('div')
   document.body.append(container)
-  const store = createEditorStore()
+  const store = options.store ?? createEditorStore()
   const ws = fakeWs()
   const root = createRoot(container)
   mounted = { root, container }
   act(() => {
     root.render(
       <CanvasView
+        {...(options.commands ? { ref: options.commands } : {})}
         store={store}
         ws={ws as unknown as WsClient}
         layout={options.layout ?? layout}
@@ -383,18 +387,6 @@ function notices(store: EditorStore): string[] {
   return [...toasts, ...banners].map((notice) => notice.message)
 }
 
-function switcherButtons(container: HTMLElement): HTMLElement[] {
-  return [...container.querySelectorAll<HTMLElement>('[data-board-switcher] [data-board]')]
-}
-
-function interactSwitch(container: HTMLElement): HTMLElement {
-  const toggle = [...container.querySelectorAll<HTMLElement>('[role="switch"]')].find((element) =>
-    /interact/i.test(`${element.getAttribute('aria-label') ?? ''} ${element.textContent ?? ''}`),
-  )
-  if (!toggle) throw new Error('no Interact switch')
-  return toggle
-}
-
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true
   probes.scene.rendered = [...homeScene]
@@ -448,13 +440,40 @@ describe('one artboard at a time', () => {
     expect(frameSize(frame)).toEqual({ width: 1280, height: 900 })
   })
 
-  it('lists the boards in canvas.json order and marks the pages', async () => {
+  it('opens the first board in canvas.json order', async () => {
     const view = mount({ layout: { boards, order: [card, home], pages: [home] } })
 
     expect(view.ws.send).toHaveBeenCalledWith({ type: 'open', board: card })
-    const buttons = switcherButtons(view.container)
-    expect(buttons.map((button) => button.getAttribute('data-board'))).toEqual([card, home])
-    expect(buttons.map((button) => button.hasAttribute('data-page'))).toEqual([false, true])
+  })
+
+  it('fits a board seen for the first time into the view, clear of the rulers and with room for its label', async () => {
+    const view = await openHome()
+
+    const { zoom, panX, panY } = view.store.getState().view.viewport
+    expect(zoom).toBeLessThan(600 / 900)
+    expect(panX).toBeGreaterThanOrEqual(RULER + 16)
+    expect(panY).toBeGreaterThanOrEqual(RULER + 24)
+    expect(panX + 1280 * zoom).toBeLessThanOrEqual(VIEWPORT_SIZE.width - 16)
+    expect(panY + 900 * zoom).toBeLessThanOrEqual(VIEWPORT_SIZE.height - 16)
+  })
+
+  it('labels the board with its name and size above its top-left corner', async () => {
+    const view = await openHome()
+
+    const label = view.container.querySelector<HTMLElement>('[data-board-label]')
+    const { panX, panY } = view.store.getState().view.viewport
+    expect(label?.textContent).toBe('home.dc.html1280 × 900')
+    expect(Number.parseFloat(label!.style.left)).toBeCloseTo(panX)
+    expect(Number.parseFloat(label!.style.top)).toBeLessThan(panY)
+  })
+
+  it('keeps the saved view of a board instead of fitting it', async () => {
+    const store = createEditorStore()
+    store.restoreBoardViews({ [home]: { zoom: 2, panX: 15, panY: 25, selection: [] } })
+
+    mount({ store })
+
+    expect(store.getState().view.viewport).toEqual({ zoom: 2, panX: 15, panY: 25 })
   })
 
   it('switches boards, swapping the one frame, and keeps selection and zoom per board', async () => {
@@ -462,7 +481,7 @@ describe('one artboard at a time', () => {
     await clickAt(view, at.label)
     await setViewport(view.store, 2, 15, 25)
 
-    act(() => switcherButtons(view.container).find((button) => button.getAttribute('data-board') === card)!.click())
+    act(() => openBoard(view.store, view.ws as unknown as WsClient, card))
     await settle()
 
     expect(view.ws.send).toHaveBeenCalledWith({ type: 'open', board: card })
@@ -476,7 +495,7 @@ describe('one artboard at a time', () => {
     expect(cardFrame.getAttribute('src')).toBe(`/project/secret/${card}`)
     expect(frameSize(cardFrame)).toEqual({ width: 360, height: 220 })
 
-    act(() => switcherButtons(view.container).find((button) => button.getAttribute('data-board') === home)!.click())
+    act(() => openBoard(view.store, view.ws as unknown as WsClient, home))
     await settle()
 
     expect(view.store.getState().view.selection).toEqual(ids('card'))
@@ -546,17 +565,51 @@ describe('zoom and pan', () => {
     expect(view.store.getState().view.selection).toEqual([])
   })
 
-  it('fits the artboard with Shift-1', async () => {
+  it('fits the artboard with Shift-1, as it was fitted on open', async () => {
     const view = await openHome()
+    const fitted = view.store.getState().view.viewport
     await setViewport(view.store, 3, -500, -500)
 
     await pressKey(view.container, '!', { code: 'Digit1', shiftKey: true })
 
-    const { zoom, panX, panY } = view.store.getState().view.viewport
+    const { zoom } = view.store.getState().view.viewport
     expect(zoom).toBeLessThanOrEqual(600 / 900)
     expect(zoom).toBeGreaterThan(0.5)
-    expect(panX + (1280 * zoom) / 2).toBeCloseTo(VIEWPORT_SIZE.width / 2)
-    expect(panY + (900 * zoom) / 2).toBeCloseTo(VIEWPORT_SIZE.height / 2)
+    expect(view.store.getState().view.viewport).toEqual(fitted)
+  })
+
+  it('zooms to a picked level around the centre of the view for the zoom menu', async () => {
+    const commands: { current: CanvasCommands | null } = { current: null }
+    const view = mount({ commands })
+    act(() => view.store.setIndex(indexFor(home, homeTree)))
+    await settle()
+    await setViewport(view.store, 1, 0, 0)
+
+    act(() => commands.current!.zoomTo(2))
+
+    expect(view.store.getState().view.viewport).toEqual({ zoom: 2, panX: -VIEWPORT_SIZE.width / 2, panY: -VIEWPORT_SIZE.height / 2 })
+  })
+
+  it('pans with a plain drag while the hand tool is on, and selects nothing', async () => {
+    const view = await openHome()
+    await setViewport(view.store, 1, 0, 0)
+    const shield = shieldOf(view.container)
+
+    await pressKey(view.container, 'h', { code: 'KeyH' })
+    expect(view.store.getState().mode).toBe('hand')
+    act(() => {
+      dispatchPointer(shield, 'pointerdown', { x: 100, y: 100 })
+      dispatchPointer(shield, 'pointermove', { x: 140, y: 110 })
+      dispatchPointer(shield, 'pointerup', { x: 140, y: 110 })
+    })
+    await settle()
+
+    expect(view.store.getState().view.viewport).toEqual({ zoom: 1, panX: 40, panY: 10 })
+    expect(view.store.getState().view.selection).toEqual([])
+    expect(shield.style.cursor).toBe('grab')
+
+    await pressKey(view.container, 'v', { code: 'KeyV' })
+    expect(view.store.getState().mode).toBe('select')
   })
 
   it('zooms to the selection with Shift-2', async () => {
@@ -582,22 +635,17 @@ describe('event shield and Interact', () => {
     expect(view.store.getState().interact).toBe(false)
   })
 
-  it('the Interact switch lets pointer events through to the design', async () => {
+  it('interact mode, which the Preview switch turns on, lets pointer events through to the design', async () => {
     const view = await openHome()
-    const toggle = interactSwitch(view.container)
-    expect(toggle.getAttribute('aria-checked')).toBe('false')
 
-    act(() => toggle.click())
+    act(() => view.store.setInteract(true))
     await settle()
 
-    expect(view.store.getState().interact).toBe(true)
-    expect(toggle.getAttribute('aria-checked')).toBe('true')
     expect(shieldOf(view.container).style.pointerEvents).toBe('none')
 
-    act(() => toggle.click())
+    act(() => view.store.setInteract(false))
     await settle()
 
-    expect(view.store.getState().interact).toBe(false)
     expect(shieldOf(view.container).style.pointerEvents).not.toBe('none')
   })
 
@@ -826,6 +874,20 @@ describe('rulers', () => {
     expect(boxOf(xRange).width).toBeCloseTo(600 * 0.5)
     expect(boxOf(yRange).top).toBeCloseTo(50 + 400 * 0.5)
     expect(boxOf(yRange).height).toBeCloseTo(180 * 0.5)
+  })
+
+  it('number the ticks in board units, and name the selected edges in place of the numbers beside them', async () => {
+    const view = await openHome()
+    await setViewport(view.store, 0.5, 100, 50)
+
+    await clickAt(view, at.secondItem, { metaKey: true })
+
+    const numbers = (axis: string) =>
+      [...view.container.querySelectorAll(`[data-ruler="${axis}"] span:not(.edge)`)].map((span) => span.textContent)
+    const edges = (axis: string) => [...view.container.querySelectorAll(`[data-ruler="${axis}"] .edge`)].map((span) => span.textContent)
+    expect(numbers('x').slice(0, 3)).toEqual(['-200', '-100', '200'])
+    expect(edges('x')).toEqual(['40', '640'])
+    expect(edges('y')).toEqual(['400', '580'])
   })
 
   it('show no range while nothing is selected', async () => {

@@ -23,12 +23,16 @@ export interface Banner {
   readonly message: string
 }
 
+/** What a press on the canvas does: pick layers, or pan the view. */
+export type CanvasMode = 'select' | 'hand'
+
 export interface EditorStoreState {
   readonly board: ProjectPath | null
   readonly index: BoardIndex | null
   readonly view: BoardView
   readonly hover: EdId | null
   readonly interact: boolean
+  readonly mode: CanvasMode
   readonly records: readonly EditRecord[]
   readonly toasts: readonly ShownToast[]
   readonly banners: readonly Banner[]
@@ -76,6 +80,7 @@ export function createEditorStore() {
     view: EMPTY_VIEW,
     hover: null,
     interact: false,
+    mode: 'select',
     records: [],
     toasts: [],
     banners: [],
@@ -109,6 +114,8 @@ export function createEditorStore() {
         if (!views.has(board)) views.set(board, { selection, viewport: { zoom, panX, panY }, scroll: { x: 0, y: 0 } })
       }
     },
+    /** Whether `board` has a zoom, pan or selection of its own, saved or from earlier this session. */
+    hasView: (board: ProjectPath) => views.has(board),
     setBoard(board: ProjectPath) {
       update({ board, index: indexes.get(board) ?? null, view: views.get(board) ?? EMPTY_VIEW, hover: null })
     },
@@ -138,6 +145,9 @@ export function createEditorStore() {
     /** Interact mode passes pointer events to the design, so hover and selection pause. */
     setInteract(interact: boolean) {
       update({ interact, hover: null })
+    },
+    setMode(mode: CanvasMode) {
+      update({ mode })
     },
     addRecord(record: EditRecord) {
       update({ records: [...state.records, record] })

@@ -10,6 +10,7 @@ import {
 } from 'react'
 import { isVoidElement, nestingViolation } from '../../shared/content-model'
 import { applyStructural } from '../actions/layer.actions'
+import type { Platform } from '../actions/registry'
 import type { EditorState } from '../../shared/protocol'
 import type { EdId, TemplateNode } from '../../shared/types'
 import type { EditorContext } from '../plugin-api'
@@ -17,6 +18,7 @@ import { Icon, type IconName } from './fields'
 
 export interface LayersPanelProps {
   readonly ctx: EditorContext
+  readonly platform: Platform
   /** Hide, lock and collapse are editor-only: they go to `.editor/state.json`, never into the source. */
   readonly onEditorStateChange: (state: EditorState) => void
 }
@@ -59,6 +61,27 @@ function visibleRows(tree: TemplateNode, collapsed: readonly EdId[]): LayerRow[]
   visit(tree, 0, null)
   return rows
 }
+
+function matchesQuery(node: TemplateNode, query: string): boolean {
+  return node.name.toLowerCase().includes(query) || node.tag.toLowerCase().includes(query)
+}
+
+/** Every layer whose name or tag holds `query`, under the ancestors that lead to it, whatever is collapsed. */
+function foundRows(tree: TemplateNode, query: string): LayerRow[] {
+  const rows: LayerRow[] = []
+  const visit = (node: TemplateNode, depth: number, parent: LayerRow | null): boolean => {
+    const row = { node, depth, parent }
+    const at = rows.push(row) - 1
+    const childFound = node.children.map((child) => visit(child, depth + 1, row)).some(Boolean)
+    if (childFound || matchesQuery(node, query)) return true
+    rows.splice(at, 1)
+    return false
+  }
+  visit(tree, 0, null)
+  return rows
+}
+
+const FIND_KEYS: Readonly<Record<Platform, string>> = { mac: '⌘F', windows: 'Ctrl+F' }
 
 /** Elements and imports render live; `<sc-for>` / `<sc-if>` render away, so they are never dimmed. */
 function renderedNodes(tree: TemplateNode): TemplateNode[] {
@@ -134,16 +157,37 @@ function useUnrendered(ctx: EditorContext, tree: TemplateNode | undefined): Read
   return unrendered
 }
 
-export function LayersPanel({ ctx, onEditorStateChange }: LayersPanelProps) {
+export function LayersPanel({ ctx, platform, onEditorStateChange }: LayersPanelProps) {
   const index = useSyncExternalStore(ctx.onChange, ctx.index)
   const selectionKey = useSyncExternalStore(ctx.onChange, () => ctx.selection()?.edIds.join(' ') ?? '')
   const readOnly = useSyncExternalStore(ctx.onChange, ctx.readOnly)
   const unrendered = useUnrendered(ctx, index?.tree)
   const [drag, setDrag] = useState<Drag | null>(null)
   const pending = useRef<PendingDrag | null>(null)
+  const [query, setQuery] = useState('')
+  const search = useRef<HTMLInputElement>(null)
   const editorState = ctx.editorState()
   const selected = new Set(selectionKey.split(' '))
-  const rows = index ? visibleRows(index.tree, editorState.collapsed) : []
+  const finding = query.trim().toLowerCase()
+  const rows = !index ? [] : finding ? foundRows(index.tree, finding) : visibleRows(index.tree, editorState.collapsed)
+
+  useEffect(() => {
+    const focusSearch = (event: globalThis.KeyboardEvent) => {
+      const mod = platform === 'mac' ? event.metaKey : event.ctrlKey
+      if (!mod || event.shiftKey || event.altKey || event.key.toLowerCase() !== 'f') return
+      event.preventDefault()
+      search.current?.focus()
+      search.current?.select()
+    }
+    document.addEventListener('keydown', focusSearch)
+    return () => document.removeEventListener('keydown', focusSearch)
+  }, [platform])
+
+  function onSearchKey(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key !== 'Escape') return
+    setQuery('')
+    event.currentTarget.blur()
+  }
 
   function rowAtPoint(x: number, y: number): DropSpot | null {
     const element = document.elementFromPoint(x, y)?.closest<HTMLElement>('[role="treeitem"]')
@@ -201,6 +245,22 @@ export function LayersPanel({ ctx, onEditorStateChange }: LayersPanelProps) {
   return (
     <nav className="layers" aria-label="Layers">
       <style>{PANEL_CSS}</style>
+      <h3 className="lhead">Layers</h3>
+      <label className="search">
+        <Icon name="search" />
+        <input
+          ref={search}
+          type="search"
+          aria-label="Find layer"
+          placeholder="Find layer"
+          spellCheck={false}
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          onKeyDown={onSearchKey}
+        />
+        <kbd>{FIND_KEYS[platform]}</kbd>
+      </label>
+      {finding && rows.length === 0 && <p className="none">No layers match “{query.trim()}”</p>}
       <div
         className="tree"
         role="tree"
@@ -219,7 +279,7 @@ export function LayersPanel({ ctx, onEditorStateChange }: LayersPanelProps) {
             dimmed={unrendered.has(row.node.edId)}
             hidden={editorState.hidden.includes(row.node.edId)}
             locked={editorState.locked.includes(row.node.edId)}
-            collapsed={editorState.collapsed.includes(row.node.edId)}
+            collapsed={!finding && editorState.collapsed.includes(row.node.edId)}
             dropInvalid={drag !== null && parentRefusal(drag.source, row) !== null}
             dropZone={drag?.spot?.row === row ? drag.spot.zone : null}
             onSelect={select}
@@ -311,6 +371,14 @@ const PANEL_CSS = `
 .layers{background:var(--panel);color:var(--text-2);display:flex;flex-direction:column;min-height:0}
 .layers button{font:inherit;color:inherit;background:none;border:0;padding:0}
 .layers svg.i{width:14px;height:14px;flex:none;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+.layers .lhead{height:24px;flex:none;display:flex;align-items:center;margin-top:8px;padding:0 8px 0 12px;font-size:12px;font-weight:600;color:var(--text-2)}
+.layers .search{margin:4px 8px;height:28px;flex:none;border-radius:var(--r-sm);background:var(--field);display:flex;align-items:center;gap:8px;padding:0 8px;color:var(--text-3);border:1px solid transparent}
+.layers .search:focus-within{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft)}
+.layers .search input{flex:1;min-width:0;background:none;border:0;outline:none;font:inherit;color:var(--text)}
+.layers .search input::placeholder{color:var(--text-3)}
+.layers .search input::-webkit-search-cancel-button{display:none}
+.layers .search kbd{font:500 11px/16px "Instrument Sans",system-ui,sans-serif;color:var(--text-3);border:1px solid var(--line-strong);border-radius:var(--r-xs);padding:0 4px}
+.layers .none{padding:8px 12px;color:var(--text-3)}
 .layers .tree{flex:1;overflow:auto;padding:4px 0 8px;user-select:none;touch-action:none}
 .layers .row{height:28px;display:flex;align-items:center;gap:6px;padding-left:calc(8px + var(--d,0)*12px);padding-right:8px;margin:0 4px;border-radius:var(--r-sm);position:relative;outline:none}
 .layers .row:hover{background:var(--field)}

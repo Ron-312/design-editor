@@ -11,9 +11,18 @@ export interface Size {
   readonly height: number
 }
 
+/** Room kept clear on each side of a fitted rect, in screen px. */
+export interface Insets {
+  readonly top: number
+  readonly right: number
+  readonly bottom: number
+  readonly left: number
+}
+
 const MIN_ZOOM = 0.02
 const MAX_ZOOM = 64
 const FIT_MARGIN = 24
+const EVEN_MARGIN: Insets = { top: FIT_MARGIN, right: FIT_MARGIN, bottom: FIT_MARGIN, left: FIT_MARGIN }
 /** Wheel delta that doubles (or halves) the zoom. */
 const WHEEL_DELTA_PER_DOUBLING = 200
 
@@ -40,16 +49,20 @@ export function panBy(viewport: Viewport, dx: number, dy: number): Viewport {
   return { zoom: viewport.zoom, panX: viewport.panX + dx, panY: viewport.panY + dy }
 }
 
-/** The viewport that shows `rect` whole and centred in `container`, with a margin. */
-export function fitRect(rect: Rect, container: Size): Viewport {
-  const zoom = clampZoom(
-    Math.min((container.width - 2 * FIT_MARGIN) / rect.width, (container.height - 2 * FIT_MARGIN) / rect.height),
-  )
+/** The viewport that shows `rect` whole and centred in what `insets` leave of `container`. */
+export function fitRect(rect: Rect, container: Size, insets: Insets = EVEN_MARGIN): Viewport {
+  const room = { width: container.width - insets.left - insets.right, height: container.height - insets.top - insets.bottom }
+  const zoom = clampZoom(Math.min(room.width / rect.width, room.height / rect.height))
   return {
     zoom,
-    panX: container.width / 2 - (rect.x + rect.width / 2) * zoom,
-    panY: container.height / 2 - (rect.y + rect.height / 2) * zoom,
+    panX: insets.left + room.width / 2 - (rect.x + rect.width / 2) * zoom,
+    panY: insets.top + room.height / 2 - (rect.y + rect.height / 2) * zoom,
   }
+}
+
+/** The viewport at `zoom`, keeping the board point at the centre of `container` where it is. */
+export function zoomTo(viewport: Viewport, zoom: number, container: Size): Viewport {
+  return zoomAt(viewport, clampZoom(zoom) / viewport.zoom, { x: container.width / 2, y: container.height / 2 })
 }
 
 export function wheelZoomFactor(deltaY: number): number {

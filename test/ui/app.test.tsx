@@ -313,13 +313,13 @@ describe('theme tokens', () => {
 })
 
 describe('editor shell', () => {
-  it('lays out the layers, canvas and properties panels with the Interact switch', async () => {
+  it('lays out the layers, canvas and properties panels with the Preview switch in the top bar', async () => {
     const { container } = await openHome()
 
     expect(container.querySelector('nav[aria-label="Layers"] [role="tree"]')).not.toBeNull()
     expect(container.querySelector('[aria-label="Canvas"]')).not.toBeNull()
     expect(container.querySelector('aside[aria-label="Properties"]')).not.toBeNull()
-    expect(container.querySelector('[role="switch"][aria-label="Interact"]')).not.toBeNull()
+    expect(text(topBar(container).querySelector('[role="switch"]'))).toBe('Preview')
   })
 
   it('shows the project name and the open board name in the top bar', async () => {
@@ -414,6 +414,124 @@ describe('editor shell', () => {
 
     expect(sentOfType(socket, 'saveEditorState').at(-1)?.state.hidden).toEqual(['header'])
     expect(container.querySelector('[role="treeitem"][data-layer-id="header"]')?.hasAttribute('data-hidden')).toBe(true)
+  })
+})
+
+describe('top bar', () => {
+  const pushDialog = (container: HTMLElement) => container.querySelector('[role="dialog"][aria-label="Push"]')
+
+  it('lists the boards in canvas.json order with their widths, marks the pages, and opens the one picked', async () => {
+    const { container, socket, store } = await openHome()
+
+    const tabs = [...topBar(container).querySelectorAll<HTMLElement>('[data-board-switcher] [role="tab"]')]
+    expect(tabs.map((tab) => tab.getAttribute('data-board'))).toEqual([home, card])
+    expect(tabs.map((tab) => text(tab))).toEqual(['1280', '360'])
+    expect(tabs.map((tab) => tab.hasAttribute('data-page'))).toEqual([true, false])
+    expect(tabs.map((tab) => tab.getAttribute('aria-selected'))).toEqual(['true', 'false'])
+
+    await click(tabs[1]!)
+
+    expect(store.getState().board).toBe(card)
+    expect(sentOfType(socket, 'open').at(-1)).toEqual({ type: 'open', board: card })
+  })
+
+  it('shows the zoom as a percentage and sets the level picked in its menu', async () => {
+    const { container, store } = await openHome()
+    act(() => store.setViewport({ zoom: 0.5, panX: 0, panY: 0 }))
+    await settle()
+    expect(text(container.querySelector('[data-zoom-percent]'))).toBe('50%')
+
+    await click(buttonNamed(topBar(container), /^Zoom$/))
+    await click(buttonNamed(container.querySelector('[role="menu"]')!, /^100%$/))
+
+    expect(store.getState().view.viewport.zoom).toBe(1)
+    expect(text(container.querySelector('[data-zoom-percent]'))).toBe('100%')
+    expect(container.querySelector('[role="menu"]')).toBeNull()
+  })
+
+  it('the Preview switch turns interact mode on and off', async () => {
+    const { container, store } = await openHome()
+    const preview = topBar(container).querySelector<HTMLElement>('[role="switch"]')!
+
+    await click(preview)
+    expect(store.getState().interact).toBe(true)
+    expect(preview.getAttribute('aria-checked')).toBe('true')
+
+    await click(preview)
+    expect(store.getState().interact).toBe(false)
+  })
+
+  it('Push counts the waiting changes and says to run /design-push in Claude Code, sending nothing itself', async () => {
+    const shell = await openHome()
+    await editAndAck(shell, radiusRecord('12px', '16px'))
+    await editAndAck(shell, radiusRecord('16px', '20px'))
+    const sentBefore = shell.socket.sent.length
+
+    const push = buttonNamed(topBar(shell.container), /^Push/)
+    expect(text(push.querySelector('.cnt'))).toBe('2')
+    await click(push)
+
+    expect(text(pushDialog(shell.container))).toContain('Run /design-push in Claude Code')
+    expect(text(pushDialog(shell.container))).toContain('2 changes waiting to push')
+    expect(shell.socket.sent).toHaveLength(sentBefore)
+
+    act(() => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    })
+    await settle()
+    expect(pushDialog(shell.container)).toBeNull()
+  })
+
+  it('Push says when there is nothing to push yet', async () => {
+    const { container } = await openHome()
+
+    await click(buttonNamed(topBar(container), /^Push/))
+
+    expect(text(pushDialog(container))).toContain('No changes waiting to push yet')
+  })
+})
+
+describe('tool dock', () => {
+  const dock = (container: HTMLElement) => container.querySelector<HTMLElement>('[role="toolbar"][aria-label="Tools"]')!
+
+  it('starts on Select, and Hand switches the canvas to panning', async () => {
+    const { container, store } = await openHome()
+    expect(buttonNamed(dock(container), /^Select$/).getAttribute('aria-pressed')).toBe('true')
+
+    await click(buttonNamed(dock(container), /^Hand$/))
+
+    expect(store.getState().mode).toBe('hand')
+    expect(buttonNamed(dock(container), /^Hand$/).getAttribute('aria-pressed')).toBe('true')
+    expect(buttonNamed(dock(container), /^Select$/).getAttribute('aria-pressed')).toBe('false')
+  })
+
+  it.each(['Frame', 'Box', 'Text', 'Image', 'Code view'])('shows %s as coming soon, and it changes nothing', async (name) => {
+    const { container, store } = await openHome()
+    const tool = buttonNamed(dock(container), new RegExp(`^${name}$`))
+
+    await click(tool)
+
+    expect(tool.getAttribute('aria-disabled')).toBe('true')
+    expect(tool.getAttribute('title')).toMatch(/coming soon/)
+    expect(store.getState().mode).toBe('select')
+  })
+})
+
+describe('left panel tabs', () => {
+  const tabNamed = (container: HTMLElement, name: string) =>
+    [...container.querySelectorAll<HTMLElement>('[role="tab"].ptab')].find((tab) => text(tab).startsWith(name))
+
+  it('shows a Tokens tab only once the project has tokens, listing each with its value', async () => {
+    const { container, socket } = await openHome()
+    expect(tabNamed(container, 'Tokens')).toBeUndefined()
+
+    await receive(socket, { type: 'tokens', tokens: [{ name: 'color.paper', value: '#fff7ed', source: 'tokens.json' }] })
+    await click(tabNamed(container, 'Tokens')!)
+
+    const row = container.querySelector('.tokens .token')
+    expect(text(row?.querySelector('.nm'))).toBe('color.paper')
+    expect(text(row?.querySelector('.val'))).toBe('#fff7ed')
+    expect(row?.querySelector<HTMLElement>('.sw')?.style.background).toBe('rgb(255, 247, 237)')
   })
 })
 

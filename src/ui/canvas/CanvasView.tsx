@@ -2,6 +2,8 @@
 import {
   useCallback,
   useEffect,
+  useImperativeHandle,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -10,6 +12,8 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
+  type Ref,
+  type RefObject,
 } from 'react'
 import type { EditorState, ProbeToEditor, Rect, ResolvedValues } from '../../shared/protocol'
 import type { Board, CanvasLayout, EdId, EditOp, ProjectPath, TemplateNode } from '../../shared/types'
@@ -28,7 +32,7 @@ import {
   selectableHit,
   siblingSelection,
 } from './selection'
-import { fitRect, panBy, screenToBoard, viewportTransform, wheelZoomFactor, zoomAt, type Point } from './viewport'
+import { fitRect, panBy, screenToBoard, viewportTransform, wheelZoomFactor, zoomAt, zoomTo, type Insets, type Point, type Size } from './viewport'
 
 export interface ToolModule {
   readonly tool: CanvasTool
@@ -48,7 +52,15 @@ export function defaultCanvasTools(): CanvasTool[] {
 
 const DEFAULT_TOOLS = defaultCanvasTools()
 
+/** What the shell's zoom menu asks of the canvas. */
+export interface CanvasCommands {
+  readonly fitBoard: () => void
+  readonly fitSelection: () => void
+  readonly zoomTo: (zoom: number) => void
+}
+
 export interface CanvasViewProps {
+  readonly ref?: Ref<CanvasCommands>
   readonly store: EditorStore
   readonly ws: WsClient
   readonly layout: CanvasLayout
@@ -73,8 +85,39 @@ const PAGE_REDREW = 'Page redrew, edit cancelled'
 const LIVE_VALUE = 'Contains a live value; edit in source or Tweaks'
 const EDIT_IN_SOURCE = 'Edit in source: only an element holding a single run of text is edited in place'
 
+const RULER = 20
+/** Room around a fitted board: the rulers, the board's label above it, and a margin. */
+const BOARD_INSETS: Insets = { top: RULER + 48, right: 40, bottom: 40, left: RULER + 40 }
+
 function fileName(path: ProjectPath): string {
   return path.slice(path.lastIndexOf('/') + 1)
+}
+
+function sizeOf(element: HTMLElement | null): Size {
+  return { width: element?.clientWidth ?? 0, height: element?.clientHeight ?? 0 }
+}
+
+function boardFit(board: Board, container: Size) {
+  return fitRect({ x: 0, y: 0, width: board.w, height: board.h }, container, BOARD_INSETS)
+}
+
+/** The element's size, kept current as the window or the panels around it change. */
+function useSize(ref: RefObject<HTMLElement | null>): Size {
+  const [size, setSize] = useState<Size>({ width: 0, height: 0 })
+  useLayoutEffect(() => {
+    const element = ref.current
+    if (!element) return
+    setSize(sizeOf(element))
+    const observer = new ResizeObserver(() => setSize(sizeOf(element)))
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [ref])
+  return size
+}
+
+export function openBoard(store: EditorStore, ws: WsClient, board: ProjectPath): void {
+  store.setBoard(board)
+  ws.send({ type: 'open', board })
 }
 
 function textEditRefusal(node: TemplateNode): string | null {
@@ -152,7 +195,7 @@ async function restoreAfterLoad(probe: ProbeClient, store: EditorStore): Promise
   if (perElement.some((rects) => rects.length === 0)) store.toast({ message: PAGE_RESET, tone: 'info' })
 }
 
-export function CanvasView({ store, ws, layout, editorState, platform, tools = DEFAULT_TOOLS, onProbe }: CanvasViewProps) {
+export function CanvasView({ ref, store, ws, layout, editorState, platform, tools = DEFAULT_TOOLS, onProbe }: CanvasViewProps) {
   const state = useSyncExternalStore(store.subscribe, store.getState)
   const [probe, setProbe] = useState<ProbeClient | null>(null)
   const [renderCount, setRenderCount] = useState(0)
@@ -169,21 +212,21 @@ export function CanvasView({ store, ws, layout, editorState, platform, tools = D
   const selectionRects = useRenderedRects(probe, state.view.selection, renderCount)
   const hoverRects = useRenderedRects(probe, hovered, renderCount)
 
+  const viewportSize = useSize(viewportRef)
   const board = layout.boards.find((entry) => entry.path === state.board)
   const viewport = state.view.viewport
-
-  function openBoard(path: ProjectPath): void {
-    store.setBoard(path)
-    ws.send({ type: 'open', board: path })
-  }
 
   useEffect(() => {
     const current = store.getState().board
     const first = current && layout.order.includes(current) ? current : layout.order[0]
-    if (!first) return
-    store.setBoard(first)
-    ws.send({ type: 'open', board: first })
+    if (first) openBoard(store, ws, first)
   }, [store, ws, layout])
+
+  useLayoutEffect(() => {
+    const container = sizeOf(viewportRef.current)
+    const laidOut = container.width > 0 && container.height > 0
+    if (board && laidOut && !store.hasView(board.path)) store.setViewport(boardFit(board, container))
+  }, [store, board])
 
   const attachFrame = useCallback(
     (frame: HTMLIFrameElement) => {
@@ -311,7 +354,7 @@ export function CanvasView({ store, ws, layout, editorState, platform, tools = D
     if (store.getState().interact) return
     const pointer = pointerAt(event)
     event.currentTarget.setPointerCapture(event.pointerId)
-    if (spaceHeld.current) {
+    if (spaceHeld.current || store.getState().mode === 'hand') {
       gesture.current = { kind: 'pan', last: { x: pointer.x, y: pointer.y } }
       return
     }
@@ -333,7 +376,7 @@ export function CanvasView({ store, ws, layout, editorState, platform, tools = D
       current.tool.onPointerMove?.(ctx, pointer)
       return
     }
-    if (event.buttons === 0 && !claimingTool('onHover', pointer)) void hoverAt(pointer)
+    if (event.buttons === 0 && store.getState().mode === 'select' && !claimingTool('onHover', pointer)) void hoverAt(pointer)
   }
 
   /** A tool that claimed the press but turns down its release never dragged, so the press is a click. */
@@ -352,19 +395,20 @@ export function CanvasView({ store, ws, layout, editorState, platform, tools = D
     if (!claimingTool('onDoubleClick', pointer)) void doubleClickAt(pointer)
   }
 
-  function containerSize() {
-    const element = viewportRef.current
-    return { width: element?.clientWidth ?? 0, height: element?.clientHeight ?? 0 }
-  }
-
   function fitBoard(): void {
-    if (board) store.setViewport(fitRect({ x: 0, y: 0, width: board.w, height: board.h }, containerSize()))
+    if (board) store.setViewport(boardFit(board, sizeOf(viewportRef.current)))
   }
 
   function fitSelection(): void {
     const bounds = boundsOf(selectionRects)
-    if (bounds) store.setViewport(fitRect(bounds, containerSize()))
+    if (bounds) store.setViewport(fitRect(bounds, sizeOf(viewportRef.current)))
   }
+
+  useImperativeHandle(ref, () => ({
+    fitBoard,
+    fitSelection,
+    zoomTo: (zoom) => store.setViewport(zoomTo(store.getState().view.viewport, zoom, sizeOf(viewportRef.current))),
+  }))
 
   function selectWith(next: (tree: TemplateNode, selection: readonly EdId[]) => EdId[]): void {
     const { index, view } = store.getState()
@@ -382,6 +426,10 @@ export function CanvasView({ store, ws, layout, editorState, platform, tools = D
         return () => selectWith((tree, selection) => siblingSelection(tree, selection, event.shiftKey ? -1 : 1))
       case 'Escape':
         return () => store.select([])
+      case 'v':
+        return () => store.setMode('select')
+      case 'h':
+        return () => store.setMode('hand')
     }
     return null
   }
@@ -413,16 +461,10 @@ export function CanvasView({ store, ws, layout, editorState, platform, tools = D
   }
 
   const selectionBounds = boundsOf(selectionRects)
+  const panning = state.mode === 'hand'
 
   return (
     <div className="canvas-view" style={styles.view}>
-      <CanvasBar
-        layout={layout}
-        current={state.board}
-        interact={state.interact}
-        onOpen={openBoard}
-        onInteract={() => store.setInteract(!store.getState().interact)}
-      />
       <div
         ref={viewportRef}
         data-canvas-viewport=""
@@ -441,7 +483,7 @@ export function CanvasView({ store, ws, layout, editorState, platform, tools = D
         <div
           ref={shieldRef}
           data-canvas-shield=""
-          style={{ ...styles.shield, pointerEvents: state.interact ? 'none' : 'auto' }}
+          style={{ ...styles.shield, pointerEvents: state.interact ? 'none' : 'auto', cursor: panning ? 'grab' : 'default' }}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
@@ -449,14 +491,16 @@ export function CanvasView({ store, ws, layout, editorState, platform, tools = D
           onDoubleClick={onDoubleClick}
         />
         <div style={styles.overlay}>
+          {board && <BoardLabel board={board} viewport={viewport} />}
           {hoverRects.map((rect, i) => (
             <Outline key={`hover-${i}`} kind="hover" box={screenBoxOf(viewport, rect)} />
           ))}
           {selectionRects.map((rect, i) => (
             <Outline key={`selection-${i}`} kind="selection" box={screenBoxOf(viewport, rect)} />
           ))}
+          {selectionBounds && <SizeTag bounds={selectionBounds} viewport={viewport} />}
         </div>
-        <Rulers viewport={viewport} range={selectionBounds && screenBoxOf(viewport, selectionBounds)} />
+        <Rulers viewport={viewport} size={viewportSize} selection={selectionBounds} />
       </div>
     </div>
   )
@@ -480,112 +524,99 @@ function ArtboardFrame({ board, src, onFrame }: ArtboardFrameProps) {
   )
 }
 
-interface CanvasBarProps {
-  readonly layout: CanvasLayout
-  readonly current: ProjectPath | null
-  readonly interact: boolean
-  readonly onOpen: (board: ProjectPath) => void
-  readonly onInteract: () => void
-}
-
-function CanvasBar({ layout, current, interact, onOpen, onInteract }: CanvasBarProps) {
-  return (
-    <div className="canvas-bar" style={styles.bar}>
-      <div data-board-switcher="" role="tablist" aria-label="Artboards" style={styles.switcher}>
-        {layout.order.map((path) => {
-          const isPage = layout.pages.includes(path)
-          const on = path === current
-          return (
-            <button
-              key={path}
-              type="button"
-              role="tab"
-              aria-selected={on}
-              data-board={path}
-              {...(isPage ? { 'data-page': '' } : {})}
-              title={isPage ? `${fileName(path)} · page` : fileName(path)}
-              style={on ? { ...styles.boardButton, ...styles.boardButtonOn } : styles.boardButton}
-              onClick={() => onOpen(path)}
-            >
-              {fileName(path)}
-            </button>
-          )
-        })}
-      </div>
-      <button
-        type="button"
-        role="switch"
-        aria-checked={interact}
-        aria-label="Interact"
-        title="Interact  hold I"
-        style={interact ? { ...styles.interact, ...styles.interactOn } : styles.interact}
-        onClick={onInteract}
-      >
-        Interact
-      </button>
-    </div>
-  )
-}
-
 function Outline({ kind, box }: { readonly kind: 'hover' | 'selection'; readonly box: ScreenBox }) {
   return <div data-outline={kind} style={{ ...(kind === 'hover' ? styles.hover : styles.selection), ...box }} />
 }
 
-const RULER = 20
-const RULER_TICK = 100
+function BoardLabel({ board, viewport }: { readonly board: Board; readonly viewport: Viewport }) {
+  const box = screenBoxOf(viewport, { x: 0, y: 0, width: board.w, height: board.h })
+  return (
+    <div className="ablabel" data-board-label="" style={{ left: box.left, top: box.top - 24, width: box.width }}>
+      <span>{fileName(board.path)}</span>
+      <span className="dims">
+        {board.w} × {board.h}
+      </span>
+    </div>
+  )
+}
 
-function Rulers({ viewport, range }: { readonly viewport: Viewport; readonly range: ScreenBox | null }) {
-  const tick = RULER_TICK * viewport.zoom
+function SizeTag({ bounds, viewport }: { readonly bounds: Rect; readonly viewport: Viewport }) {
+  const box = screenBoxOf(viewport, bounds)
+  return (
+    <div className="tag size" data-size-tag="" style={{ left: box.left + box.width / 2, top: box.top + box.height + 8 }}>
+      {Math.round(bounds.width)} × {Math.round(bounds.height)}
+    </div>
+  )
+}
+
+/** Board units between numbered ticks: the smallest that keeps the numbers this far apart on screen. */
+const RULER_STEPS = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000]
+const RULER_LABEL_GAP = 48
+/** Numbers this close to a selection edge give way to the edge's own number. */
+const RULER_EDGE_CLEARANCE = 32
+
+function rulerStep(zoom: number): number {
+  return RULER_STEPS.find((step) => step * zoom >= RULER_LABEL_GAP) ?? RULER_STEPS.at(-1)!
+}
+
+function tickValues(pan: number, zoom: number, length: number, step: number): number[] {
+  const values: number[] = []
+  for (let value = Math.ceil(-pan / zoom / step) * step; pan + value * zoom < length; value += step) values.push(value)
+  return values
+}
+
+interface RulerProps {
+  readonly axis: 'x' | 'y'
+  readonly pan: number
+  readonly zoom: number
+  readonly length: number
+  /** The selection's start and end in board units. */
+  readonly range: readonly [number, number] | null
+}
+
+function Ruler({ axis, pan, zoom, length, range }: RulerProps) {
+  const step = rulerStep(zoom)
+  const major = step * zoom
+  const toScreen = (value: number) => pan + value * zoom
+  const edges = range?.map(toScreen) ?? []
+  const ticks = tickValues(pan, zoom, length, step).filter((value) => edges.every((edge) => Math.abs(toScreen(value) - edge) > RULER_EDGE_CLEARANCE))
+  const along = axis === 'x' ? 'left' : 'top'
+  const extent = axis === 'x' ? 'width' : 'height'
+  const background =
+    axis === 'x'
+      ? { backgroundSize: `${major / 5}px 4px, ${major}px ${RULER}px`, backgroundPosition: `${pan}px 100%, ${pan}px 0` }
+      : { backgroundSize: `4px ${major / 5}px, ${RULER}px ${major}px`, backgroundPosition: `100% ${pan}px, 0 ${pan}px` }
+
+  return (
+    <div data-ruler={axis} className={`ruler ${axis}`} style={background}>
+      {range && <div data-ruler-range="" className="band" style={{ [along]: edges[0], [extent]: edges[1]! - edges[0]! }} />}
+      {ticks.map((value) => (
+        <span key={value} style={{ [along]: toScreen(value) }}>
+          {value}
+        </span>
+      ))}
+      {range?.map((value, at) => (
+        <span key={`edge-${at}`} className={at === 0 ? 'edge' : 'edge end'} style={{ [along]: edges[at] }}>
+          {Math.round(value)}
+        </span>
+      ))}
+    </div>
+  )
+}
+
+function Rulers({ viewport, size, selection }: { readonly viewport: Viewport; readonly size: Size; readonly selection: Rect | null }) {
+  const { zoom, panX, panY } = viewport
   return (
     <>
-      <div
-        data-ruler="x"
-        style={{ ...styles.rulerX, backgroundSize: `${tick}px 6px`, backgroundPosition: `${viewport.panX}px 100%` }}
-      >
-        {range && <div data-ruler-range="" style={{ ...styles.rulerRange, top: 0, height: RULER, left: range.left, width: range.width }} />}
-      </div>
-      <div
-        data-ruler="y"
-        style={{ ...styles.rulerY, backgroundSize: `6px ${tick}px`, backgroundPosition: `100% ${viewport.panY}px` }}
-      >
-        {range && <div data-ruler-range="" style={{ ...styles.rulerRange, left: 0, width: RULER, top: range.top, height: range.height }} />}
-      </div>
-      <div style={styles.rulerCorner} />
+      <Ruler axis="x" pan={panX} zoom={zoom} length={size.width} range={selection && [selection.x, selection.x + selection.width]} />
+      <Ruler axis="y" pan={panY} zoom={zoom} length={size.height} range={selection && [selection.y, selection.y + selection.height]} />
+      <div className="ruler corner" />
     </>
   )
 }
 
 const styles = {
   view: { display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 },
-  bar: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 8,
-    height: 40,
-    padding: '0 8px',
-    background: 'var(--panel)',
-    borderBottom: '1px solid var(--line)',
-  },
-  switcher: { display: 'flex', gap: 2, minWidth: 0, overflowX: 'auto' },
-  boardButton: {
-    height: 28,
-    padding: '0 10px',
-    borderRadius: 'var(--r-sm)',
-    color: 'var(--text-2)',
-    fontWeight: 500,
-    whiteSpace: 'nowrap',
-  },
-  boardButtonOn: { background: 'var(--accent-soft)', color: 'var(--text)' },
-  interact: {
-    marginLeft: 'auto',
-    height: 28,
-    padding: '0 10px',
-    borderRadius: 'var(--r-sm)',
-    background: 'var(--field)',
-    color: 'var(--text-2)',
-    fontWeight: 600,
-  },
-  interactOn: { background: 'var(--accent)', color: 'var(--accent-ink)' },
   viewport: {
     position: 'relative',
     flex: 1,
@@ -595,6 +626,7 @@ const styles = {
     backgroundColor: 'var(--canvas)',
     backgroundImage: 'radial-gradient(var(--canvas-dot) 1px, transparent 1.2px)',
     backgroundSize: '16px 16px',
+    backgroundPosition: '4px 4px',
   },
   board: { position: 'absolute', left: 0, top: 0, transformOrigin: '0 0' },
   frame: { display: 'block', border: 0, background: '#fff', boxShadow: 'var(--ab-shadow)' },
@@ -602,39 +634,4 @@ const styles = {
   overlay: { position: 'absolute', inset: 0, pointerEvents: 'none' },
   hover: { position: 'absolute', boxSizing: 'border-box', border: '1px solid color-mix(in srgb, var(--sel) 70%, transparent)' },
   selection: { position: 'absolute', boxSizing: 'border-box', border: '1px solid var(--sel)' },
-  rulerX: {
-    position: 'absolute',
-    left: 0,
-    top: 0,
-    right: 0,
-    height: RULER,
-    backgroundColor: 'var(--panel)',
-    backgroundImage: 'linear-gradient(to right, var(--line-strong) 1px, transparent 1px)',
-    backgroundRepeat: 'repeat-x',
-    borderBottom: '1px solid var(--line)',
-    pointerEvents: 'none',
-  },
-  rulerY: {
-    position: 'absolute',
-    left: 0,
-    top: 0,
-    bottom: 0,
-    width: RULER,
-    backgroundColor: 'var(--panel)',
-    backgroundImage: 'linear-gradient(to bottom, var(--line-strong) 1px, transparent 1px)',
-    backgroundRepeat: 'repeat-y',
-    borderRight: '1px solid var(--line)',
-    pointerEvents: 'none',
-  },
-  rulerRange: { position: 'absolute', background: 'var(--accent-soft)' },
-  rulerCorner: {
-    position: 'absolute',
-    left: 0,
-    top: 0,
-    width: RULER,
-    height: RULER,
-    background: 'var(--panel)',
-    borderRight: '1px solid var(--line)',
-    borderBottom: '1px solid var(--line)',
-  },
 } satisfies Record<string, CSSProperties>

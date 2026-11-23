@@ -2,13 +2,17 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { withReplacedIds, type EditorState, type ServerMessage, type UndoState } from '../shared/protocol'
 import type { CanvasLayout, EditRecord, ProjectPath } from '../shared/types'
 import { createDefaultRegistry, type Platform } from './actions/registry'
-import { canvasContext, CanvasView } from './canvas/CanvasView'
+import { canvasContext, CanvasView, openBoard, type CanvasCommands } from './canvas/CanvasView'
+import { ToolDock } from './canvas/ToolDock'
 import { describeEdit, DiffPanel, fileName } from './DiffPanel'
 import { ErrorBoundary } from './ErrorBoundary'
 import { LayersPanel } from './panels/LayersPanel'
 import { PropertiesPanel, type Token } from './panels/PropertiesPanel'
+import { TokensPanel } from './panels/TokensPanel'
 import type { ProbeClient } from './probe-client'
+import { ShellIcon } from './shell-icons'
 import type { EditorStore, ShownToast } from './store'
+import { BoardSwitcher, PreviewSwitch, PushButton, SyncStrip, ZoomMenu, type SyncStep } from './TopBar'
 import type { WsClient } from './ws-client'
 
 export interface AppProps {
@@ -29,8 +33,7 @@ interface SavedEdit {
   readonly line: number | null
 }
 
-type LeftTab = 'layers' | 'changes'
-type SyncStep = 'pulled' | 'edited' | 'pushing'
+type LeftTab = 'layers' | 'tokens' | 'changes'
 type RestoredMessage = Extract<ServerMessage, { type: 'restored' }>
 
 const NO_UNDO: UndoState = { canUndo: false, canRedo: false, undoLabel: null, redoLabel: null }
@@ -41,35 +44,6 @@ const OFFLINE_BANNER = 'offline'
 const SHORTCUTS: Readonly<Record<Platform, { readonly undo: string; readonly redo: string }>> = {
   mac: { undo: '⌘Z', redo: '⇧⌘Z' },
   windows: { undo: 'Ctrl+Z', redo: 'Ctrl+Shift+Z' },
-}
-
-const ICON_PATHS = {
-  check: <path d="M3 8.5l3 3 7-7" />,
-  'chev-r': <path d="M6 4l4 4-4 4" />,
-  push: <path d="M5 12.5h-.5a3 3 0 0 1-.4-6A4 4 0 0 1 11.8 5.5a3 3 0 0 1 .2 7h-1M8 14V8.5M6 10.5l2-2 2 2" />,
-  undo: <path d="M5.5 3.5l-3 3 3 3M2.5 6.5h7a4 4 0 0 1 0 8H7" />,
-  redo: <path d="M10.5 3.5l3 3-3 3M13.5 6.5h-7a4 4 0 0 0 0 8H9" />,
-  sun: (
-    <>
-      <circle cx="8" cy="8" r="2.75" />
-      <path d="M8 1.5v1.5M8 13v1.5M1.5 8H3M13 8h1.5M3.4 3.4l1.1 1.1M11.5 11.5l1.1 1.1M3.4 12.6l1.1-1.1M11.5 4.5l1.1-1.1" />
-    </>
-  ),
-  moon: <path d="M13 9.6A5.5 5.5 0 1 1 6.4 3a4.5 4.5 0 0 0 6.6 6.6z" />,
-  warn: (
-    <>
-      <path d="M7.1 2.9a1 1 0 0 1 1.8 0l5.4 9.6a1 1 0 0 1-.9 1.5H2.6a1 1 0 0 1-.9-1.5z" />
-      <path d="M8 6.5v3M8 11.6v.1" />
-    </>
-  ),
-} satisfies Record<string, ReactNode>
-
-function ShellIcon({ name, className = 'i' }: { readonly name: keyof typeof ICON_PATHS; readonly className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 16 16" aria-hidden="true">
-      {ICON_PATHS[name]}
-    </svg>
-  )
 }
 
 function Mark() {
@@ -138,6 +112,7 @@ export function App({ store, ws, platform, projectName }: AppProps) {
   const [leftTab, setLeftTab] = useState<LeftTab>('layers')
   const [tokens, setTokens] = useState<readonly Token[]>([])
   const staleToast = useRef<string | null>(null)
+  const canvas = useRef<CanvasCommands>(null)
   const registry = useMemo(() => createDefaultRegistry(platform), [platform])
   const editorState = session?.editorState
   const ctx = useMemo(
@@ -261,6 +236,7 @@ export function App({ store, ws, platform, projectName }: AppProps) {
   const panelCtx = probe && ctx
   const syncStep: SyncStep = state.readOnly ? 'pushing' : state.records.length > 0 ? 'edited' : 'pulled'
   const shortcuts = SHORTCUTS[platform]
+  const shownTab = leftTab === 'tokens' && tokens.length === 0 ? 'layers' : leftTab
 
   return (
     <div className="app">
@@ -280,25 +256,41 @@ export function App({ store, ws, platform, projectName }: AppProps) {
         <button type="button" className="ibtn" title={`Redo  ${shortcuts.redo}`} disabled={!undoState.canRedo || state.readOnly} onClick={() => ws.redo()}>
           <ShellIcon name="redo" />
         </button>
+        {session && (
+          <>
+            <div className="vsep" />
+            <BoardSwitcher layout={session.layout} current={state.board} onOpen={(board) => openBoard(store, ws, board)} />
+          </>
+        )}
+        <div className="vsep" />
+        <ZoomMenu zoom={state.view.viewport.zoom} canvas={canvas} />
         <div className="spacer" />
         <button type="button" className="ibtn theme-ico" title="Toggle light / dark" onClick={toggleTheme}>
           <ShellIcon name="sun" className="i sun" />
           <ShellIcon name="moon" className="i moon" />
         </button>
+        <PreviewSwitch on={state.interact} onToggle={() => store.setInteract(!store.getState().interact)} />
+        <PushButton pending={state.records.length} pushing={state.readOnly} />
       </header>
 
       <aside className="left">
         <div className="ptabs" role="tablist" aria-label="Left panel">
-          <LeftTabButton tab="layers" current={leftTab} onPick={setLeftTab}>
+          <LeftTabButton tab="layers" current={shownTab} onPick={setLeftTab}>
             Layers
           </LeftTabButton>
-          <LeftTabButton tab="changes" current={leftTab} onPick={setLeftTab}>
+          {tokens.length > 0 && (
+            <LeftTabButton tab="tokens" current={shownTab} onPick={setLeftTab}>
+              Tokens
+            </LeftTabButton>
+          )}
+          <LeftTabButton tab="changes" current={shownTab} onPick={setLeftTab}>
             Changes{state.records.length > 0 && <span className="n">{state.records.length}</span>}
           </LeftTabButton>
         </div>
         <ErrorBoundary area="left panel">
-          {panelCtx && leftTab === 'layers' && <LayersPanel ctx={panelCtx} onEditorStateChange={changeEditorState} />}
-          {leftTab === 'changes' && <DiffPanel records={state.records} onRevertFile={(file) => ws.send({ type: 'revertFile', file })} />}
+          {panelCtx && shownTab === 'layers' && <LayersPanel ctx={panelCtx} platform={platform} onEditorStateChange={changeEditorState} />}
+          {shownTab === 'tokens' && <TokensPanel tokens={tokens} />}
+          {shownTab === 'changes' && <DiffPanel records={state.records} onRevertFile={(file) => ws.send({ type: 'revertFile', file })} />}
         </ErrorBoundary>
       </aside>
 
@@ -315,9 +307,18 @@ export function App({ store, ws, platform, projectName }: AppProps) {
         )}
         <ErrorBoundary area="canvas">
           {session && editorState && (
-            <CanvasView store={store} ws={ws} layout={session.layout} editorState={editorState} platform={platform} onProbe={setProbe} />
+            <CanvasView
+              ref={canvas}
+              store={store}
+              ws={ws}
+              layout={session.layout}
+              editorState={editorState}
+              platform={platform}
+              onProbe={setProbe}
+            />
           )}
         </ErrorBoundary>
+        <ToolDock store={store} />
         <div className="toasts">
           {state.toasts.map((toast) => (
             <NoticeToast key={toast.id} store={store} toast={toast} />
@@ -333,34 +334,6 @@ export function App({ store, ws, platform, projectName }: AppProps) {
       ) : (
         <aside className="props" aria-label="Properties" />
       )}
-    </div>
-  )
-}
-
-const SYNC_LABELS: Readonly<Record<SyncStep, string>> = {
-  pulled: 'Sync status: pulled, no edits yet',
-  edited: 'Sync status: edited, changes not pushed',
-  pushing: 'Sync status: pushing',
-}
-
-function SyncStrip({ step, edits }: { readonly step: SyncStep; readonly edits: number }) {
-  const currentIf = (candidate: SyncStep) => (candidate === step ? ('step' as const) : undefined)
-  return (
-    <div className="sync" role="status" aria-label={SYNC_LABELS[step]}>
-      <span className="step done" aria-current={currentIf('pulled')}>
-        <ShellIcon name="check" />
-        Pulled
-      </span>
-      <ShellIcon name="chev-r" className="i arrow" />
-      <span className="step" aria-current={currentIf('edited')}>
-        {edits > 0 && <span className="dot" />}
-        Edited {edits > 0 && <span className="n">· {edits}</span>}
-      </span>
-      <ShellIcon name="chev-r" className="i arrow" />
-      <span className="step" aria-current={currentIf('pushing')}>
-        <ShellIcon name="push" />
-        Pushing
-      </span>
     </div>
   )
 }
