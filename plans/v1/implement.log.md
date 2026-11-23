@@ -44,3 +44,16 @@ Records what each wave built and where it departed from the plan.
   deviated: hit-testing treats `top` and `deeper` the same (id'd ancestor under `within`); only `deepest` is used today.
   deviated: adds a realpath containment check and blocks every dot-segment, beyond what the tests ask.
   deviated: the probe bundle is built with vite build() since vite is the only declared bundler dependency.
+
+## Wave 5 (2026-11-23)
+- t7 M2 Writer, snapshot UndoLog, Watcher and reconcile — adds the debounced Writer with one undo entry per flush, the snapshot UndoLog, the chokidar project watcher and the tag-LCS reconcile.
+  deviated: minted ids use the Writer's own `n<k>` counter because SourceIndex keeps its minting private.
+  deviated: `resolved` is null for `<helmet><style>` rule edits since RuleIds are re-minted on every index, so the UI reloads for them.
+  deviated: the watcher also keeps a per-file last-seen hash, built from the initial scan, because macOS fs.watch replays recent writes.
+  deviated: coalescing is one undo entry per flush; pauses over 300 ms in a burst give separate entries.
+  deviated: a structural flush with several ops lists all minted ids in each ack; a still-locked write stays pending with no retry timer; unlink events and restoreByPath are not sent anywhere yet.
+- t12 M1/M2 panels: layers tree, properties panel, fields, tokens — adds the Layers tree with drag-drop, the Properties panel with Appearance, Fill, Stroke, Effects and Typography sections, and shared field components.
+  deviated: no visual colour-picker popover yet; the picker is a Colour text input plus Alpha %, and a hex typed over oklch() is written as hex.
+  deviated: the post-write script-override warning only sees px values; the text-box trim switch is always shown with a warning when unsupported.
+  deviated: the token picker lists every token without a kind filter and the selector chip lists only rules shared by every selected element.
+  deviated: panel CSS lives in scoped style blocks and depends on B Warm CSS variables defined by the app shell.
