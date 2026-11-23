@@ -532,7 +532,8 @@ describe('outside edits seen by the watcher', () => {
     writeOutside(root, HOME, outside)
 
     expect(await client.waitFor('outsideChange', (message) => message.file === HOME, at)).toMatchObject({ pendingOps: false })
-    const reindexed = (await client.waitFor('index', (message) => message.index.board === HOME, at)).index
+    // The font-size edit's own index can still arrive after `at`, so wait for the one built from the outside text.
+    const reindexed = (await client.waitFor('index', (message) => message.index.board === HOME && message.index.text === outside, at)).index
     const location = reindexed.locations[h1]!
     expect(outside.slice(location.startTag.start, location.startTag.end)).toBe('<h1 style="margin: 0; font-size: 56px">')
     await client.waitFor('undoState', (message) => !message.state.canUndo, at)
@@ -716,7 +717,7 @@ describe('the push lock endpoints', () => {
     expect(existsSync(path.join(root, '.editor', 'push.lock'))).toBe(false)
     await client.waitFor('pushLock', (message) => !message.held, at)
     await client.waitFor('outsideChange', (message) => message.file === HOME, at)
-    const reindexed = (await client.waitFor('index', (message) => message.index.board === HOME, at)).index
+    const reindexed = (await client.waitFor('index', (message) => message.index.board === HOME && message.index.text === merged, at)).index
     expect(merged.slice(reindexed.locations[h1]!.startTag.start, reindexed.locations[h1]!.startTag.end)).toMatch(/^<h1\b/)
 
     const undoneAt = client.messages.length
