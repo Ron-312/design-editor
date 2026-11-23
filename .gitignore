@@ -1,0 +1,6 @@
+node_modules/
+dist/
+.workflow/
+projects/
+.DS_Store
+*.log

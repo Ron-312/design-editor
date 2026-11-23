@@ -1,0 +1,803 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1440">
+<title>Quiet Precision Editor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   Quiet precision — editor chrome tokens
+   Light is the default; add class="dark" on <html> for dark.
+   ============================================================ */
+:root{
+  --bg:#F3F4F6;
+  --panel:#FFFFFF;
+  --canvas:#E7E8EB;
+  --ruler:#F7F8F9;
+  --tick:#C9CCD2;
+  --line:#E5E6EA;
+  --line-2:#D3D6DB;
+  --text:#16181B;      /* 17.6:1 on panel */
+  --text-2:#474C55;    /*  8.6:1 on panel */
+  --text-3:#646973;    /*  5.4:1 on panel, 4.9:1 on field */
+  --text-4:#A3A7AF;    /* decorative only: idle icons, dots */
+  --field:#F1F2F4;
+  --hover:#F1F2F4;
+  --on:#FFFFFF;
+  --sel:#E8EDFC;
+  --sel-child:#F4F6FE;
+  --accent:#2F55D4;    /* 6.3:1 on white */
+  --accent-press:#2547B8;
+  --accent-ink:#FFFFFF;
+  --accent-weak:#E8EDFC;
+  --accent-fg:#2443B0; /* 6.9:1 on accent-weak */
+  --overlay:#2F55D4;   /* selection, handles on the canvas */
+  --measure:#D23746;   /* Alt-measure, 4.9:1 with white text */
+  --guide:#C0268A;     /* smart guides */
+  --ok:#1E7F55;
+  --toast-bg:#16181B;
+  --toast-text:#F3F4F6;
+  --toast-2:#A9AEB6;
+  --pop:0 1px 2px rgba(16,18,22,.06),0 8px 24px rgba(16,18,22,.14);
+  --board:0 0 0 1px rgba(16,18,22,.07),0 1px 2px rgba(16,18,22,.06);
+  color-scheme:light;
+}
+html.dark{
+  --bg:#0F1012;
+  --panel:#17181B;
+  --canvas:#212226;
+  --ruler:#1A1B1E;
+  --tick:#3A3D43;
+  --line:#26282C;
+  --line-2:#35383D;
+  --text:#ECEDEF;      /* 15.3:1 on panel */
+  --text-2:#B5B9C0;    /*  9.0:1 */
+  --text-3:#8F949C;    /*  5.8:1 on panel, 5.1:1 on field */
+  --text-4:#5A5E66;
+  --field:#222327;
+  --hover:#202125;
+  --on:#2E3035;
+  --sel:#232A42;
+  --sel-child:#1C1F29;
+  --accent:#7B97FF;    /* 6.5:1 on panel */
+  --accent-press:#94ABFF;
+  --accent-ink:#0B1230;
+  --accent-weak:#232A42;
+  --accent-fg:#ADBFFF; /* 8.1:1 on accent-weak */
+  --overlay:#4E72F2;
+  --toast-bg:#ECEDEF;
+  --toast-text:#16181B;
+  --toast-2:#50555E;
+  --pop:0 1px 2px rgba(0,0,0,.4),0 8px 24px rgba(0,0,0,.5);
+  --board:0 0 0 1px rgba(255,255,255,.06),0 2px 8px rgba(0,0,0,.35);
+  color-scheme:dark;
+}
+
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  background:var(--bg);color:var(--text);
+  font:400 12px/16px Inter,system-ui,sans-serif;
+  font-variant-numeric:tabular-nums;font-feature-settings:"tnum","cv11";
+  -webkit-font-smoothing:antialiased;overflow:hidden;
+}
+button{font:inherit;color:inherit;background:none;border:0;cursor:default}
+.mono{font-family:"JetBrains Mono",ui-monospace,monospace;font-size:11px;letter-spacing:-.01em}
+.t2{color:var(--text-2)} .t3{color:var(--text-3)}
+svg.i{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.25;stroke-linecap:round;stroke-linejoin:round}
+svg.i.s12{width:12px;height:12px}
+
+.app{width:1440px;height:900px;display:grid;grid-template-columns:248px 912px 280px;grid-template-rows:44px 856px;background:var(--panel)}
+
+/* ---------- shared controls ---------- */
+.ibtn{width:24px;height:24px;display:grid;place-items:center;border-radius:4px;color:var(--text-2)}
+.ibtn:hover{background:var(--hover);color:var(--text)}
+.ibtn.lg{width:28px;height:28px}
+.ibtn.off{color:var(--text-4)}
+.seg{display:flex;height:24px;padding:2px;border-radius:4px;background:var(--field)}
+.seg>button{flex:1;height:20px;display:flex;align-items:center;justify-content:center;gap:4px;border-radius:3px;color:var(--text-3);font-size:11px;font-weight:500}
+.seg>button.on{background:var(--on);color:var(--text);box-shadow:0 0 0 1px var(--line-2)}
+.fld{height:24px;flex:1;min-width:0;display:flex;align-items:center;gap:4px;padding:0 6px;border-radius:4px;background:var(--field);border:1px solid transparent}
+.fld .pre{color:var(--text-3);font-size:11px;width:12px;text-align:center;flex:none}
+.fld .v{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fld .u{color:var(--text-3);font-size:11px}
+.fld.ro .v{color:var(--text-3)}
+.fld.focus{background:var(--panel);border-color:var(--accent)}
+.fld.sel-like .v{color:var(--text)}
+.kbd{display:inline-grid;place-items:center;min-width:16px;height:16px;padding:0 4px;border-radius:3px;border:1px solid var(--line-2);font-size:11px;color:var(--text-2)}
+
+/* ---------- top bar ---------- */
+.top{grid-column:1/-1;display:grid;grid-template-columns:248px 912px 280px;border-bottom:1px solid var(--line);background:var(--panel)}
+.top-l{display:flex;align-items:center;gap:8px;padding:0 12px;border-right:1px solid var(--line)}
+.mark{width:24px;height:24px;border-radius:6px;display:grid;place-items:center;background:var(--text);color:var(--panel)}
+.proj{display:flex;flex-direction:column;min-width:0}
+.proj-name{font-size:12px;font-weight:600;line-height:16px;display:flex;align-items:center;gap:2px}
+.proj-sub{font-size:11px;color:var(--text-3);line-height:12px}
+.top-c{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;padding:0 12px}
+.sync{display:flex;align-items:center;height:28px;gap:4px;justify-self:start}
+.sync-step{white-space:nowrap;display:flex;align-items:center;gap:6px;height:24px;padding:0 8px;border-radius:12px;font-size:11px;font-weight:500;color:var(--text-3)}
+.sync-step.done{color:var(--text-2)}
+.sync-step.done svg{color:var(--ok)}
+.sync-step.now{background:var(--accent-weak);color:var(--accent-fg)}
+.sync-step .dot{width:6px;height:6px;border-radius:3px;background:var(--accent)}
+.sync-sep{width:12px;height:1px;background:var(--line-2)}
+.vp{width:216px}
+.vp>button{gap:4px}
+.top-tools{display:flex;align-items:center;justify-self:end;gap:4px}
+.vdiv{width:1px;height:16px;background:var(--line);margin:0 4px}
+.zoom{display:flex;align-items:center;gap:2px;height:28px;padding:0 4px 0 8px;border-radius:4px;font-weight:500}
+.zoom:hover{background:var(--hover)}
+.top-r{display:flex;align-items:center;justify-content:flex-end;gap:4px;padding:0 12px;border-left:1px solid var(--line)}
+.theme .sun{display:none} html.dark .theme .sun{display:block} html.dark .theme .moon{display:none}
+.avatar{width:24px;height:24px;border-radius:12px;background:#D9C7A8;color:#3B2F1D;font-size:11px;font-weight:600;display:grid;place-items:center;margin-right:4px}
+.push{display:flex;align-items:center;gap:6px;height:28px;padding:0 12px 0 8px;border-radius:6px;background:var(--accent);color:var(--accent-ink);font-weight:500}
+.push .n{min-width:16px;height:16px;border-radius:8px;padding:0 4px;background:rgba(255,255,255,.22);font-size:11px;display:grid;place-items:center}
+html.dark .push .n{background:rgba(11,18,48,.18)}
+
+/* ---------- left panel ---------- */
+.left{display:flex;flex-direction:column;border-right:1px solid var(--line);background:var(--panel);min-height:0}
+.tabs{display:flex;align-items:stretch;height:32px;padding:0 8px;gap:12px;border-bottom:1px solid var(--line)}
+.tab{display:flex;align-items:center;gap:6px;font-size:12px;font-weight:500;color:var(--text-3);box-shadow:inset 0 -1px 0 transparent;padding:0 4px}
+.tab.on{color:var(--text);box-shadow:inset 0 -1px 0 var(--text)}
+.tab .n{font-size:11px;color:var(--accent-fg);background:var(--accent-weak);border-radius:8px;padding:0 5px;line-height:16px}
+.ph{height:32px;display:flex;align-items:center;justify-content:space-between;padding:0 8px 0 12px}
+.ph-t{font-size:11px;font-weight:600;color:var(--text-2)}
+.ph-a{display:flex;gap:0}
+.list{padding:0 4px 8px}
+.row{position:relative;height:24px;display:flex;align-items:center;gap:4px;border-radius:4px;padding-right:4px;color:var(--text-2);white-space:nowrap}
+.row:hover{background:var(--hover)}
+.row .tw{width:16px;height:16px;display:grid;place-items:center;color:var(--text-3);flex:none}
+.row .tw svg{width:12px;height:12px}
+.row .ti{color:var(--text-3)}
+.row .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;color:var(--text)}
+.row .meta{color:var(--text-3);font-size:11px}
+.row .ra{display:none;gap:0}
+.row:hover .ra,.row.sel .ra,.row.pin .ra{display:flex}
+.row:hover .meta{display:none}
+.row .ra .ibtn{width:20px;height:20px}
+.row.sel{background:var(--sel)}
+.row.sel .nm{font-weight:500}
+.row.sel .ti{color:var(--accent)}
+.row.kid{background:var(--sel-child)}
+.row.kid:hover{background:var(--sel)}
+.row.hidden .nm,.row.hidden .ti{color:var(--text-3)}
+.row.top .nm{font-weight:500}
+.pg .ti{margin-left:4px}
+.pg.on{background:var(--hover)}
+.pg.on .nm{font-weight:500}
+.pg .chg{width:6px;height:6px;border-radius:3px;background:var(--accent);margin-right:4px}
+.d0{padding-left:4px}.d1{padding-left:16px}.d2{padding-left:28px}.d3{padding-left:40px}
+.hr{height:1px;background:var(--line);margin:0}
+.left-foot{margin-top:auto;height:28px;display:flex;align-items:center;justify-content:space-between;padding:0 12px;border-top:1px solid var(--line);font-size:11px;color:var(--text-3)}
+
+/* ---------- canvas ---------- */
+.canvas{position:relative;overflow:hidden;background:var(--canvas)}
+.rul-x{position:absolute;left:20px;top:0;right:0;height:20px;background-color:var(--ruler);border-bottom:1px solid var(--line);
+  background-image:linear-gradient(to right,var(--tick) 1px,transparent 1px),linear-gradient(to right,var(--tick) 1px,transparent 1px);
+  background-size:10px 4px,50px 20px;background-position:40px 100%,40px 0;background-repeat:repeat-x}
+.rul-y{position:absolute;left:0;top:20px;bottom:0;width:20px;background-color:var(--ruler);border-right:1px solid var(--line);
+  background-image:linear-gradient(to bottom,var(--tick) 1px,transparent 1px),linear-gradient(to bottom,var(--tick) 1px,transparent 1px);
+  background-size:4px 10px,20px 50px;background-position:100% 48px,0 48px;background-repeat:repeat-y}
+.rul-c{position:absolute;left:0;top:0;width:20px;height:20px;background:var(--ruler);border-right:1px solid var(--line);border-bottom:1px solid var(--line)}
+.rul-x span{position:absolute;top:2px;font-size:11px;line-height:12px;color:var(--text-3);padding-left:3px}
+.rul-y span{position:absolute;left:3px;font-size:11px;line-height:12px;color:var(--text-3);writing-mode:vertical-rl;transform:rotate(180deg);padding-bottom:3px}
+.rul-band-x{position:absolute;top:0;height:19px;background:var(--accent-weak);opacity:.9}
+.rul-band-y{position:absolute;left:0;width:19px;background:var(--accent-weak);opacity:.9}
+.rul-x .edge,.rul-y .edge{color:var(--accent-fg);font-weight:600;z-index:1}
+.world{position:absolute;left:20px;top:20px;right:0;bottom:0;overflow:hidden}
+.ab-label{position:absolute;height:16px;display:flex;align-items:center;gap:6px;font-size:11px;font-weight:500;color:var(--text-2)}
+.ab-label .t3{font-weight:400}
+.ab-label.on{color:var(--text)}
+.board{position:absolute;overflow:hidden;box-shadow:var(--board)}
+.ov{position:absolute;pointer-events:none}
+
+/* overlay pieces (canvas-space, theme-independent colours) */
+.selbox{position:absolute;box-shadow:inset 0 0 0 1px var(--overlay)}
+.h{position:absolute;width:7px;height:7px;background:#fff;box-shadow:inset 0 0 0 1px var(--overlay)}
+.pad-band{position:absolute;background:repeating-linear-gradient(-45deg,rgba(132,160,255,.42) 0 1px,transparent 1px 4px)}
+.pad-h{position:absolute;background:#fff;border:1px solid var(--overlay);border-radius:2px}
+.sizetag{position:absolute;left:0;right:0;display:flex;justify-content:center}
+.sizetag span,.mtag span{height:16px;padding:0 4px;border-radius:3px;font:500 11px/16px Inter,sans-serif;font-variant-numeric:tabular-nums;color:#fff;white-space:nowrap}
+.sizetag span{background:var(--overlay)}
+.sizetag em{font-style:normal;opacity:.78;margin-left:4px}
+.hover-out{position:absolute;box-shadow:inset 0 0 0 1px var(--measure)}
+.mline{position:absolute;height:1px;background:var(--measure)}
+.mline::before,.mline::after{content:"";position:absolute;top:-3px;width:1px;height:7px;background:var(--measure)}
+.mline::before{left:0}.mline::after{right:0}
+.mtag{position:absolute;display:flex;justify-content:center}
+.mtag span{background:var(--measure)}
+.guide{position:absolute;width:1px;background:var(--guide)}
+.gx{position:absolute;width:7px;height:7px}
+.gx::before,.gx::after{content:"";position:absolute;left:3px;top:-1px;width:1px;height:9px;background:var(--guide)}
+.gx::before{transform:rotate(45deg)}.gx::after{transform:rotate(-45deg)}
+.linked{position:absolute;border:1px dashed var(--overlay);opacity:.6}
+
+.hint{position:absolute;left:36px;bottom:16px;height:28px;display:flex;align-items:center;gap:8px;padding:0 10px 0 6px;border-radius:6px;background:var(--panel);box-shadow:var(--pop);font-size:11px;color:var(--text-2)}
+.hint .sw{width:8px;height:8px;border-radius:2px;background:var(--measure)}
+.toast{position:absolute;left:0;right:0;bottom:16px;display:flex;justify-content:center;pointer-events:none}
+.toast>div{pointer-events:auto;height:32px;display:flex;align-items:center;gap:8px;padding:0 4px 0 12px;border-radius:8px;background:var(--toast-bg);color:var(--toast-text);box-shadow:var(--pop);font-size:12px}
+.toast .ok{color:#6BD9A3}
+html.dark .toast .ok{color:var(--ok)}
+.toast .t{color:var(--toast-2)}
+.toast .sep{width:1px;height:16px;background:currentColor;opacity:.18}
+.toast button{height:24px;padding:0 8px;border-radius:4px;font-weight:500}
+.toast button:hover{background:rgba(127,127,127,.18)}
+.mini{position:absolute;right:16px;bottom:16px;height:28px;display:flex;align-items:center;gap:2px;padding:0 2px;border-radius:6px;background:var(--panel);box-shadow:var(--pop)}
+.mini .z{min-width:40px;text-align:center;font-size:11px;font-weight:500}
+
+/* ---------- right panel ---------- */
+.right{border-left:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column;min-height:0;overflow:hidden}
+.selhead{padding:8px 12px;border-bottom:1px solid var(--line)}
+.el-title{height:24px;display:flex;align-items:center;gap:6px}
+.el-title .ti{color:var(--accent)}
+.el-title b{font-weight:600}
+.el-title .mono{color:var(--text-3)}
+.chip{margin-top:4px;height:24px;width:100%;display:flex;align-items:center;gap:6px;padding:0 4px 0 6px;border-radius:4px;background:var(--field);border:1px solid var(--line);color:var(--text)}
+.chip .lead{color:var(--accent)}
+.chip .mono{flex:1;text-align:left}
+.chip .k{color:var(--text-3)}
+.chip-meta{margin-top:4px;height:16px;display:flex;align-items:center;gap:4px;font-size:11px;color:var(--text-3)}
+.chip-meta .okd{width:6px;height:6px;border-radius:3px;background:var(--ok)}
+.sec{padding:0 12px 8px;border-bottom:1px solid var(--line)}
+.sec-h{height:32px;display:flex;align-items:center;justify-content:space-between}
+.sec-t{font-size:11px;font-weight:600;color:var(--text);display:flex;align-items:center;gap:6px}
+.sec-t .badge{font-weight:500;color:var(--text-3);font-size:11px}
+.sec-a{display:flex;align-items:center;gap:0;margin-right:-4px}
+.pr{display:grid;grid-template-columns:56px 1fr;align-items:center;min-height:24px}
+.pr+.pr{margin-top:4px}
+.pl{font-size:11px;color:var(--text-3)}
+.pc{display:flex;align-items:center;gap:8px;min-width:0}
+.grp{display:flex;gap:0}
+.grp .ibtn.on{background:var(--field);color:var(--text)}
+.dots{width:56px;height:56px;flex:none;padding:4px;border-radius:4px;background:var(--field);display:grid;grid-template-columns:repeat(3,16px);grid-template-rows:repeat(3,16px)}
+.dots i{display:grid;place-items:center}
+.dots i::before{content:"";width:2px;height:2px;border-radius:1px;background:var(--text-4)}
+.dots i.on::before{display:none}
+.dots i.on{background:var(--on);border-radius:3px;box-shadow:0 0 0 1px var(--line-2);display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:2px;padding-left:3px}
+.dots i.on b{display:block;height:2px;border-radius:1px;background:var(--accent)}
+.padcol{flex:1;min-width:0;display:flex;flex-direction:column;gap:8px}
+.padcol .pc{gap:4px}
+.list-row{height:24px;display:flex;align-items:center;gap:4px}
+.list-row+.list-row{margin-top:4px}
+.tok{flex:1;min-width:0;height:24px;display:flex;align-items:center;gap:6px;padding:0 6px 0 4px;border-radius:4px;background:var(--accent-weak);color:var(--accent-fg)}
+.tok .sw{width:16px;height:16px;border-radius:3px;flex:none;box-shadow:inset 0 0 0 1px rgba(255,255,255,.12),0 0 0 1px rgba(0,0,0,.08)}
+.tok .nm{flex:1;min-width:0;font-weight:500}
+.tok .aa{width:16px;height:16px;flex:none;border-radius:3px;background:var(--panel);color:var(--text);font:600 10px/16px Manrope,sans-serif;text-align:center}
+.cap{height:16px;margin-top:2px;padding-left:26px;display:flex;align-items:center;color:var(--text-3)}
+.fx{flex:1;min-width:0;height:24px;display:flex;align-items:center;gap:6px;padding:0 6px 0 4px;border-radius:4px;background:var(--field)}
+.fx .v{color:var(--text-3);margin-left:auto}
+.sel-dd{height:24px;display:flex;align-items:center;justify-content:space-between;gap:4px;padding:0 4px 0 8px;border-radius:4px;background:var(--field);flex:1;min-width:0}
+.sel-dd svg{color:var(--text-3)}
+
+/* ============================================================
+   Canvas content — the user's design (not themed)
+   ============================================================ */
+.lp{font-family:Manrope,sans-serif;color:#14213D;background:#F6F4EF;-webkit-font-smoothing:antialiased;font-variant-numeric:normal;font-feature-settings:normal}
+.lp *{position:absolute}
+.lp .static,.lp .static *{position:static}
+.lp-nav{left:0;top:0;width:576px;height:32px;border-bottom:1px solid #E7E2D7}
+.lp-logo{left:32px;top:9px;display:flex;align-items:center;gap:5px;font-weight:800;font-size:11px;letter-spacing:-.2px;line-height:14px}
+.lp-logo i{position:static;width:12px;height:12px;border-radius:6px;background:conic-gradient(from 210deg,#0F766E,#5EE0A1,#14213D,#0F766E)}
+.lp-links{left:206px;top:11px;display:flex;gap:16px;font-size:8px;font-weight:500;color:#4A5468;line-height:10px}
+.lp-links span,.lp-ctas span{position:static}
+.lp-signin{left:440px;top:11px;font-size:8px;font-weight:600;line-height:10px;color:#14213D}
+.lp-navbtn{left:480px;top:7px;width:64px;height:18px;border-radius:5px;background:#14213D;color:#fff;font-size:8px;font-weight:700;display:grid;place-items:center}
+.lp-glow{left:300px;top:20px;width:320px;height:300px;background:radial-gradient(closest-side,rgba(94,224,161,.22),rgba(94,224,161,0))}
+.lp-copy{left:32px;top:72px;width:248px;height:196px}
+.lp-eyebrow{left:0;top:0;height:14px;padding:0 6px 0 4px;border-radius:7px;background:#E3EEE6;color:#17613F;font-size:7.5px;font-weight:700;display:flex;align-items:center;gap:4px;white-space:nowrap}
+.lp-eyebrow b{position:static;height:10px;padding:0 4px;border-radius:5px;background:#17613F;color:#fff;font-size:6.5px;line-height:10px}
+.lp-h1{left:0;top:24px;width:248px;font-size:27px;line-height:29px;font-weight:800;letter-spacing:-.9px}
+.lp-h1 em{position:static;font-style:normal;color:#0F766E}
+.lp-p{left:0;top:92px;width:236px;font-size:9.5px;line-height:14.5px;color:#4A5468;font-weight:500}
+.lp-btns{left:0;top:150px;display:flex;gap:6px}
+.lp-btn{position:static!important;height:22px;padding:0 10px;border-radius:6px;display:flex;align-items:center;gap:4px;font-size:8.5px;font-weight:700;white-space:nowrap}
+.lp-btn.pri{background:#0F766E;color:#fff;box-shadow:0 1px 0 rgba(255,255,255,.2) inset,0 2px 6px -2px rgba(15,118,110,.6)}
+.lp-btn.sec{background:#fff;color:#14213D;box-shadow:inset 0 0 0 1px #DAD4C7}
+.lp-trust{left:0;top:184px;font-size:7.5px;line-height:12px;color:#6B7385;font-weight:600;white-space:nowrap}
+.lp-trust b{position:static;color:#C98A17}
+.lp-card{left:312px;top:72px;width:232px;height:220px;border-radius:8px;background:#14213D;box-shadow:inset 0 0 0 1px #24345A,0 14px 28px -10px rgba(20,33,61,.55);color:#F3F5F9}
+.lp-card .static{position:absolute}
+.c-head{left:16px;top:16px;width:200px;height:16px;display:flex;align-items:center;justify-content:space-between}
+.c-head .t{font-size:9.5px;font-weight:700;line-height:12px}
+.c-head .s{font-size:7px;color:#9AA6BF;font-weight:600;margin-left:4px}
+.c-chip{height:12px;padding:0 5px;border-radius:6px;background:#1D4A3A;color:#7EE2B0;font-size:6.5px;font-weight:700;line-height:12px}
+.c-stat{left:16px;top:40px;display:flex;align-items:baseline;gap:5px}
+.c-stat .n{font-size:24px;line-height:28px;font-weight:800;letter-spacing:-.8px}
+.c-stat .l{font-size:8px;color:#9AA6BF;font-weight:600}
+.c-bar{left:16px;top:76px;width:200px;height:4px;border-radius:2px;background:#24345A;overflow:hidden}
+.c-bar i{display:block;position:absolute;left:0;top:0;width:172px;height:4px;border-radius:2px;background:linear-gradient(90deg,#2FB487,#5EE0A1)}
+.c-list{left:16px;top:88px;width:200px}
+.c-row{position:static!important;height:20px;display:flex!important;align-items:center;gap:6px;border-top:1px solid #213052;font-size:8px;font-weight:600}
+.c-row:first-child{border-top:0}
+.c-row .ck{position:static;width:10px;height:10px;border-radius:5px;background:#2FB487;display:grid;place-items:center}
+.c-row .ck svg{position:static;width:7px;height:7px;stroke:#0E2A20;stroke-width:2.2;fill:none;stroke-linecap:round;stroke-linejoin:round}
+.c-row .ck.p{background:none;box-shadow:inset 0 0 0 1px #4C5D84}
+.c-row .r{position:static;margin-left:auto;color:#9AA6BF;font-weight:600;font-variant-numeric:tabular-nums}
+.c-row .r.w{color:#F2C46B}
+.c-foot{left:16px;top:184px;width:200px;height:20px;display:flex;align-items:center;justify-content:space-between;font-size:7px;color:#9AA6BF;font-weight:600}
+.c-av{display:flex}
+.c-av i{position:static;width:14px;height:14px;border-radius:7px;box-shadow:0 0 0 1.5px #14213D;margin-left:-4px;display:block}
+.c-av i:first-child{margin-left:0}
+.c-foot .who{display:flex;align-items:center;gap:6px}
+.lp-logos{left:32px;top:324px;width:512px;height:44px}
+.lp-logos .k{left:0;top:0;width:512px;text-align:center;font-size:7.5px;font-weight:600;color:#6B7385;letter-spacing:.4px;text-transform:uppercase}
+.lp-logos .lrow{left:0;top:20px;width:512px;display:flex;justify-content:space-between;align-items:center;color:#8A93A6;height:20px}
+.lp-logos .lrow span{position:static;font-size:11px;font-weight:800;letter-spacing:-.2px}
+.lp-rule{left:32px;top:384px;width:512px;height:1px;background:#E7E2D7}
+.lp-ft{left:32px;top:408px;width:512px;text-align:center}
+.lp-ft .hd{position:static;display:block;font-size:15px;line-height:20px;font-weight:800;letter-spacing:-.4px}
+.lp-ft .s{position:static;display:block;margin-top:4px;font-size:8.5px;line-height:12px;color:#4A5468;font-weight:500}
+.lp-feats{left:32px;top:460px;width:512px;height:128px;display:flex;gap:16px}
+.lp-f{position:static!important;width:160px;height:128px;border-radius:6px;background:#fff;box-shadow:inset 0 0 0 1px #E7E2D7;padding:12px}
+.lp-f *{position:static}
+.lp-f .ic{width:18px;height:18px;border-radius:5px;display:grid;place-items:center}
+.lp-f .ic svg{width:11px;height:11px;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.lp-f .ft{display:block;margin-top:10px;font-size:10px;line-height:13px;font-weight:800;letter-spacing:-.2px}
+.lp-f .fd{display:block;margin-top:4px;font-size:8px;line-height:12px;color:#4A5468;font-weight:500}
+.lp-f .fl{display:block;margin-top:8px;font-size:8px;font-weight:700;color:#0F766E}
+.lp-band{left:32px;top:612px;width:512px;height:48px;border-radius:8px;background:#0F766E;color:#fff;display:flex;align-items:center;justify-content:space-between;padding:0 16px}
+.lp-band *{position:static}
+.lp-band .hd{font-size:11px;font-weight:800;letter-spacing:-.2px}
+.lp-band .s{display:block;font-size:7.5px;opacity:.85;font-weight:500;margin-top:1px}
+.lp-band .b{height:20px;padding:0 10px;border-radius:5px;background:#fff;color:#0F766E;font-size:8px;font-weight:800;display:grid;place-items:center}
+
+/* mobile board */
+.m-nav{left:0;top:0;width:195px;height:24px;border-bottom:1px solid #E7E2D7}
+.m-nav .lp-logo{left:12px;top:5px}
+.m-burger{left:167px;top:8px;width:16px;height:8px;border-top:1.5px solid #14213D;border-bottom:1.5px solid #14213D}
+.m-burger::after{content:"";position:absolute;left:0;top:2px;width:16px;height:1.5px;background:#14213D}
+.m-eye{left:12px;top:40px}
+.m-h1{left:12px;top:62px;width:171px;font-size:18px;line-height:20px;font-weight:800;letter-spacing:-.6px}
+.m-h1 em{position:static;font-style:normal;color:#0F766E}
+.m-p{left:12px;top:110px;width:171px;font-size:8px;line-height:12px;color:#4A5468;font-weight:500}
+.m-btn{left:12px;width:171px;height:22px;border-radius:6px;font-size:8.5px;font-weight:700;display:grid;place-items:center}
+.m-card{left:12px;top:224px;width:171px;height:182px;border-radius:7px;background:#14213D;color:#F3F5F9;box-shadow:inset 0 0 0 1px #24345A}
+.m-card .static{position:absolute}
+</style>
+</head>
+<body>
+
+<!-- Icon set: 16px grid, 1.25 stroke, round caps. All chrome icons come from here. -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-mark" viewBox="0 0 16 16"><path d="M3 6.5V3h3.5M9.5 3H13v3.5M13 9.5V13H9.5M6.5 13H3V9.5"/><path d="M8 6.5v3M6.5 8h3"/></symbol>
+    <symbol id="i-cd" viewBox="0 0 16 16"><path d="M5 6.5l3 3 3-3"/></symbol>
+    <symbol id="i-cr" viewBox="0 0 16 16"><path d="M6.5 5l3 3-3 3"/></symbol>
+    <symbol id="i-undo" viewBox="0 0 16 16"><path d="M5.5 4L3 6.5 5.5 9"/><path d="M3 6.5h6.5a3.25 3.25 0 010 6.5H7"/></symbol>
+    <symbol id="i-redo" viewBox="0 0 16 16"><path d="M10.5 4L13 6.5 10.5 9"/><path d="M13 6.5H6.5a3.25 3.25 0 000 6.5H9"/></symbol>
+    <symbol id="i-desktop" viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="8.5" rx="1"/><path d="M6 13.5h4M8 11.5v2"/></symbol>
+    <symbol id="i-tablet" viewBox="0 0 16 16"><rect x="3.5" y="2" width="9" height="12" rx="1.5"/><path d="M7.25 12h1.5"/></symbol>
+    <symbol id="i-phone" viewBox="0 0 16 16"><rect x="5" y="2" width="6" height="12" rx="1.5"/><path d="M7.5 12h1"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 16 16"><path d="M13 9.6A5.25 5.25 0 016.4 3a5.25 5.25 0 106.6 6.6z"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.75"/><path d="M8 1.75v1.5M8 12.75v1.5M1.75 8h1.5M12.75 8h1.5M3.6 3.6l1 1M11.4 11.4l1 1M3.6 12.4l1-1M11.4 4.6l1-1"/></symbol>
+    <symbol id="i-play" viewBox="0 0 16 16"><path d="M5.5 3.75v8.5L12 8z"/></symbol>
+    <symbol id="i-eye" viewBox="0 0 16 16"><path d="M1.75 8S4 3.75 8 3.75 14.25 8 14.25 8 12 12.25 8 12.25 1.75 8 1.75 8z"/><circle cx="8" cy="8" r="2"/></symbol>
+    <symbol id="i-eyeoff" viewBox="0 0 16 16"><path d="M6.3 4a6.3 6.3 0 011.7-.25C12 3.75 14.25 8 14.25 8a10 10 0 01-1.6 2.1M4.2 5.1A10 10 0 001.75 8S4 12.25 8 12.25a6 6 0 003-.8"/><path d="M2.5 2.5l11 11"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 16 16"><rect x="3.5" y="7" width="9" height="6.5" rx="1"/><path d="M5.5 7V5a2.5 2.5 0 015 0v2"/></symbol>
+    <symbol id="i-unlock" viewBox="0 0 16 16"><rect x="3.5" y="7" width="9" height="6.5" rx="1"/><path d="M5.5 7V5a2.5 2.5 0 014.8-1"/></symbol>
+    <symbol id="i-frame" viewBox="0 0 16 16"><path d="M5 2.5v11M11 2.5v11M2.5 5h11M2.5 11h11"/></symbol>
+    <symbol id="i-hrow" viewBox="0 0 16 16"><rect x="2.5" y="4" width="4" height="8" rx="1"/><rect x="9.5" y="4" width="4" height="8" rx="1"/></symbol>
+    <symbol id="i-vcol" viewBox="0 0 16 16"><rect x="4" y="2.5" width="8" height="4" rx="1"/><rect x="4" y="9.5" width="8" height="4" rx="1"/></symbol>
+    <symbol id="i-text" viewBox="0 0 16 16"><path d="M3.5 4.5V3h9v1.5M8 3v10M6.25 13h3.5"/></symbol>
+    <symbol id="i-rect" viewBox="0 0 16 16"><rect x="3" y="3" width="10" height="10" rx="1.5"/></symbol>
+    <symbol id="i-img" viewBox="0 0 16 16"><rect x="2.5" y="3" width="11" height="10" rx="1"/><circle cx="6" cy="6.5" r="1"/><path d="M13.5 10.5L10.5 7.5 4 13"/></symbol>
+    <symbol id="i-file" viewBox="0 0 16 16"><path d="M4 2h5l3 3v9H4z"/><path d="M9 2v3h3"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 16 16"><path d="M8 3.5v9M3.5 8h9"/></symbol>
+    <symbol id="i-minus" viewBox="0 0 16 16"><path d="M3.5 8h9"/></symbol>
+    <symbol id="i-check" viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-7"/></symbol>
+    <symbol id="i-push" viewBox="0 0 16 16"><path d="M8 13.5V5.5M5 8.5l3-3 3 3"/><path d="M3 2.75h10"/></symbol>
+    <symbol id="i-link" viewBox="0 0 16 16"><path d="M6.75 9.25a2.5 2.5 0 003.5 0l2-2a2.5 2.5 0 00-3.5-3.5l-.5.5"/><path d="M9.25 6.75a2.5 2.5 0 00-3.5 0l-2 2a2.5 2.5 0 003.5 3.5l.5-.5"/></symbol>
+    <symbol id="i-search" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.25"/><path d="M10.25 10.25L13.5 13.5"/></symbol>
+    <symbol id="i-collapse" viewBox="0 0 16 16"><path d="M5 6l3-3 3 3M5 10l3 3 3-3"/></symbol>
+    <symbol id="i-braces" viewBox="0 0 16 16"><path d="M5.75 3C4.5 3 4.5 4 4.5 5.25S3.5 8 3.5 8s1 .5 1 2.75S4.5 13 5.75 13M10.25 3c1.25 0 1.25 1 1.25 2.25S12.5 8 12.5 8s-1 .5-1 2.75 0 2.25-1.25 2.25"/></symbol>
+    <symbol id="i-al" viewBox="0 0 16 16"><path d="M2.5 2v12"/><rect x="5" y="4" width="8" height="3" rx=".5"/><rect x="5" y="9" width="5" height="3" rx=".5"/></symbol>
+    <symbol id="i-ac" viewBox="0 0 16 16"><path d="M8 2v2M8 7v2M8 12v2"/><rect x="3.5" y="4" width="9" height="3" rx=".5"/><rect x="5" y="9" width="6" height="3" rx=".5"/></symbol>
+    <symbol id="i-ar" viewBox="0 0 16 16"><path d="M13.5 2v12"/><rect x="3" y="4" width="8" height="3" rx=".5"/><rect x="6" y="9" width="5" height="3" rx=".5"/></symbol>
+    <symbol id="i-at" viewBox="0 0 16 16"><path d="M2 2.5h12"/><rect x="4" y="5" width="3" height="8" rx=".5"/><rect x="9" y="5" width="3" height="5" rx=".5"/></symbol>
+    <symbol id="i-am" viewBox="0 0 16 16"><path d="M2 8h2M7 8h2M12 8h2"/><rect x="4" y="3.5" width="3" height="9" rx=".5"/><rect x="9" y="5" width="3" height="6" rx=".5"/></symbol>
+    <symbol id="i-ab" viewBox="0 0 16 16"><path d="M2 13.5h12"/><rect x="4" y="3" width="3" height="8" rx=".5"/><rect x="9" y="6" width="3" height="5" rx=".5"/></symbol>
+    <symbol id="i-ar-r" viewBox="0 0 16 16"><path d="M3 8h10M9.5 4.5L13 8l-3.5 3.5"/></symbol>
+    <symbol id="i-ar-d" viewBox="0 0 16 16"><path d="M8 3v10M4.5 9.5L8 13l3.5-3.5"/></symbol>
+    <symbol id="i-wrap" viewBox="0 0 16 16"><path d="M3 4.5h8a2.75 2.75 0 010 5.5H6"/><path d="M7.75 8.25L6 10l1.75 1.75"/><path d="M3 12.5h2"/></symbol>
+    <symbol id="i-gapv" viewBox="0 0 16 16"><rect x="3" y="2.5" width="10" height="3.5" rx=".5"/><rect x="3" y="10" width="10" height="3.5" rx=".5"/><path d="M6 8h4"/></symbol>
+    <symbol id="i-padv" viewBox="0 0 16 16"><rect x="2.5" y="2.5" width="11" height="11" rx="1.5"/><path d="M5.5 5.5h5M5.5 10.5h5"/></symbol>
+    <symbol id="i-padh" viewBox="0 0 16 16"><rect x="2.5" y="2.5" width="11" height="11" rx="1.5"/><path d="M5.5 5.5v5M10.5 5.5v5"/></symbol>
+    <symbol id="i-sides" viewBox="0 0 16 16"><path d="M5 2.5h6M5 13.5h6M2.5 5v6M13.5 5v6"/></symbol>
+    <symbol id="i-radius" viewBox="0 0 16 16"><path d="M3 13V8.5A5.5 5.5 0 018.5 3H13"/></symbol>
+    <symbol id="i-opac" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.25"/><path d="M8 2.75v10.5M8 5.5h3.9M8 8h5.2M8 10.5h3.9"/></symbol>
+    <symbol id="i-shadow" viewBox="0 0 16 16"><rect x="2.5" y="2.5" width="8.5" height="8.5" rx="1"/><path d="M13.5 5.5v7a1 1 0 01-1 1h-7"/></symbol>
+    <symbol id="i-stroke" viewBox="0 0 16 16"><path d="M2.5 4h11"/><path d="M2.5 8h11" stroke-width="2"/><path d="M2.5 12.5h11" stroke-width="2.75"/></symbol>
+    <symbol id="i-lh" viewBox="0 0 16 16"><path d="M2.5 2.5h11M2.5 13.5h11"/><path d="M5.25 11L8 5l2.75 6M6.2 9h3.6"/></symbol>
+    <symbol id="i-ls" viewBox="0 0 16 16"><path d="M2.5 3v10M13.5 3v10"/><path d="M5.25 11L8 5l2.75 6M6.2 9h3.6"/></symbol>
+    <symbol id="i-size" viewBox="0 0 16 16"><path d="M2.5 4.5V3h7v1.5M6 3v9M4.75 12h2.5"/><path d="M9.5 8V7.25h4V8M11.5 7.25V12M10.75 12h1.5"/></symbol>
+    <symbol id="i-tl" viewBox="0 0 16 16"><path d="M2.5 4h11M2.5 8h7M2.5 12h9"/></symbol>
+    <symbol id="i-tc" viewBox="0 0 16 16"><path d="M2.5 4h11M4.5 8h7M3.5 12h9"/></symbol>
+    <symbol id="i-tr" viewBox="0 0 16 16"><path d="M2.5 4h11M6.5 8h7M4.5 12h9"/></symbol>
+    <symbol id="i-abs" viewBox="0 0 16 16"><rect x="2.5" y="2.5" width="11" height="11" rx="1.5" stroke-dasharray="2 2"/><rect x="6" y="6" width="4" height="4" rx=".5"/></symbol>
+    <symbol id="i-alt" viewBox="0 0 16 16"><path d="M2.5 4.5h3.25l4.5 7h3.25M9.75 4.5h3.5"/></symbol>
+    <symbol id="i-more" viewBox="0 0 16 16"><path d="M4 8h.01M8 8h.01M12 8h.01" stroke-width="2"/></symbol>
+    <symbol id="i-fit" viewBox="0 0 16 16"><path d="M2.5 6V2.5H6M10 2.5h3.5V6M13.5 10v3.5H10M6 13.5H2.5V10"/></symbol>
+  </defs>
+</svg>
+
+<div class="app">
+
+  <!-- ===================== TOP BAR ===================== -->
+  <header class="top">
+    <div class="top-l">
+      <span class="mark" aria-hidden="true"><svg class="i"><use href="#i-mark"/></svg></span>
+      <div class="proj">
+        <span class="proj-name">Lumen marketing site <svg class="i s12 t3"><use href="#i-cd"/></svg></span>
+        <span class="proj-sub">~/design/lumen · local</span>
+      </div>
+    </div>
+
+    <div class="top-c">
+      <div class="sync" role="status" aria-label="Sync status: edited, 1 change not pushed">
+        <span class="sync-step done"><svg class="i s12"><use href="#i-check"/></svg>Pulled <span class="t3">10:42</span></span>
+        <span class="sync-sep"></span>
+        <span class="sync-step now"><span class="dot"></span>Edited · 1</span>
+        <span class="sync-sep"></span>
+        <span class="sync-step"><svg class="i s12"><use href="#i-push"/></svg>Pushing</span>
+      </div>
+
+      <div class="seg vp" role="tablist" aria-label="Viewport">
+        <button class="on" role="tab" aria-selected="true"><svg class="i s12"><use href="#i-desktop"/></svg>1152</button>
+        <button role="tab"><svg class="i s12"><use href="#i-tablet"/></svg>834</button>
+        <button role="tab"><svg class="i s12"><use href="#i-phone"/></svg>390</button>
+      </div>
+
+      <div class="top-tools">
+        <button class="ibtn lg" aria-label="Undo (Cmd+Z)"><svg class="i"><use href="#i-undo"/></svg></button>
+        <button class="ibtn lg off" aria-label="Redo, nothing to redo"><svg class="i"><use href="#i-redo"/></svg></button>
+        <span class="vdiv"></span>
+        <button class="zoom" aria-label="Zoom 50%">50%<svg class="i s12 t3"><use href="#i-cd"/></svg></button>
+      </div>
+    </div>
+
+    <div class="top-r">
+      <span class="avatar" title="Ron">R</span>
+      <button class="ibtn lg theme" aria-label="Toggle dark theme" onclick="document.documentElement.classList.toggle('dark')">
+        <svg class="i moon"><use href="#i-moon"/></svg><svg class="i sun"><use href="#i-sun"/></svg>
+      </button>
+      <button class="ibtn lg" aria-label="Preview in browser"><svg class="i"><use href="#i-play"/></svg></button>
+      <button class="push"><svg class="i"><use href="#i-push"/></svg>Push<span class="n">1</span></button>
+    </div>
+  </header>
+
+  <!-- ===================== LEFT: PAGES + LAYERS ===================== -->
+  <aside class="left" aria-label="Pages and layers">
+    <div class="tabs">
+      <button class="tab on">Layers</button>
+      <button class="tab">Tokens</button>
+      <button class="tab">Assets</button>
+    </div>
+
+    <div class="ph">
+      <span class="ph-t">Pages</span>
+      <span class="ph-a"><button class="ibtn" aria-label="Add page"><svg class="i"><use href="#i-plus"/></svg></button></span>
+    </div>
+    <div class="list">
+      <div class="row pg on"><svg class="i ti"><use href="#i-file"/></svg><span class="nm">hero.dc.html</span><span class="pg chg" title="1 unpushed change"></span><span class="meta">2</span></div>
+      <div class="row pg"><svg class="i ti"><use href="#i-file"/></svg><span class="nm">pricing.dc.html</span><span class="meta">2</span></div>
+      <div class="row pg"><svg class="i ti"><use href="#i-file"/></svg><span class="nm">customers.dc.html</span><span class="meta">1</span></div>
+      <div class="row pg"><svg class="i ti"><use href="#i-file"/></svg><span class="nm">changelog.dc.html</span><span class="meta">1</span></div>
+    </div>
+    <div class="hr"></div>
+
+    <div class="ph">
+      <span class="ph-t">Layers</span>
+      <span class="ph-a">
+        <button class="ibtn" aria-label="Search layers"><svg class="i"><use href="#i-search"/></svg></button>
+        <button class="ibtn" aria-label="Collapse all"><svg class="i"><use href="#i-collapse"/></svg></button>
+      </span>
+    </div>
+    <div class="list" role="tree">
+      <div class="row d0 top"><span class="tw"><svg class="i"><use href="#i-cd"/></svg></span><svg class="i ti"><use href="#i-frame"/></svg><span class="nm">Desktop</span><span class="meta">1152</span><span class="ra"><button class="ibtn"><svg class="i s12"><use href="#i-eye"/></svg></button><button class="ibtn"><svg class="i s12"><use href="#i-unlock"/></svg></button></span></div>
+      <div class="row d1"><span class="tw"><svg class="i"><use href="#i-cr"/></svg></span><svg class="i ti"><use href="#i-hrow"/></svg><span class="nm">Nav</span><span class="ra"><button class="ibtn"><svg class="i s12"><use href="#i-eye"/></svg></button><button class="ibtn"><svg class="i s12"><use href="#i-unlock"/></svg></button></span></div>
+      <div class="row d1"><span class="tw"><svg class="i"><use href="#i-cd"/></svg></span><svg class="i ti"><use href="#i-hrow"/></svg><span class="nm">Hero</span><span class="ra"><button class="ibtn"><svg class="i s12"><use href="#i-eye"/></svg></button><button class="ibtn"><svg class="i s12"><use href="#i-unlock"/></svg></button></span></div>
+      <div class="row d2"><span class="tw"><svg class="i"><use href="#i-cr"/></svg></span><svg class="i ti"><use href="#i-vcol"/></svg><span class="nm">Hero copy</span><span class="ra"><button class="ibtn"><svg class="i s12"><use href="#i-eye"/></svg></button><button class="ibtn"><svg class="i s12"><use href="#i-unlock"/></svg></button></span></div>
+      <div class="row d2 sel" aria-selected="true"><span class="tw"><svg class="i"><use href="#i-cd"/></svg></span><svg class="i ti"><use href="#i-vcol"/></svg><span class="nm">Close summary card</span><span class="ra"><button class="ibtn" aria-label="Hide"><svg class="i s12"><use href="#i-eye"/></svg></button><button class="ibtn" aria-label="Lock"><svg class="i s12"><use href="#i-unlock"/></svg></button></span></div>
+      <div class="row d3 kid"><span class="tw"><svg class="i"><use href="#i-cr"/></svg></span><svg class="i ti"><use href="#i-hrow"/></svg><span class="nm">Card header</span></div>
+      <div class="row d3 kid"><span class="tw"></span><svg class="i ti"><use href="#i-text"/></svg><span class="nm">Reconciled 86%</span></div>
+      <div class="row d3 kid"><span class="tw"></span><svg class="i ti"><use href="#i-rect"/></svg><span class="nm">Progress bar</span></div>
+      <div class="row d3 kid"><span class="tw"><svg class="i"><use href="#i-cr"/></svg></span><svg class="i ti"><use href="#i-vcol"/></svg><span class="nm">Task list</span><span class="meta">4</span></div>
+      <div class="row d3 kid"><span class="tw"><svg class="i"><use href="#i-cr"/></svg></span><svg class="i ti"><use href="#i-hrow"/></svg><span class="nm">Card footer</span></div>
+      <div class="row d1 pin hidden"><span class="tw"></span><svg class="i ti"><use href="#i-img"/></svg><span class="nm">Background glow</span><span class="ra"><button class="ibtn" aria-label="Show"><svg class="i s12"><use href="#i-eyeoff"/></svg></button><button class="ibtn off"><svg class="i s12"><use href="#i-unlock"/></svg></button></span></div>
+      <div class="row d1"><span class="tw"><svg class="i"><use href="#i-cr"/></svg></span><svg class="i ti"><use href="#i-hrow"/></svg><span class="nm">Logo strip</span><span class="meta">5</span></div>
+      <div class="row d1"><span class="tw"><svg class="i"><use href="#i-cr"/></svg></span><svg class="i ti"><use href="#i-vcol"/></svg><span class="nm">Features</span><span class="meta">3</span></div>
+      <div class="row d1"><span class="tw"><svg class="i"><use href="#i-cr"/></svg></span><svg class="i ti"><use href="#i-hrow"/></svg><span class="nm">Closing call to action</span></div>
+      <div class="row d0 top pin"><span class="tw"><svg class="i"><use href="#i-cr"/></svg></span><svg class="i ti"><use href="#i-frame"/></svg><span class="nm">Mobile</span><span class="ra"><button class="ibtn off"><svg class="i s12"><use href="#i-eye"/></svg></button><button class="ibtn" aria-label="Unlock"><svg class="i s12"><use href="#i-lock"/></svg></button></span></div>
+    </div>
+
+    <div class="left-foot"><span>Names from <span class="mono">data-layer-name</span></span><span>41 layers</span></div>
+  </aside>
+
+  <!-- ===================== CANVAS ===================== -->
+  <main class="canvas" aria-label="Canvas">
+    <div class="rul-c"></div>
+    <div class="rul-x" aria-hidden="true">
+      <div class="rul-band-x" style="left:352px;width:232px"></div>
+      <span style="left:40px">0</span><span style="left:90px">100</span><span style="left:140px">200</span><span style="left:190px">300</span>
+      <span style="left:240px">400</span><span style="left:290px">500</span>
+      <span class="edge" style="left:352px">624</span>
+      <span style="left:440px">800</span><span style="left:490px">900</span>
+      <span class="edge" style="left:584px;transform:translateX(-100%);padding:0 3px 0 0">1088</span>
+      <span style="left:640px">1200</span><span style="left:690px">1300</span><span style="left:740px">1400</span><span style="left:790px">1500</span><span style="left:840px">1600</span>
+    </div>
+    <div class="rul-y" aria-hidden="true">
+      <div class="rul-band-y" style="top:120px;height:220px"></div>
+      <span style="top:36px">0</span>
+      <span class="edge" style="top:108px">144</span>
+      <span style="top:186px">300</span><span style="top:236px">400</span>
+      <span class="edge" style="top:340px">584</span>
+      <span style="top:386px">700</span><span style="top:436px">800</span><span style="top:486px">900</span>
+      <span style="top:536px">1000</span><span style="top:586px">1100</span><span style="top:636px">1200</span><span style="top:686px">1300</span>
+    </div>
+
+    <div class="world">
+      <!-- artboard labels -->
+      <div class="ab-label on" style="left:40px;top:28px">Desktop <span class="t3">1152 × 1360</span></div>
+      <div class="ab-label" style="left:664px;top:28px"><svg class="i s12 t3"><use href="#i-lock"/></svg>Mobile <span class="t3">390 × 844</span></div>
+
+      <!-- ===== Artboard 1: Desktop ===== -->
+      <div class="board lp" style="left:40px;top:48px;width:576px;height:680px">
+        <div class="lp-glow"></div>
+        <div class="lp-nav">
+          <div class="lp-logo"><i></i>Lumen</div>
+          <div class="lp-links"><span>Product</span><span>Pricing</span><span>Customers</span><span>Docs</span></div>
+          <div class="lp-signin">Sign in</div>
+          <div class="lp-navbtn">Start free</div>
+        </div>
+
+        <div class="lp-copy">
+          <div class="lp-eyebrow"><b>New</b>Auto-reconcile for Stripe payouts</div>
+          <div class="lp-h1">Close the month <em>before Friday.</em></div>
+          <div class="lp-p">Lumen matches bank feeds, invoices and payroll the moment they land, so your finance team signs off in days, not weeks.</div>
+          <div class="lp-btns">
+            <span class="lp-btn pri">Start free trial</span>
+            <span class="lp-btn sec">Book a 20-min demo</span>
+          </div>
+          <div class="lp-trust"><b>★★★★★</b> 4.9 from 1,200 reviews · SOC 2 Type II</div>
+        </div>
+
+        <div class="lp-card">
+          <div class="static c-head"><span><span class="t">March close</span><span class="s">Day 3 of 5</span></span><span class="c-chip">On track</span></div>
+          <div class="static c-stat"><span class="n">86%</span><span class="l">reconciled</span></div>
+          <div class="static c-bar"><i></i></div>
+          <div class="static c-list">
+            <div class="c-row"><span class="ck"><svg viewBox="0 0 8 8"><path d="M1.8 4.2l1.5 1.5 2.9-3.2"/></svg></span>Bank feeds matched<span class="r">1,284</span></div>
+            <div class="c-row"><span class="ck"><svg viewBox="0 0 8 8"><path d="M1.8 4.2l1.5 1.5 2.9-3.2"/></svg></span>Invoices posted<span class="r">312</span></div>
+            <div class="c-row"><span class="ck"><svg viewBox="0 0 8 8"><path d="M1.8 4.2l1.5 1.5 2.9-3.2"/></svg></span>Accruals reviewed<span class="r">18 / 22</span></div>
+            <div class="c-row"><span class="ck p"></span>Payroll journal<span class="r w">Waiting on Maya</span></div>
+          </div>
+          <div class="static c-foot">
+            <span class="who"><span class="c-av"><i style="background:#E8B38A"></i><i style="background:#9BB8E8"></i><i style="background:#C7A7E0"></i></span>3 reviewers</span>
+            <span>Sign-off Fri 28 Mar</span>
+          </div>
+        </div>
+
+        <div class="lp-logos">
+          <div class="k">Trusted by finance teams at</div>
+          <div class="lrow"><span>Halden</span><span style="font-weight:600;letter-spacing:1.5px">NORTHBEAM</span><span>corvid.</span><span style="font-style:italic">Marlow &amp; Sage</span><span style="letter-spacing:.5px">Peakline</span></div>
+        </div>
+        <div class="lp-rule"></div>
+        <div class="lp-ft"><span class="hd">Everything month-end needs, in one ledger</span><span class="s">Replace four spreadsheets and a shared inbox with one checklist your auditors can read.</span></div>
+        <div class="lp-feats">
+          <div class="lp-f"><span class="ic" style="background:#E3EEE6"><svg viewBox="0 0 12 12" stroke="#17613F"><path d="M2 6.5l2.5 2.5L10 3"/></svg></span><span class="ft">Matching that learns</span><span class="fd">Rules suggest themselves after three manual matches. Approve once, apply forever.</span><span class="fl">How matching works →</span></div>
+          <div class="lp-f"><span class="ic" style="background:#E6EAF5"><svg viewBox="0 0 12 12" stroke="#2C3E73"><path d="M2 3h8M2 6h5M2 9h7"/></svg></span><span class="ft">A close checklist</span><span class="fd">Owners, due dates and evidence on every task, so nothing waits in someone's inbox.</span><span class="fl">See a sample close →</span></div>
+          <div class="lp-f"><span class="ic" style="background:#F6EBD6"><svg viewBox="0 0 12 12" stroke="#8A5A12"><rect x="2.5" y="5" width="7" height="5" rx="1"/><path d="M4 5V3.8a2 2 0 014 0V5"/></svg></span><span class="ft">Audit-ready by default</span><span class="fd">Every change is logged with who, when and why. Export the trail in one click.</span><span class="fl">Security overview →</span></div>
+        </div>
+        <div class="lp-band"><span><span class="hd">Ready for a calmer close?</span><span class="s">Free for 14 days. No card needed.</span></span><span class="b">Start free trial</span></div>
+      </div>
+
+      <!-- overlays for Desktop (same origin as the artboard, not clipped) -->
+      <div class="ov" style="left:40px;top:48px;width:576px;height:680px">
+        <!-- smart guide: card right edge aligns with nav button right edge -->
+        <div class="guide" style="left:543px;top:7px;height:293px"></div>
+        <div class="gx" style="left:540px;top:4px"></div>
+        <div class="gx" style="left:540px;top:288px"></div>
+
+        <!-- Alt-measure: hovered sibling + distance -->
+        <div class="hover-out" style="left:32px;top:72px;width:248px;height:196px"></div>
+        <div class="mline" style="left:280px;top:170px;width:32px"></div>
+        <div class="mtag" style="left:280px;top:150px;width:32px"><span>64</span></div>
+
+        <!-- selection -->
+        <div class="selbox" style="left:312px;top:72px;width:232px;height:220px">
+          <!-- padding bands + handles (top band is hovered) -->
+          <div class="pad-band" style="left:1px;top:1px;width:230px;height:15px"></div>
+          <div class="pad-h" style="left:110px;top:6px;width:12px;height:4px"></div>
+          <div class="pad-h" style="left:110px;top:210px;width:12px;height:4px"></div>
+          <div class="pad-h" style="left:6px;top:104px;width:4px;height:12px"></div>
+          <div class="pad-h" style="left:222px;top:104px;width:4px;height:12px"></div>
+          <!-- 8 resize handles -->
+          <div class="h" style="left:-3px;top:-3px"></div>
+          <div class="h" style="left:113px;top:-3px"></div>
+          <div class="h" style="left:228px;top:-3px"></div>
+          <div class="h" style="left:228px;top:107px"></div>
+          <div class="h" style="left:228px;top:216px"></div>
+          <div class="h" style="left:113px;top:216px"></div>
+          <div class="h" style="left:-3px;top:216px"></div>
+          <div class="h" style="left:-3px;top:107px"></div>
+          <div class="sizetag" style="top:228px"><span>464 × 440<em>Hug</em></span></div>
+        </div>
+      </div>
+
+      <!-- ===== Artboard 2: Mobile ===== -->
+      <div class="board lp" style="left:664px;top:48px;width:195px;height:422px">
+        <div class="m-nav"><div class="lp-logo"><i></i>Lumen</div><div class="m-burger"></div></div>
+        <div class="lp-eyebrow m-eye"><b>New</b>Auto-reconcile for Stripe</div>
+        <div class="m-h1">Close the month <em>before Friday.</em></div>
+        <div class="m-p">Lumen matches bank feeds, invoices and payroll the moment they land.</div>
+        <div class="m-btn" style="top:162px;background:#0F766E;color:#fff">Start free trial</div>
+        <div class="m-btn" style="top:190px;background:#fff;color:#14213D;box-shadow:inset 0 0 0 1px #DAD4C7">Book a 20-min demo</div>
+        <div class="m-card">
+          <div class="static c-head" style="left:12px;top:12px;width:147px"><span class="t">March close</span><span class="c-chip">On track</span></div>
+          <div class="static c-stat" style="left:12px;top:34px"><span class="n" style="font-size:20px;line-height:24px">86%</span><span class="l">reconciled</span></div>
+          <div class="static c-bar" style="left:12px;top:64px;width:147px"><i style="width:126px"></i></div>
+          <div class="static c-list" style="left:12px;top:76px;width:147px">
+            <div class="c-row"><span class="ck"><svg viewBox="0 0 8 8"><path d="M1.8 4.2l1.5 1.5 2.9-3.2"/></svg></span>Bank feeds<span class="r">1,284</span></div>
+            <div class="c-row"><span class="ck"><svg viewBox="0 0 8 8"><path d="M1.8 4.2l1.5 1.5 2.9-3.2"/></svg></span>Invoices<span class="r">312</span></div>
+            <div class="c-row"><span class="ck"><svg viewBox="0 0 8 8"><path d="M1.8 4.2l1.5 1.5 2.9-3.2"/></svg></span>Accruals<span class="r">18 / 22</span></div>
+            <div class="c-row"><span class="ck p"></span>Payroll<span class="r w">Waiting</span></div>
+          </div>
+        </div>
+      </div>
+      <!-- same source element on the other artboard -->
+      <div class="ov" style="left:664px;top:48px;width:195px;height:422px">
+        <div class="linked" style="left:12px;top:224px;width:171px;height:182px"></div>
+      </div>
+    </div>
+
+    <div class="hint"><span class="kbd">⌥</span>Measuring to <b style="font-weight:500;color:var(--text)">Hero copy</b><span class="sw" aria-hidden="true"></span></div>
+
+    <div class="toast" role="status">
+      <div>
+        <svg class="i ok"><use href="#i-check"/></svg>
+        <span>1 change saved · <span class="mono">hero.dc.html</span></span>
+        <span class="t">padding 24 → 32</span>
+        <span class="sep"></span>
+        <button>Undo</button>
+      </div>
+    </div>
+
+    <div class="mini">
+      <button class="ibtn" aria-label="Zoom out"><svg class="i"><use href="#i-minus"/></svg></button>
+      <span class="z">50%</span>
+      <button class="ibtn" aria-label="Zoom in"><svg class="i"><use href="#i-plus"/></svg></button>
+      <button class="ibtn" aria-label="Zoom to fit"><svg class="i"><use href="#i-fit"/></svg></button>
+    </div>
+  </main>
+
+  <!-- ===================== RIGHT: PROPERTIES ===================== -->
+  <aside class="right" aria-label="Properties">
+    <div class="tabs">
+      <button class="tab on">Design</button>
+      <button class="tab">CSS</button>
+      <button class="tab">Changes <span class="n">1</span></button>
+    </div>
+
+    <!-- selector chip -->
+    <div class="selhead">
+      <div class="el-title"><svg class="i ti"><use href="#i-vcol"/></svg><b>Close summary card</b><span class="mono">div.summary-card</span></div>
+      <button class="chip" aria-label="Write target: inline style, hero.dc.html line 42">
+        <svg class="i lead"><use href="#i-braces"/></svg>
+        <span class="mono">style · hero.dc.html:42</span>
+        <svg class="i s12 k"><use href="#i-cd"/></svg>
+      </button>
+      <div class="chip-meta"><span class="okd"></span>Inline style · only this element</div>
+    </div>
+
+    <!-- Position -->
+    <section class="sec">
+      <div class="sec-h"><span class="sec-t">Position <span class="badge">in auto layout</span></span>
+        <span class="sec-a"><button class="ibtn" aria-label="Ignore auto layout (absolute)"><svg class="i"><use href="#i-abs"/></svg></button></span></div>
+      <div class="pr"><span class="pl">Align</span>
+        <div class="pc">
+          <span class="grp"><button class="ibtn"><svg class="i"><use href="#i-al"/></svg></button><button class="ibtn"><svg class="i"><use href="#i-ac"/></svg></button><button class="ibtn"><svg class="i"><use href="#i-ar"/></svg></button></span>
+          <span class="grp"><button class="ibtn on"><svg class="i"><use href="#i-at"/></svg></button><button class="ibtn"><svg class="i"><use href="#i-am"/></svg></button><button class="ibtn"><svg class="i"><use href="#i-ab"/></svg></button></span>
+        </div></div>
+      <div class="pr"><span class="pl">X / Y</span>
+        <div class="pc"><span class="fld ro"><span class="pre">X</span><span class="v">624</span></span><span class="fld ro"><span class="pre">Y</span><span class="v">144</span></span></div></div>
+    </section>
+
+    <!-- Layout -->
+    <section class="sec">
+      <div class="sec-h"><span class="sec-t">Auto layout</span>
+        <span class="sec-a"><button class="ibtn" aria-label="More layout options"><svg class="i"><use href="#i-more"/></svg></button><button class="ibtn" aria-label="Remove auto layout"><svg class="i"><use href="#i-minus"/></svg></button></span></div>
+      <div class="pr"><span class="pl">Direction</span>
+        <div class="pc"><div class="seg" style="flex:1">
+          <button aria-label="Row"><svg class="i s12"><use href="#i-ar-r"/></svg></button>
+          <button class="on" aria-label="Column"><svg class="i s12"><use href="#i-ar-d"/></svg></button>
+          <button aria-label="Wrap"><svg class="i s12"><use href="#i-wrap"/></svg></button>
+        </div>
+        <span class="fld" style="flex:none;width:96px"><span class="pre"><svg class="i s12"><use href="#i-gapv"/></svg></span><span class="v">16</span><span class="u">gap</span></span></div></div>
+      <div class="pr" style="align-items:start"><span class="pl" style="line-height:24px">Align</span>
+        <div class="pc" style="align-items:start">
+          <div class="dots" role="radiogroup" aria-label="Alignment: top left">
+            <i class="on"><b style="width:9px"></b><b style="width:6px"></b><b style="width:8px"></b></i><i></i><i></i>
+            <i></i><i></i><i></i>
+            <i></i><i></i><i></i>
+          </div>
+          <div class="padcol">
+            <div class="pc"><span class="fld focus"><span class="pre"><svg class="i s12"><use href="#i-padv"/></svg></span><span class="v">32</span></span><button class="ibtn" aria-label="Padding per side"><svg class="i"><use href="#i-sides"/></svg></button></div>
+            <div class="pc"><span class="fld"><span class="pre"><svg class="i s12"><use href="#i-padh"/></svg></span><span class="v">32</span></span><span style="width:24px;flex:none"></span></div>
+          </div>
+        </div></div>
+      <div class="pr"><span class="pl">Width</span>
+        <div class="pc"><span class="fld" style="flex:none;width:64px"><span class="pre">W</span><span class="v">464</span></span>
+          <div class="seg" style="flex:1"><button>Hug</button><button>Fill</button><button class="on">Fixed</button></div></div></div>
+      <div class="pr"><span class="pl">Height</span>
+        <div class="pc"><span class="fld ro" style="flex:none;width:64px"><span class="pre">H</span><span class="v">440</span></span>
+          <div class="seg" style="flex:1"><button class="on">Hug</button><button>Fill</button><button>Fixed</button></div></div></div>
+    </section>
+
+    <!-- Appearance -->
+    <section class="sec">
+      <div class="sec-h"><span class="sec-t">Appearance</span>
+        <span class="sec-a"><button class="ibtn" aria-label="Visible"><svg class="i"><use href="#i-eye"/></svg></button></span></div>
+      <div class="pr"><span class="pl">Opacity</span>
+        <div class="pc"><span class="fld"><span class="pre"><svg class="i s12"><use href="#i-opac"/></svg></span><span class="v">100</span><span class="u">%</span></span><span class="fld"><span class="pre"><svg class="i s12"><use href="#i-radius"/></svg></span><span class="v">16</span><span class="u">rad</span></span></div></div>
+    </section>
+
+    <!-- Fill -->
+    <section class="sec">
+      <div class="sec-h"><span class="sec-t">Fill</span>
+        <span class="sec-a"><button class="ibtn" aria-label="Add fill"><svg class="i"><use href="#i-plus"/></svg></button></span></div>
+      <div class="list-row">
+        <span class="tok" title="Bound to token --ink-900"><span class="sw" style="background:#14213D"></span><span class="nm">ink-900</span><svg class="i s12"><use href="#i-link"/></svg></span>
+        <span class="fld" style="flex:none;width:56px"><span class="v">100</span><span class="u">%</span></span>
+        <button class="ibtn" aria-label="Hide fill"><svg class="i"><use href="#i-eye"/></svg></button>
+        <button class="ibtn" aria-label="Remove fill"><svg class="i"><use href="#i-minus"/></svg></button>
+      </div>
+      <div class="cap mono">var(--ink-900) · #14213D</div>
+    </section>
+
+    <!-- Stroke -->
+    <section class="sec">
+      <div class="sec-h"><span class="sec-t">Stroke</span>
+        <span class="sec-a"><button class="ibtn" aria-label="Add stroke"><svg class="i"><use href="#i-plus"/></svg></button></span></div>
+      <div class="list-row">
+        <span class="tok"><span class="sw" style="background:#24345A"></span><span class="nm">ink-700</span><svg class="i s12"><use href="#i-link"/></svg></span>
+        <span class="fld" style="flex:none;width:48px"><span class="pre"><svg class="i s12"><use href="#i-stroke"/></svg></span><span class="v">1</span></span>
+        <span class="sel-dd" style="flex:none;width:52px"><span>Inside</span></span>
+      </div>
+    </section>
+
+    <!-- Effects -->
+    <section class="sec">
+      <div class="sec-h"><span class="sec-t">Effects</span>
+        <span class="sec-a"><button class="ibtn" aria-label="Add effect"><svg class="i"><use href="#i-plus"/></svg></button></span></div>
+      <div class="list-row">
+        <span class="fx"><svg class="i t2"><use href="#i-shadow"/></svg><span>Drop shadow</span><span class="v mono">0 28 56 −20</span></span>
+        <button class="ibtn" aria-label="Hide effect"><svg class="i"><use href="#i-eye"/></svg></button>
+        <button class="ibtn" aria-label="Remove effect"><svg class="i"><use href="#i-minus"/></svg></button>
+      </div>
+    </section>
+
+    <!-- Typography -->
+    <section class="sec" style="border-bottom:0">
+      <div class="sec-h"><span class="sec-t">Typography <span class="badge">inherited by 9</span></span>
+        <span class="sec-a"><button class="ibtn" aria-label="More type options"><svg class="i"><use href="#i-more"/></svg></button></span></div>
+      <div class="pr"><span class="pl">Font</span>
+        <div class="pc"><span class="tok"><span class="aa">Aa</span><span class="nm">font-sans</span><span class="t3" style="font-weight:400;color:inherit;opacity:.8">Manrope</span><svg class="i s12"><use href="#i-link"/></svg></span></div></div>
+      <div class="pr"><span class="pl">Style</span>
+        <div class="pc"><span class="sel-dd"><span>Medium 500</span><svg class="i s12"><use href="#i-cd"/></svg></span><span class="fld" style="flex:none;width:64px"><span class="pre"><svg class="i s12"><use href="#i-size"/></svg></span><span class="v">15</span></span></div></div>
+      <div class="pr"><span class="pl">Spacing</span>
+        <div class="pc"><span class="fld"><span class="pre"><svg class="i s12"><use href="#i-lh"/></svg></span><span class="v">1.5</span></span><span class="fld"><span class="pre"><svg class="i s12"><use href="#i-ls"/></svg></span><span class="v">0</span><span class="u">%</span></span></div></div>
+      <div class="pr"><span class="pl">Align</span>
+        <div class="pc"><div class="seg" style="flex:1"><button class="on" aria-label="Left"><svg class="i s12"><use href="#i-tl"/></svg></button><button aria-label="Centre"><svg class="i s12"><use href="#i-tc"/></svg></button><button aria-label="Right"><svg class="i s12"><use href="#i-tr"/></svg></button></div></div></div>
+    </section>
+  </aside>
+</div>
+
+<script>
+  /* Open with #dark to start in the dark theme. */
+  if (location.hash === '#dark') document.documentElement.classList.add('dark');
+</script>
+</body>
+</html>

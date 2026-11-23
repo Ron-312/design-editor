@@ -1,0 +1,702 @@
+<!doctype html>
+<html lang="en" class="theme-dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1440">
+<title>Floating Focus Editor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600&family=Fraunces:opsz,wght@9..144,500&display=swap" rel="stylesheet">
+<style>
+/* ───────────── Tokens ─────────────
+   4px grid. Accent = "glacier" blue. Canvas overlay colours are shared by both themes. */
+:root{
+  --font-ui:"Manrope",system-ui,sans-serif;
+  --font-mono:"JetBrains Mono",ui-monospace,monospace;
+  --r-card:16px; --r-ctl:8px; --r-sm:6px;
+  --sel:#4D6BFF;            /* canvas selection */
+  --guide:#E2358A;          /* smart guide */
+  --measure:#D92D23;        /* Alt-measure, white text on it = 4.8:1 */
+  --accent-solid:#4361F5;   /* white text on it = 4.9:1 */
+}
+html.theme-dark{
+  --canvas:#0E1014; --dot:rgba(255,255,255,.07);
+  --panel:rgba(22,25,31,.90); --panel-edge:rgba(255,255,255,.08);
+  --panel-shadow:inset 0 1px 0 rgba(255,255,255,.05),0 12px 32px rgba(0,0,0,.45),0 2px 8px rgba(0,0,0,.3);
+  --text:#ECEEF2;           /* 15.9:1 on panel */
+  --text-2:#AEB5C2;         /*  8.6:1 */
+  --text-3:#98A0AE;         /*  6.6:1, ≥4.9:1 even over a white artboard */
+  --hair:rgba(255,255,255,.08);
+  --field:rgba(255,255,255,.06); --field-hover:rgba(255,255,255,.10);
+  --seg-on:rgba(255,255,255,.14); --seg-on-shadow:none;
+  --accent-text:#8CA5FF;    /* 6.9:1 */
+  --accent-soft:rgba(91,124,255,.16); --accent-edge:rgba(140,165,255,.35);
+  --row-sel:rgba(77,107,255,.30); --row-sel-soft:rgba(77,107,255,.10); --row-hover:rgba(255,255,255,.05);
+  --ok:#5ADBA5; --warn:#F2B84B;
+  --label-canvas:#AEB5C2; --label-canvas-on:#8CA5FF;
+  --kbd:rgba(255,255,255,.08);
+}
+html.theme-light{
+  --canvas:#E3E6EB; --dot:rgba(15,23,42,.10);
+  --panel:rgba(255,255,255,.84); --panel-edge:rgba(16,24,40,.08);
+  --panel-shadow:inset 0 1px 0 rgba(255,255,255,.7),0 12px 32px rgba(16,24,40,.12),0 2px 8px rgba(16,24,40,.06);
+  --text:#12151B;           /* 17:1 */
+  --text-2:#434A57;         /*  8.9:1 */
+  --text-3:#5A6272;         /*  6.0:1 */
+  --hair:rgba(16,24,40,.08);
+  --field:rgba(16,24,40,.05); --field-hover:rgba(16,24,40,.08);
+  --seg-on:#FFFFFF; --seg-on-shadow:0 1px 2px rgba(16,24,40,.14),0 0 0 1px rgba(16,24,40,.06);
+  --accent-text:#3150E0;    /* 6.2:1 */
+  --accent-soft:rgba(67,97,245,.10); --accent-edge:rgba(49,80,224,.30);
+  --row-sel:rgba(67,97,245,.16); --row-sel-soft:rgba(67,97,245,.06); --row-hover:rgba(16,24,40,.04);
+  --ok:#0B7F57; --warn:#9A5B00;
+  --label-canvas:#434A57; --label-canvas-on:#3150E0;
+  --kbd:rgba(16,24,40,.07);
+}
+
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:1440px;height:900px;overflow:hidden;background:var(--canvas)}
+body{font-family:var(--font-ui);font-size:12px;line-height:16px;color:var(--text);
+  -webkit-font-smoothing:antialiased;font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+.ic{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+.ic.s12{width:12px;height:12px}
+.mono{font-family:var(--font-mono);font-variant-numeric:tabular-nums}
+.t2{color:var(--text-2)} .t3{color:var(--text-3)}
+
+.app{position:relative;width:1440px;height:900px;overflow:hidden}
+
+/* ───────────── Canvas (edge to edge) ───────────── */
+.canvas{position:absolute;inset:0;background-color:var(--canvas);
+  background-image:radial-gradient(var(--dot) 1px,transparent 1.2px);background-size:16px 16px;background-position:8px 8px}
+.board-wrap{position:absolute}
+.board-label{position:absolute;left:0;top:-24px;display:flex;gap:8px;align-items:center;height:16px;
+  font-size:11px;font-weight:600;color:var(--label-canvas);white-space:nowrap}
+.board-label .dim{font-weight:500;opacity:1;color:var(--label-canvas)}
+.board-label.on{color:var(--label-canvas-on)}
+.board{position:relative;overflow:hidden;background:#FBFAF6;
+  box-shadow:0 0 0 1px rgba(0,0,0,.06),0 8px 24px rgba(0,0,0,.18)}
+
+/* ── Landing page content (the user's design, rendered at 50%) ── */
+.lp{font-family:"DM Sans",sans-serif;color:#18201B;font-variant-numeric:normal}
+.lp *{box-sizing:border-box}
+.lp-nav{position:absolute;left:0;top:0;right:0;height:36px;padding:0 40px;display:flex;align-items:center;justify-content:space-between}
+.lp-logo{display:flex;align-items:center;gap:4px;font-weight:600;font-size:9px;letter-spacing:-.01em}
+.lp-logo i{width:10px;height:10px;border-radius:3px;background:#17352A;position:relative;display:block}
+.lp-logo i::after{content:"";position:absolute;left:3px;top:3px;width:4px;height:4px;border-radius:50%;background:#C8F25C}
+.lp-links{display:flex;gap:18px;font-size:7px;color:#4A524C;font-weight:500}
+.lp-navr{display:flex;align-items:center;gap:12px;font-size:7px;font-weight:500}
+.lp-btn{display:inline-flex;align-items:center;height:18px;padding:0 9px;border-radius:9px;background:#17352A;color:#F4F7EE;font-size:7px;font-weight:600}
+.lp-copy{position:absolute;left:40px;top:84px;width:352px;height:232px;display:flex;flex-direction:column}
+.lp-eyebrow{align-self:flex-start;display:inline-flex;align-items:center;gap:4px;height:14px;padding:0 6px;border-radius:7px;
+  background:#EEF1E4;box-shadow:inset 0 0 0 .5px #D9DECB;font-size:6.5px;font-weight:500;color:#2E3A2F}
+.lp-eyebrow b{font-weight:600;color:#17352A}
+.lp-h1{margin-top:12px;font-family:"Fraunces",serif;font-weight:500;font-size:30px;line-height:32px;letter-spacing:-.02em;color:#141A16}
+.lp-h1 em{font-style:normal;color:#3F7A2E}
+.lp-sub{margin-top:12px;width:300px;font-size:9px;line-height:14px;color:#4A524C}
+.lp-ctas{margin-top:16px;display:flex;gap:8px}
+.lp-cta{display:inline-flex;align-items:center;gap:4px;height:24px;padding:0 14px;border-radius:12px;font-size:8px;font-weight:600}
+.lp-cta.p{background:#17352A;color:#F4F7EE}
+.lp-cta.s{box-shadow:inset 0 0 0 1px #CBD0C4;color:#17352A}
+.lp-trust{margin-top:auto;display:flex;flex-direction:column;gap:6px}
+.lp-trust small{font-size:6.5px;color:#6B726C}
+.lp-marks{display:flex;gap:16px;align-items:center;color:#8A918A}
+.lp-marks span{font-size:8px;font-weight:600;letter-spacing:-.01em}
+.lp-card{position:absolute;left:424px;top:84px;width:256px;height:232px;padding:16px;display:flex;flex-direction:column;gap:10px;
+  background:#FFFFFF;border:1px solid #E7E3DA;border-radius:8px;box-shadow:0 12px 24px -6px rgba(23,53,42,.10)}
+.lp-ch{display:flex;justify-content:space-between;align-items:flex-start}
+.lp-ch b{display:block;font-size:9px;font-weight:600;line-height:12px}
+.lp-ch small{display:block;font-size:6.5px;color:#6B726C;line-height:10px;margin-top:2px}
+.lp-chip{display:inline-flex;align-items:center;height:14px;padding:0 6px;border-radius:7px;background:#E7F5C4;color:#2D4A12;font-size:6.5px;font-weight:600}
+.lp-chip.w{background:#FBEBCB;color:#6E4300}
+.lp-bar{height:6px;border-radius:3px;background:#EEF0E9;overflow:hidden}
+.lp-bar i{display:block;width:92%;height:100%;border-radius:3px;background:#17352A}
+.lp-rows{display:flex;flex-direction:column}
+.lp-row{height:30px;display:flex;align-items:center;gap:8px;border-top:1px solid #F0EEE8}
+.lp-row .tile{width:16px;height:16px;border-radius:4px;background:#EEF3E2;display:grid;place-items:center}
+.lp-row .tile svg{width:9px;height:9px;fill:none;stroke:#17352A;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.lp-row div{flex:1}
+.lp-row b{display:block;font-size:7.5px;font-weight:600;line-height:10px}
+.lp-row small{display:block;font-size:6.5px;color:#6B726C;line-height:10px}
+.lp-foot{margin-top:auto;display:flex;align-items:center;gap:4px;font-size:6.5px;color:#6B726C}
+.lp-foot i{width:4px;height:4px;border-radius:50%;background:#3F7A2E}
+.lp-feat{position:absolute;left:40px;top:364px;width:640px}
+.lp-kicker{font-size:6.5px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:#6B726C}
+.lp-cols{margin-top:12px;display:grid;grid-template-columns:repeat(3,1fr);gap:24px;padding-top:16px;border-top:1px solid #ECEAE3}
+.lp-cols .tile{width:20px;height:20px;border-radius:5px;background:#EEF3E2;display:grid;place-items:center}
+.lp-cols .tile svg{width:11px;height:11px;fill:none;stroke:#17352A;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.lp-cols b{display:block;margin-top:8px;font-size:9px;font-weight:600;line-height:12px}
+.lp-cols p{margin-top:4px;font-size:7.5px;line-height:12px;color:#5A625C}
+
+/* mobile artboard */
+.m{padding:0 12px}
+.m-nav{height:28px;display:flex;align-items:center;justify-content:space-between}
+.m-burger{width:12px;height:8px;border-top:1px solid #18201B;border-bottom:1px solid #18201B;position:relative}
+.m-burger::after{content:"";position:absolute;left:0;right:0;top:3px;border-top:1px solid #18201B}
+.m .lp-eyebrow{margin-top:16px}
+.m .lp-h1{font-size:19px;line-height:21px;margin-top:8px}
+.m .lp-sub{width:auto;font-size:7.5px;line-height:12px;margin-top:8px}
+.m .lp-ctas{flex-direction:column;gap:6px;margin-top:12px}
+.m .lp-cta{justify-content:center;height:22px}
+.m .lp-card{position:relative;left:auto;top:auto;width:auto;height:auto;margin-top:16px;padding:12px;gap:8px}
+
+/* ── Canvas overlay (editor-drawn, never in the page) ── */
+.ov{position:absolute;inset:0;pointer-events:none}
+.ov > *{position:absolute}
+.hover-out{box-shadow:0 0 0 1px var(--measure)}
+.sel-box{box-shadow:0 0 0 1px var(--sel)}
+.hatch{background:repeating-linear-gradient(-45deg,rgba(77,107,255,.28) 0 1px,transparent 1px 4px)}
+.h{width:8px;height:8px;margin:-4px 0 0 -4px;background:#fff;box-shadow:0 0 0 1px var(--sel),0 1px 2px rgba(0,0,0,.25);border-radius:1px}
+.pad-h{background:var(--sel);border-radius:2px;box-shadow:0 0 0 1px #fff}
+.pill{height:16px;padding:0 4px;border-radius:4px;font:600 10px/16px var(--font-ui);color:#fff;white-space:nowrap;font-variant-numeric:tabular-nums}
+.pill.sel{background:var(--accent-solid)} .pill.red{background:var(--measure)}
+.guide-v{width:1px;background:var(--guide)}
+.gdot{width:5px;height:5px;margin:-2px 0 0 -2px;border-radius:50%;background:var(--guide)}
+.m-line{height:1px;background:var(--measure)}
+.m-tick{width:1px;height:8px;background:var(--measure)}
+
+/* ───────────── Floating cards ───────────── */
+.float{position:absolute;background:var(--panel);border-radius:var(--r-card);
+  box-shadow:0 0 0 1px var(--panel-edge),var(--panel-shadow);
+  -webkit-backdrop-filter:blur(20px) saturate(160%);backdrop-filter:blur(20px) saturate(160%)}
+.bar{height:48px;display:flex;align-items:center;padding:0 8px;gap:4px}
+.ib{width:32px;height:32px;border-radius:var(--r-ctl);display:grid;place-items:center;color:var(--text-2);flex:none}
+.ib:hover{background:var(--field-hover);color:var(--text)}
+.ib.sm{width:24px;height:24px;border-radius:var(--r-sm)}
+.ib.dis{color:var(--text-3);opacity:.7}
+.vsep{width:1px;height:20px;background:var(--hair);margin:0 4px;flex:none}
+kbd{font-family:var(--font-ui);font-size:11px;font-weight:600;line-height:16px;height:20px;min-width:20px;padding:2px 4px;
+  border-radius:4px;background:var(--kbd);color:var(--text-2);text-align:center;display:inline-block}
+
+/* top-left: project */
+.proj{left:12px;top:12px;width:264px;padding:0 8px 0 12px}
+.mark{width:24px;height:24px;border-radius:8px;flex:none;display:grid;place-items:center;
+  background:linear-gradient(135deg,#4361F5 0%,#1FA9C9 100%);box-shadow:inset 0 0 0 1px rgba(255,255,255,.18)}
+.mark svg{width:16px;height:16px;fill:none;stroke:#fff;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+.proj-txt{flex:1;min-width:0;margin-left:8px}
+.proj-txt b{display:block;font-size:13px;font-weight:600;line-height:16px;white-space:nowrap}
+.proj-txt span{display:block;font-size:11px;line-height:16px;color:var(--text-3)}
+
+/* sync stepper */
+.sync{left:284px;top:12px;padding:0 12px 0 8px;gap:0}
+.step{display:flex;align-items:center;gap:8px;height:32px;padding:0 8px;border-radius:var(--r-ctl);font-size:12px;font-weight:500;color:var(--text-2);white-space:nowrap}
+.step .t3{font-weight:500}
+.step.done .ic{color:var(--ok)}
+.step.now{background:var(--field);color:var(--text);font-weight:600}
+.step.next{color:var(--text-3)}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--warn);box-shadow:0 0 0 3px color-mix(in srgb,var(--warn) 22%,transparent)}
+.link{width:16px;height:1px;background:var(--hair);margin:0 4px}
+.link.on{background:var(--text-3)}
+
+/* viewport switcher */
+.vp{left:888px;top:12px}
+.seg{display:flex;padding:2px;gap:2px;border-radius:var(--r-ctl);background:var(--field)}
+.seg button{height:28px;padding:0 8px;border-radius:6px;display:flex;align-items:center;gap:6px;color:var(--text-2);font-size:12px;font-weight:500}
+.seg button.on{background:var(--seg-on);box-shadow:var(--seg-on-shadow);color:var(--text);font-weight:600}
+.seg.icon button{width:32px;padding:0;justify-content:center}
+.seg.tiny button{height:24px;font-size:11px;padding:0 8px}
+.seg.tiny{flex:1}
+.seg.tiny button{flex:1;justify-content:center}
+
+/* top-right: history + zoom */
+.tr{left:1140px;top:12px;width:288px;justify-content:space-between}
+.tr .grp{display:flex;align-items:center;gap:4px}
+.zoom{display:flex;align-items:center;gap:4px;height:32px;padding:0 4px 0 8px;border-radius:var(--r-ctl);font-weight:600;color:var(--text)}
+.zoom:hover{background:var(--field-hover)}
+
+/* ───────────── Side panels ───────────── */
+.side{top:72px;width:264px;display:flex;flex-direction:column;overflow:hidden}
+.left{left:12px}
+.right{left:1140px;width:288px}
+.sec{padding:12px;border-top:1px solid var(--hair)}
+.sec:first-child{border-top:0}
+.sec-h{height:20px;margin-bottom:4px;display:flex;align-items:center;gap:8px}
+.sec-h > span{font-size:12px;font-weight:600;color:var(--text)}
+.sec-h .meta{font-size:11px;font-weight:500;color:var(--text-3)}
+.sec-h .acts{margin-left:auto;display:flex;gap:4px;margin-right:-4px}
+.sec-h .ib.sm{color:var(--text-3)}
+.rows{display:flex;flex-direction:column;gap:8px}
+.r{display:flex;gap:8px;align-items:center;height:28px}
+
+/* fields */
+.f{height:28px;display:flex;align-items:center;gap:6px;padding:0 8px;border-radius:var(--r-sm);background:var(--field);
+  font-size:12px;font-weight:500;color:var(--text);min-width:0;box-shadow:inset 0 0 0 1px transparent}
+.f:hover{box-shadow:inset 0 0 0 1px var(--hair)}
+.f .lbl{font-size:11px;font-weight:600;color:var(--text-3);width:12px;flex:none}
+.f .ic{color:var(--text-3)}
+.f .v{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.f .u{color:var(--text-3);font-size:11px}
+.f.sel .ic.chev{margin-left:auto}
+.f.computed .v{color:var(--text-2)}
+.f.focus{box-shadow:inset 0 0 0 1px var(--accent-text)}
+.grow{flex:1}
+
+/* layers + pages */
+.lrow{height:28px;display:flex;align-items:center;gap:4px;padding-right:4px;border-radius:var(--r-sm);color:var(--text-2);font-weight:500;white-space:nowrap;position:relative}
+.lrow .tw{width:16px;height:16px;display:grid;place-items:center;color:var(--text-3);flex:none}
+.lrow .ty{color:var(--text-3)}
+.lrow .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.lrow .tg{display:flex;gap:0;opacity:0}
+.lrow .tg .ib.sm{color:var(--text-3)}
+.lrow:hover{background:var(--row-hover)}
+.lrow.hov{background:var(--row-hover);color:var(--text)}
+.lrow.hov::before{content:"";position:absolute;left:0;top:6px;bottom:6px;width:2px;border-radius:1px;background:var(--measure)}
+.lrow.sel{background:var(--row-sel);color:var(--text);font-weight:600}
+.lrow.sel .ty,.lrow.sel .tw{color:var(--accent-text)}
+.lrow.sel .tg,.lrow.hov .tg,.lrow.locked .tg,.lrow.hidden .tg{opacity:1}
+.lrow.in-sel{background:var(--row-sel-soft)}
+.lrow.hidden .nm,.lrow.hidden .ty{opacity:.62}
+.lrow.locked .tg .on,.lrow.hidden .tg .on{color:var(--text-2)}
+.lrow.page .nm{color:var(--text)}
+.lrow.ab{color:var(--text-2)}
+.lrow.ab.on{color:var(--text);font-weight:600}
+.lrow.ab.on .ty{color:var(--accent-text)}
+.lrow .badge{font-size:11px;color:var(--text-3);font-weight:500}
+.edit-dot{width:6px;height:6px;border-radius:50%;background:var(--warn);flex:none;margin-right:4px}
+.tree{padding:0 4px}
+.side-foot{display:flex;align-items:center;justify-content:space-between;height:40px;padding:0 12px;border-top:1px solid var(--hair);font-size:11px;color:var(--text-3);font-weight:500}
+.side-foot span{display:flex;align-items:center;gap:4px}
+
+/* right panel bits */
+.selhead{display:flex;align-items:center;gap:8px;height:20px;margin-bottom:8px}
+.selhead b{font-size:13px;font-weight:600}
+.selhead .ic{color:var(--accent-text)}
+.chip{height:28px;display:flex;align-items:center;gap:8px;padding:0 8px;border-radius:var(--r-sm);
+  background:var(--accent-soft);box-shadow:inset 0 0 0 1px var(--accent-edge);color:var(--text);font-size:11px}
+.chip .ic{color:var(--accent-text)}
+.chip .sel-name{font-weight:500;color:var(--accent-text)}
+.chip .src{color:var(--text-2)}
+.chip .ic.chev{margin-left:auto;color:var(--text-2)}
+.align9{width:64px;height:64px;border-radius:var(--r-sm);background:var(--field);display:grid;grid-template-columns:repeat(3,1fr);grid-template-rows:repeat(3,1fr);padding:4px;flex:none}
+.align9 i{display:grid;place-items:center}
+.align9 i::after{content:"";width:3px;height:3px;border-radius:50%;background:var(--text-3);opacity:.8}
+.align9 i.on::after{display:none}
+.align9 i.on{flex-direction:column;align-content:center;justify-items:start;gap:2px;display:grid;padding-left:3px}
+.align9 i.on b{display:block;height:3px;border-radius:1.5px;background:var(--accent-text)}
+.swatch{width:16px;height:16px;border-radius:4px;flex:none;box-shadow:inset 0 0 0 1px rgba(0,0,0,.18)}
+.token{display:inline-flex;align-items:center;gap:4px;height:20px;padding:0 6px 0 4px;border-radius:10px;background:var(--accent-soft);
+  box-shadow:inset 0 0 0 1px var(--accent-edge);color:var(--accent-text);font:500 11px/16px var(--font-mono);white-space:nowrap}
+.token .ic{color:var(--accent-text)}
+.f.tok{padding-left:6px;padding-right:4px}
+.f.tok .detach{margin-left:auto;color:var(--text-3)}
+
+/* dock + toast */
+.dock{left:50%;bottom:16px;transform:translateX(-50%);height:52px;padding:8px;display:flex;align-items:center;gap:4px}
+.tool{width:36px;height:36px;border-radius:10px;display:grid;place-items:center;color:var(--text-2);position:relative}
+.tool:hover{background:var(--field-hover);color:var(--text)}
+.tool.on{background:var(--accent-solid);color:#fff;box-shadow:0 2px 8px rgba(67,97,245,.35)}
+.tool .ic{width:18px;height:18px}
+.cmd{display:flex;align-items:center;gap:8px;height:36px;width:184px;padding:0 6px 0 12px;border-radius:10px;background:var(--field);color:var(--text-2);font-weight:500}
+.cmd .grow{color:var(--text-2)}
+.toast{left:50%;bottom:84px;transform:translateX(-50%);display:flex;align-items:center;gap:12px;height:48px;padding:0 8px 0 12px;border-radius:14px}
+.toast .okc{width:24px;height:24px;border-radius:50%;display:grid;place-items:center;background:color-mix(in srgb,var(--ok) 18%,transparent);color:var(--ok);flex:none}
+.toast .tx{white-space:nowrap}
+.toast .tx b{display:block;font-size:12px;font-weight:600;line-height:16px}
+.toast .tx b .mono{font-weight:500;font-size:11px;color:var(--text-2)}
+.toast .tx > span{display:block;font:400 11px/16px var(--font-mono);color:var(--text-3)}
+.toast .undo{display:flex;align-items:center;gap:8px;height:32px;padding:0 8px;border-radius:var(--r-ctl);color:var(--accent-text);font-weight:600}
+.toast .undo:hover{background:var(--field-hover)}
+</style>
+</head>
+<body>
+
+<!-- ───────────── Icon sprite: 24-unit grid, 1.5 stroke, round caps ───────────── -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></symbol>
+  <symbol id="i-redo" viewBox="0 0 24 24"><path d="m15 14 5-5-5-5"/><path d="M20 9H10a6 6 0 0 0 0 12h3"/></symbol>
+  <symbol id="i-minus" viewBox="0 0 24 24"><path d="M6 12h12"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 6v12M6 12h12"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M5.6 5.6 7 7M17 17l1.4 1.4M3 12h2M19 12h2M5.6 18.4 7 17M17 7l1.4-1.4"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M19.5 14.5A7.5 7.5 0 1 1 9.5 4.5a6 6 0 0 0 10 10z"/></symbol>
+  <symbol id="i-panel-l" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="3"/><path d="M9.5 4.5v15"/></symbol>
+  <symbol id="i-panel-r" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="3"/><path d="M14.5 4.5v15"/></symbol>
+  <symbol id="i-chev-d" viewBox="0 0 24 24"><path d="m7 10 5 5 5-5"/></symbol>
+  <symbol id="i-chev-r" viewBox="0 0 24 24"><path d="m10 7 5 5-5 5"/></symbol>
+  <symbol id="i-check-c" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="m8.5 12 2.5 2.5 4.5-5"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="m6 12.5 4 4 8-9"/></symbol>
+  <symbol id="i-push" viewBox="0 0 24 24"><path d="M12 15V4.5M7.5 9 12 4.5 16.5 9"/><path d="M4.5 15v2.5a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V15"/></symbol>
+  <symbol id="i-desktop" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="11" rx="2"/><path d="M8.5 19.5h7M12 15.5v4"/></symbol>
+  <symbol id="i-tablet" viewBox="0 0 24 24"><rect x="5.5" y="3.5" width="13" height="17" rx="2"/><path d="M11 17.5h2"/></symbol>
+  <symbol id="i-phone" viewBox="0 0 24 24"><rect x="7.5" y="3.5" width="9" height="17" rx="2"/><path d="M11 17.5h2"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M13.5 3.5H7.5a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2V8.5z"/><path d="M13.5 3.5v5h5"/></symbol>
+  <symbol id="i-board" viewBox="0 0 24 24"><rect x="4.5" y="6.5" width="15" height="13" rx="1.5"/><path d="M4.5 3.5h6"/></symbol>
+  <symbol id="i-frame" viewBox="0 0 24 24"><path d="M8 3.5v17M16 3.5v17M3.5 8h17M3.5 16h17"/></symbol>
+  <symbol id="i-col" viewBox="0 0 24 24"><rect x="5.5" y="4.5" width="13" height="6" rx="1.5"/><rect x="5.5" y="13.5" width="13" height="6" rx="1.5"/></symbol>
+  <symbol id="i-row" viewBox="0 0 24 24"><rect x="4.5" y="5.5" width="6" height="13" rx="1.5"/><rect x="13.5" y="5.5" width="6" height="13" rx="1.5"/></symbol>
+  <symbol id="i-text" viewBox="0 0 24 24"><path d="M6 7V5h12v2M12 5v14M9.5 19h5"/></symbol>
+  <symbol id="i-image" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><circle cx="9" cy="10" r="1.5"/><path d="m20.5 15.5-4.5-4.5-8.5 8.5"/></symbol>
+  <symbol id="i-rect" viewBox="0 0 24 24"><rect x="4.5" y="5.5" width="15" height="13" rx="2"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.75"/></symbol>
+  <symbol id="i-eye-off" viewBox="0 0 24 24"><path d="M4 4l16 16"/><path d="M10.5 5.6A9.6 9.6 0 0 1 12 5.5c6 0 9.5 6.5 9.5 6.5a16 16 0 0 1-2.7 3.5M6.8 6.8C4 8.6 2.5 12 2.5 12S6 18.5 12 18.5a9 9 0 0 0 4.9-1.4"/><path d="M10 10a2.75 2.75 0 0 0 4 4"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5.5" y="10.5" width="13" height="9" rx="2"/><path d="M8.5 10.5V8a3.5 3.5 0 0 1 7 0v2.5"/></symbol>
+  <symbol id="i-unlock" viewBox="0 0 24 24"><rect x="5.5" y="10.5" width="13" height="9" rx="2"/><path d="M8.5 10.5V8a3.5 3.5 0 0 1 6.8-1.2"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="m19.5 19.5-4.2-4.2"/></symbol>
+  <symbol id="i-cursor" viewBox="0 0 24 24"><path d="M5.5 4.5 18 10.5l-5.5 1.8-2 5.7z"/></symbol>
+  <symbol id="i-hand" viewBox="0 0 24 24"><path d="M8.5 12.5V7a1.5 1.5 0 0 1 3 0v4.5M11.5 11V5.5a1.5 1.5 0 0 1 3 0V11M14.5 11.5V7.5a1.5 1.5 0 0 1 3 0v6a6.5 6.5 0 0 1-6.5 6.5h-.6a6 6 0 0 1-4.7-2.3l-2.3-3a1.5 1.5 0 0 1 2.3-1.9l2.3 2.2"/></symbol>
+  <symbol id="i-code" viewBox="0 0 24 24"><path d="m8.5 8-4 4 4 4M15.5 8l4 4-4 4"/></symbol>
+  <symbol id="i-token" viewBox="0 0 24 24"><path d="M12 4.5 19.5 12 12 19.5 4.5 12z"/><circle cx="12" cy="12" r="1.75"/></symbol>
+  <symbol id="i-detach" viewBox="0 0 24 24"><path d="M10.5 6.5 12 5a3.9 3.9 0 0 1 5.5 5.5L16 12M13.5 17.5 12 19a3.9 3.9 0 0 1-5.5-5.5L8 12"/><path d="M4.5 4.5l15 15"/></symbol>
+  <symbol id="i-arr-r" viewBox="0 0 24 24"><path d="M5 12h14M13.5 6.5 19 12l-5.5 5.5"/></symbol>
+  <symbol id="i-arr-d" viewBox="0 0 24 24"><path d="M12 5v14M6.5 13.5 12 19l5.5-5.5"/></symbol>
+  <symbol id="i-wrap" viewBox="0 0 24 24"><path d="M4.5 7h12a3 3 0 0 1 0 6h-8"/><path d="m11 10.5-2.5 2.5 2.5 2.5"/><path d="M4.5 17.5h4"/></symbol>
+  <symbol id="i-gap" viewBox="0 0 24 24"><path d="M5 4.5h14M5 19.5h14"/><path d="M12 8.5v7M9.5 11 12 8.5l2.5 2.5M9.5 13 12 15.5l2.5-2.5"/></symbol>
+  <symbol id="i-pad-x" viewBox="0 0 24 24"><path d="M4.5 4.5v15M19.5 4.5v15"/><rect x="8.5" y="8.5" width="7" height="7" rx="1"/></symbol>
+  <symbol id="i-pad-y" viewBox="0 0 24 24"><path d="M4.5 4.5h15M4.5 19.5h15"/><rect x="8.5" y="8.5" width="7" height="7" rx="1"/></symbol>
+  <symbol id="i-sides" viewBox="0 0 24 24"><path d="M4.5 9V6.5a2 2 0 0 1 2-2H9M15 4.5h2.5a2 2 0 0 1 2 2V9M19.5 15v2.5a2 2 0 0 1-2 2H15M9 19.5H6.5a2 2 0 0 1-2-2V15"/></symbol>
+  <symbol id="i-radius" viewBox="0 0 24 24"><path d="M5.5 19.5V12a6.5 6.5 0 0 1 6.5-6.5h7.5"/></symbol>
+  <symbol id="i-opacity" viewBox="0 0 24 24"><circle cx="12" cy="12" r="7.5"/><path d="M12 4.5a7.5 7.5 0 0 1 0 15z" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-shadow" viewBox="0 0 24 24"><rect x="4.5" y="4.5" width="11" height="11" rx="2"/><path d="M19.5 8.5v9a2 2 0 0 1-2 2h-9"/></symbol>
+  <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4.5 8h9M17.5 8h2M4.5 16h2M10.5 16h9"/><circle cx="15.5" cy="8" r="2"/><circle cx="8.5" cy="16" r="2"/></symbol>
+  <symbol id="i-weight" viewBox="0 0 24 24"><path d="M4.5 7h15" stroke-width="1"/><path d="M4.5 12h15" stroke-width="2"/><path d="M4.5 17.5h15" stroke-width="3"/></symbol>
+  <symbol id="i-lh" viewBox="0 0 24 24"><path d="M4.5 4.5h15M4.5 19.5h15M9 16l3-8 3 8M10 13.5h4"/></symbol>
+  <symbol id="i-ls" viewBox="0 0 24 24"><path d="M4.5 4.5v15M19.5 4.5v15M9 16l3-8 3 8M10 13.5h4"/></symbol>
+  <symbol id="i-size" viewBox="0 0 24 24"><path d="M4.5 7V5h9v2M9 5v14M7 19h4M13.5 12v-1.5h6V12M16.5 10.5V19M15 19h3"/></symbol>
+  <symbol id="i-abs" viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="17" height="17" rx="2" stroke-dasharray="2.5 2.5"/><rect x="9.5" y="9.5" width="7" height="7" rx="1"/></symbol>
+  <symbol id="i-layers" viewBox="0 0 24 24"><path d="M12 4.5 19.5 8.5 12 12.5 4.5 8.5z"/><path d="m4.5 12.5 7.5 4 7.5-4M4.5 16l7.5 4 7.5-4"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><circle cx="6" cy="12" r="1.25" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.25" fill="currentColor" stroke="none"/><circle cx="18" cy="12" r="1.25" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-fit" viewBox="0 0 24 24"><path d="M4.5 9V4.5H9M15 4.5h4.5V9M19.5 15v4.5H15M9 19.5H4.5V15"/></symbol>
+</svg>
+
+<div class="app">
+
+  <!-- ═══════════════ CANVAS ═══════════════ -->
+  <main class="canvas" aria-label="Canvas, zoom 50%">
+
+    <!-- Artboard 1: Desktop -->
+    <div class="board-wrap" style="left:300px;top:112px;width:720px;height:520px">
+      <div class="board-label on"><span>Desktop</span><span class="dim">1440 × 1040</span></div>
+      <div class="board lp" style="width:720px;height:520px">
+        <nav class="lp-nav">
+          <div class="lp-logo"><i></i>Halcyon</div>
+          <div class="lp-links"><span>Product</span><span>Pricing</span><span>Customers</span><span>Docs</span></div>
+          <div class="lp-navr"><span>Sign in</span><span class="lp-btn">Get started</span></div>
+        </nav>
+
+        <div class="lp-copy">
+          <span class="lp-eyebrow"><b>New</b> · Halcyon 3.0 matches transfers in real time →</span>
+          <h1 class="lp-h1">Close the books <em>in an afternoon.</em></h1>
+          <p class="lp-sub">Halcyon reconciles every card, invoice and bank transfer as it happens, so month-end is a quick review, not a rescue mission.</p>
+          <div class="lp-ctas"><span class="lp-cta p">Start free trial</span><span class="lp-cta s">Book a demo</span></div>
+          <div class="lp-trust">
+            <small>Trusted by 4,200 finance teams</small>
+            <div class="lp-marks"><span style="font-family:Fraunces,serif">Brightline</span><span style="letter-spacing:.14em">OKTO</span><span>Marrow&nbsp;&amp;&nbsp;Co</span><span style="font-weight:500;font-style:italic">fernway</span></div>
+          </div>
+        </div>
+
+        <div class="lp-card">
+          <div class="lp-ch"><div><b>March close</b><small>Northfield Studio · FY2026</small></div><span class="lp-chip">92% matched</span></div>
+          <div class="lp-bar"><i></i></div>
+          <div class="lp-rows">
+            <div class="lp-row"><span class="tile"><svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M3 10h18"/></svg></span><div><b>Card transactions</b><small>1,284 of 1,284 matched</small></div><span class="lp-chip">Done</span></div>
+            <div class="lp-row"><span class="tile"><svg viewBox="0 0 24 24"><path d="M7 3h7l4 4v14H7z"/><path d="M10 12h5M10 16h5"/></svg></span><div><b>Invoices</b><small>312 of 312 matched</small></div><span class="lp-chip">Done</span></div>
+            <div class="lp-row"><span class="tile"><svg viewBox="0 0 24 24"><path d="M4 10h16M6 10v8M10 10v8M14 10v8M18 10v8M3 20h18M12 3l9 5H3z"/></svg></span><div><b>Bank transfers</b><small>86 of 89 matched</small></div><span class="lp-chip w">3 to review</span></div>
+          </div>
+          <div class="lp-foot"><i></i>Ready for review · Mon 31 Mar</div>
+        </div>
+
+        <section class="lp-feat">
+          <div class="lp-kicker">Built for the last week of the month</div>
+          <div class="lp-cols">
+            <div><span class="tile"><svg viewBox="0 0 24 24"><path d="M4 12a8 8 0 0 1 14-5.3M20 12a8 8 0 0 1-14 5.3"/><path d="M18 3v4h-4M6 21v-4h4"/></svg></span><b>Live reconciliation</b><p>Every feed is matched the moment it lands, with a clear reason for each match.</p></div>
+            <div><span class="tile"><svg viewBox="0 0 24 24"><path d="m5 12 4 4 10-10"/></svg></span><b>Approvals where you work</b><p>Route exceptions to the right owner and close them from email or chat.</p></div>
+            <div><span class="tile"><svg viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg></span><b>Audit-ready exports</b><p>One click gives your accountant a tidy ledger with every source attached.</p></div>
+          </div>
+        </section>
+      </div>
+
+      <!-- Overlay: Alt-hover target, selection, padding, guide, measure -->
+      <div class="ov" aria-hidden="true">
+        <div class="hover-out" style="left:40px;top:84px;width:352px;height:232px"></div>
+
+        <!-- smart guide: card right edge snaps to nav button right edge -->
+        <div class="guide-v" style="left:680px;top:27px;height:289px"></div>
+        <div class="gdot" style="left:680px;top:27px"></div>
+        <div class="gdot" style="left:680px;top:84px"></div>
+
+        <!-- padding zones (hatched) -->
+        <div class="hatch" style="left:424px;top:84px;width:256px;height:16px"></div>
+        <div class="hatch" style="left:424px;top:300px;width:256px;height:16px"></div>
+        <div class="hatch" style="left:424px;top:100px;width:16px;height:200px"></div>
+        <div class="hatch" style="left:664px;top:100px;width:16px;height:200px"></div>
+
+        <div class="sel-box" style="left:424px;top:84px;width:256px;height:232px"></div>
+
+        <!-- padding handles -->
+        <div class="pad-h" style="left:544px;top:90px;width:16px;height:4px"></div>
+        <div class="pad-h" style="left:544px;top:306px;width:16px;height:4px"></div>
+        <div class="pad-h" style="left:430px;top:192px;width:4px;height:16px"></div>
+        <div class="pad-h" style="left:670px;top:192px;width:4px;height:16px"></div>
+        <div class="pill sel" style="left:566px;top:84px">32</div>
+
+        <!-- 8 resize handles -->
+        <div class="h" style="left:424px;top:84px"></div>
+        <div class="h" style="left:552px;top:84px"></div>
+        <div class="h" style="left:680px;top:84px"></div>
+        <div class="h" style="left:424px;top:200px"></div>
+        <div class="h" style="left:680px;top:200px"></div>
+        <div class="h" style="left:424px;top:316px"></div>
+        <div class="h" style="left:552px;top:316px"></div>
+        <div class="h" style="left:680px;top:316px"></div>
+
+        <!-- size label -->
+        <div class="pill sel" style="left:552px;top:324px;transform:translateX(-50%)">512 × 464</div>
+
+        <!-- Alt-measure: Hero copy ↔ Hero card -->
+        <div class="m-line" style="left:392px;top:160px;width:32px"></div>
+        <div class="m-tick" style="left:392px;top:156px"></div>
+        <div class="m-tick" style="left:423px;top:156px"></div>
+        <div class="pill red" style="left:408px;top:138px;transform:translateX(-50%)">64</div>
+      </div>
+    </div>
+
+    <!-- Artboard 2: Mobile (partly under the right panel) -->
+    <div class="board-wrap" style="left:1060px;top:112px;width:196px;height:424px">
+      <div class="board-label"><span>Mobile</span><span class="dim">390 × 848</span></div>
+      <div class="board lp m" style="width:196px;height:424px">
+        <div class="m-nav"><div class="lp-logo"><i></i>Halcyon</div><span class="m-burger"></span></div>
+        <span class="lp-eyebrow"><b>New</b> · Halcyon 3.0 →</span>
+        <h1 class="lp-h1">Close the books <em>in an afternoon.</em></h1>
+        <p class="lp-sub">Halcyon reconciles every card, invoice and bank transfer as it happens.</p>
+        <div class="lp-ctas"><span class="lp-cta p">Start free trial</span><span class="lp-cta s">Book a demo</span></div>
+        <div class="lp-card">
+          <div class="lp-ch"><div><b>March close</b><small>Northfield Studio</small></div><span class="lp-chip">92%</span></div>
+          <div class="lp-bar"><i></i></div>
+          <div class="lp-rows">
+            <div class="lp-row"><span class="tile"><svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M3 10h18"/></svg></span><div><b>Card transactions</b><small>1,284 matched</small></div></div>
+            <div class="lp-row"><span class="tile"><svg viewBox="0 0 24 24"><path d="M7 3h7l4 4v14H7z"/></svg></span><div><b>Invoices</b><small>312 matched</small></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- ═══════════════ TOP: floating bar cards ═══════════════ -->
+  <header class="float bar proj">
+    <span class="mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 9V5h4M19 15v4h-4"/><path d="m10 10 7 3-3 1-1 3z"/></svg></span>
+    <div class="proj-txt"><b>Halcyon marketing site</b><span>projects/halcyon-site</span></div>
+    <button class="ib" aria-label="Collapse left panel" title="Collapse panel  ⌘\"><svg class="ic"><use href="#i-panel-l"/></svg></button>
+  </header>
+
+  <div class="float bar sync" role="status" aria-label="Sync status: edited, 3 changes not pushed">
+    <div class="step done"><svg class="ic"><use href="#i-check-c"/></svg>Pulled <span class="t3">09:12</span></div>
+    <span class="link on"></span>
+    <div class="step now"><span class="dot"></span>Edited <span class="t3">· 3 changes</span></div>
+    <span class="link"></span>
+    <div class="step next" title="Run /design-push in Claude Code"><svg class="ic"><use href="#i-push"/></svg>Pushing</div>
+  </div>
+
+  <div class="float bar vp">
+    <div class="seg" role="tablist" aria-label="Viewport">
+      <button class="on" role="tab" aria-selected="true"><svg class="ic"><use href="#i-desktop"/></svg>1440</button>
+      <button role="tab"><svg class="ic"><use href="#i-tablet"/></svg>768</button>
+      <button role="tab"><svg class="ic"><use href="#i-phone"/></svg>390</button>
+    </div>
+  </div>
+
+  <div class="float bar tr">
+    <div class="grp">
+      <button class="ib" aria-label="Undo" title="Undo  ⌘Z"><svg class="ic"><use href="#i-undo"/></svg></button>
+      <button class="ib dis" aria-label="Redo" title="Redo  ⇧⌘Z"><svg class="ic"><use href="#i-redo"/></svg></button>
+      <span class="vsep"></span>
+      <button class="ib" aria-label="Zoom out"><svg class="ic"><use href="#i-minus"/></svg></button>
+      <button class="zoom" aria-label="Zoom 50%, options">50%<svg class="ic s12"><use href="#i-chev-d"/></svg></button>
+      <button class="ib" aria-label="Zoom in"><svg class="ic"><use href="#i-plus"/></svg></button>
+    </div>
+    <div class="grp">
+      <button class="ib" aria-label="Toggle light or dark theme" onclick="var h=document.documentElement;h.classList.toggle('theme-dark');h.classList.toggle('theme-light')">
+        <svg class="ic"><use href="#i-sun"/></svg></button>
+      <button class="ib" aria-label="Collapse right panel" title="Collapse panel  ⌘\"><svg class="ic"><use href="#i-panel-r"/></svg></button>
+    </div>
+  </div>
+
+  <!-- ═══════════════ LEFT PANEL: pages + layers ═══════════════ -->
+  <aside class="float side left" aria-label="Pages and layers">
+    <section class="sec">
+      <div class="sec-h"><span>Pages</span><span class="meta">3 files</span>
+        <div class="acts"><button class="ib sm" aria-label="Add page"><svg class="ic"><use href="#i-plus"/></svg></button></div></div>
+      <div class="tree" style="padding:0;margin:0 -8px">
+        <div class="lrow page" style="padding-left:4px"><span class="tw"><svg class="ic s12"><use href="#i-chev-d"/></svg></span><svg class="ic ty"><use href="#i-file"/></svg><span class="nm mono" style="font-size:11px">hero.dc.html</span><span class="edit-dot" title="Edited"></span></div>
+        <div class="lrow ab on" style="padding-left:24px"><span class="tw"></span><svg class="ic ty"><use href="#i-desktop"/></svg><span class="nm">Desktop</span><span class="badge">1440</span></div>
+        <div class="lrow ab" style="padding-left:24px"><span class="tw"></span><svg class="ic ty"><use href="#i-phone"/></svg><span class="nm">Mobile</span><span class="badge">390</span></div>
+        <div class="lrow page" style="padding-left:4px"><span class="tw"><svg class="ic s12"><use href="#i-chev-r"/></svg></span><svg class="ic ty"><use href="#i-file"/></svg><span class="nm mono t2" style="font-size:11px">pricing.dc.html</span></div>
+        <div class="lrow page" style="padding-left:4px"><span class="tw"><svg class="ic s12"><use href="#i-chev-r"/></svg></span><svg class="ic ty"><use href="#i-file"/></svg><span class="nm mono t2" style="font-size:11px">customers.dc.html</span></div>
+      </div>
+    </section>
+
+    <section class="sec" style="padding-bottom:8px">
+      <div class="sec-h"><span>Layers</span><span class="meta">Desktop</span>
+        <div class="acts"><button class="ib sm" aria-label="Search layers"><svg class="ic"><use href="#i-search"/></svg></button><button class="ib sm" aria-label="Layer options"><svg class="ic"><use href="#i-more"/></svg></button></div></div>
+      <div class="tree" style="padding:0;margin:0 -8px" role="tree">
+        <!-- depth → padding-left: 4 + depth*12 -->
+        <div class="lrow" style="padding-left:4px"><span class="tw"><svg class="ic s12"><use href="#i-chev-d"/></svg></span><svg class="ic ty"><use href="#i-col"/></svg><span class="nm">Hero section</span><span class="tg"><button class="ib sm"><svg class="ic"><use href="#i-unlock"/></svg></button><button class="ib sm"><svg class="ic"><use href="#i-eye"/></svg></button></span></div>
+        <div class="lrow locked" style="padding-left:16px"><span class="tw"><svg class="ic s12"><use href="#i-chev-r"/></svg></span><svg class="ic ty"><use href="#i-row"/></svg><span class="nm">Nav</span><span class="tg"><button class="ib sm on" aria-label="Unlock Nav"><svg class="ic"><use href="#i-lock"/></svg></button><button class="ib sm" style="opacity:0"><svg class="ic"><use href="#i-eye"/></svg></button></span></div>
+        <div class="lrow hidden" style="padding-left:16px"><span class="tw"></span><svg class="ic ty"><use href="#i-image"/></svg><span class="nm">Background glow</span><span class="tg"><button class="ib sm" style="opacity:0"><svg class="ic"><use href="#i-unlock"/></svg></button><button class="ib sm on" aria-label="Show Background glow"><svg class="ic"><use href="#i-eye-off"/></svg></button></span></div>
+        <div class="lrow" style="padding-left:16px"><span class="tw"><svg class="ic s12"><use href="#i-chev-d"/></svg></span><svg class="ic ty"><use href="#i-row"/></svg><span class="nm">Hero content</span></div>
+        <div class="lrow hov" style="padding-left:28px"><span class="tw"><svg class="ic s12"><use href="#i-chev-d"/></svg></span><svg class="ic ty"><use href="#i-col"/></svg><span class="nm">Hero copy</span><span class="tg"><button class="ib sm"><svg class="ic"><use href="#i-unlock"/></svg></button><button class="ib sm"><svg class="ic"><use href="#i-eye"/></svg></button></span></div>
+        <div class="lrow" style="padding-left:40px"><span class="tw"></span><svg class="ic ty"><use href="#i-text"/></svg><span class="nm">Eyebrow</span></div>
+        <div class="lrow" style="padding-left:40px"><span class="tw"></span><svg class="ic ty"><use href="#i-text"/></svg><span class="nm">Headline</span></div>
+        <div class="lrow" style="padding-left:40px"><span class="tw"></span><svg class="ic ty"><use href="#i-text"/></svg><span class="nm">Subhead</span></div>
+        <div class="lrow" style="padding-left:40px"><span class="tw"><svg class="ic s12"><use href="#i-chev-r"/></svg></span><svg class="ic ty"><use href="#i-row"/></svg><span class="nm">CTA row</span></div>
+        <div class="lrow" style="padding-left:40px"><span class="tw"><svg class="ic s12"><use href="#i-chev-r"/></svg></span><svg class="ic ty"><use href="#i-col"/></svg><span class="nm">Trust row</span></div>
+        <div class="lrow sel" style="padding-left:28px" role="treeitem" aria-selected="true"><span class="tw"><svg class="ic s12"><use href="#i-chev-d"/></svg></span><svg class="ic ty"><use href="#i-col"/></svg><span class="nm">Hero card</span><span class="tg"><button class="ib sm" aria-label="Lock Hero card"><svg class="ic"><use href="#i-unlock"/></svg></button><button class="ib sm" aria-label="Hide Hero card"><svg class="ic"><use href="#i-eye"/></svg></button></span></div>
+        <div class="lrow in-sel" style="padding-left:40px"><span class="tw"><svg class="ic s12"><use href="#i-chev-r"/></svg></span><svg class="ic ty"><use href="#i-row"/></svg><span class="nm">Card header</span></div>
+        <div class="lrow in-sel" style="padding-left:40px"><span class="tw"></span><svg class="ic ty"><use href="#i-rect"/></svg><span class="nm">Progress bar</span></div>
+        <div class="lrow in-sel" style="padding-left:40px"><span class="tw"><svg class="ic s12"><use href="#i-chev-r"/></svg></span><svg class="ic ty"><use href="#i-col"/></svg><span class="nm">Match list</span></div>
+        <div class="lrow in-sel" style="padding-left:40px"><span class="tw"></span><svg class="ic ty"><use href="#i-text"/></svg><span class="nm">Footnote</span></div>
+        <div class="lrow" style="padding-left:4px"><span class="tw"><svg class="ic s12"><use href="#i-chev-r"/></svg></span><svg class="ic ty"><use href="#i-col"/></svg><span class="nm">Feature row</span></div>
+      </div>
+    </section>
+
+    <footer class="side-foot"><span>16 layers · 1 selected</span><span>Hide panels <kbd>⌘\</kbd></span></footer>
+  </aside>
+
+  <!-- ═══════════════ RIGHT PANEL: properties ═══════════════ -->
+  <aside class="float side right" aria-label="Properties">
+    <!-- selector chip -->
+    <section class="sec">
+      <div class="selhead"><svg class="ic"><use href="#i-col"/></svg><b>Hero card</b><span class="mono t3" style="font-size:11px">div.hero-card</span>
+        <span style="margin-left:auto" class="t3">1 element</span></div>
+      <button class="chip" style="width:100%" aria-label="Editing rule: style, hero.dc.html line 42. Change rule">
+        <svg class="ic"><use href="#i-code"/></svg>
+        <span class="mono"><span class="sel-name">style</span> <span class="src">· hero.dc.html:42</span></span>
+        <svg class="ic chev"><use href="#i-chev-d"/></svg>
+      </button>
+    </section>
+
+    <!-- Position -->
+    <section class="sec">
+      <div class="sec-h"><span>Position</span>
+        <div class="acts"><button class="ib sm" aria-label="Ignore auto layout" title="Ignore auto layout"><svg class="ic"><use href="#i-abs"/></svg></button></div></div>
+      <div class="r">
+        <div class="f sel grow"><span class="v">In flow · flex child</span><svg class="ic s12 chev"><use href="#i-chev-d"/></svg></div>
+        <div class="f" style="width:84px"><svg class="ic"><use href="#i-layers"/></svg><span class="v t2">auto</span></div>
+      </div>
+    </section>
+
+    <!-- Layout -->
+    <section class="sec">
+      <div class="sec-h"><span>Auto layout</span><span class="meta mono">flex</span>
+        <div class="acts"><button class="ib sm" aria-label="Remove auto layout"><svg class="ic"><use href="#i-minus"/></svg></button></div></div>
+      <div class="rows">
+        <div class="r">
+          <div class="seg icon" role="radiogroup" aria-label="Direction">
+            <button aria-label="Row"><svg class="ic"><use href="#i-arr-r"/></svg></button>
+            <button class="on" aria-label="Column" aria-checked="true"><svg class="ic"><use href="#i-arr-d"/></svg></button>
+            <button aria-label="Wrap"><svg class="ic"><use href="#i-wrap"/></svg></button>
+          </div>
+          <span class="t3" style="margin-left:auto;font-size:11px;font-weight:500">Column · no wrap</span>
+        </div>
+        <div class="r" style="height:64px;align-items:stretch">
+          <div class="align9" role="grid" aria-label="Alignment: top left">
+            <i class="on"><b style="width:12px"></b><b style="width:8px"></b><b style="width:10px"></b></i><i></i><i></i>
+            <i></i><i></i><i></i><i></i><i></i><i></i>
+          </div>
+          <div style="flex:1;display:flex;flex-direction:column;gap:8px">
+            <div class="f" title="gap"><svg class="ic"><use href="#i-gap"/></svg><span class="v">20</span></div>
+            <div style="display:flex;gap:8px">
+              <div class="f focus grow" title="padding-left / right"><svg class="ic"><use href="#i-pad-x"/></svg><span class="v">32</span></div>
+              <div class="f focus grow" title="padding-top / bottom"><svg class="ic"><use href="#i-pad-y"/></svg><span class="v">32</span></div>
+              <button class="ib sm" style="height:28px;width:24px" aria-label="Padding per side"><svg class="ic"><use href="#i-sides"/></svg></button>
+            </div>
+          </div>
+        </div>
+        <div class="r">
+          <div class="f" style="width:88px"><span class="lbl">W</span><span class="v">512</span></div>
+          <div class="seg tiny" role="radiogroup" aria-label="Width sizing"><button>Hug</button><button>Fill</button><button class="on">Fixed</button></div>
+        </div>
+        <div class="r">
+          <div class="f computed" style="width:88px"><span class="lbl">H</span><span class="v">464</span></div>
+          <div class="seg tiny" role="radiogroup" aria-label="Height sizing"><button class="on">Hug</button><button>Fill</button><button>Fixed</button></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Appearance -->
+    <section class="sec">
+      <div class="sec-h"><span>Appearance</span></div>
+      <div class="r">
+        <div class="f grow"><svg class="ic"><use href="#i-opacity"/></svg><span class="v">100</span><span class="u">%</span></div>
+        <div class="f grow"><svg class="ic"><use href="#i-radius"/></svg><span class="v">16</span></div>
+        <button class="ib sm" style="height:28px" aria-label="Radius per corner"><svg class="ic"><use href="#i-sides"/></svg></button>
+      </div>
+    </section>
+
+    <!-- Fill -->
+    <section class="sec">
+      <div class="sec-h"><span>Fill</span>
+        <div class="acts"><button class="ib sm" aria-label="Pick a token"><svg class="ic"><use href="#i-token"/></svg></button><button class="ib sm" aria-label="Add fill"><svg class="ic"><use href="#i-plus"/></svg></button></div></div>
+      <div class="r">
+        <div class="f tok grow" title="var(--surface-raised) = #FFFFFF">
+          <span class="swatch" style="background:#FFFFFF"></span>
+          <span class="token"><svg class="ic s12"><use href="#i-token"/></svg>surface-raised</span>
+          <button class="ib sm detach" aria-label="Detach token"><svg class="ic"><use href="#i-detach"/></svg></button>
+        </div>
+        <div class="f" style="width:56px"><span class="v">100</span><span class="u">%</span></div>
+        <button class="ib sm" style="height:28px" aria-label="Hide fill"><svg class="ic"><use href="#i-eye"/></svg></button>
+      </div>
+    </section>
+
+    <!-- Stroke -->
+    <section class="sec">
+      <div class="sec-h"><span>Stroke</span>
+        <div class="acts"><button class="ib sm" aria-label="Add stroke"><svg class="ic"><use href="#i-plus"/></svg></button></div></div>
+      <div class="r">
+        <div class="f grow"><span class="swatch" style="background:#E7E3DA"></span><span class="v mono" style="font-size:11px">E7E3DA</span></div>
+        <div class="f" style="width:56px"><svg class="ic"><use href="#i-weight"/></svg><span class="v">1</span></div>
+        <div class="f sel" style="width:76px"><span class="v">Inside</span><svg class="ic s12 chev"><use href="#i-chev-d"/></svg></div>
+      </div>
+    </section>
+
+    <!-- Effects -->
+    <section class="sec">
+      <div class="sec-h"><span>Effects</span>
+        <div class="acts"><button class="ib sm" aria-label="Add effect"><svg class="ic"><use href="#i-plus"/></svg></button></div></div>
+      <div class="r">
+        <div class="f sel grow"><svg class="ic"><use href="#i-shadow"/></svg><span class="v">Drop shadow</span><span class="u">10%</span></div>
+        <button class="ib sm" style="height:28px" aria-label="Shadow settings"><svg class="ic"><use href="#i-sliders"/></svg></button>
+        <button class="ib sm" style="height:28px" aria-label="Hide shadow"><svg class="ic"><use href="#i-eye"/></svg></button>
+      </div>
+    </section>
+
+    <!-- Typography -->
+    <section class="sec">
+      <div class="sec-h"><span>Typography</span><span class="meta">inherited from body</span></div>
+      <div class="rows">
+        <div class="r">
+          <div class="f sel grow"><span class="v">DM Sans</span><svg class="ic s12 chev"><use href="#i-chev-d"/></svg></div>
+          <div class="f sel" style="width:96px"><span class="v">Regular</span><svg class="ic s12 chev"><use href="#i-chev-d"/></svg></div>
+        </div>
+        <div class="r">
+          <div class="f grow" title="font-size"><svg class="ic"><use href="#i-size"/></svg><span class="v">16</span></div>
+          <div class="f grow" title="line-height (unitless)"><svg class="ic"><use href="#i-lh"/></svg><span class="v">1.5</span></div>
+          <div class="f grow" title="letter-spacing"><svg class="ic"><use href="#i-ls"/></svg><span class="v">0</span><span class="u">%</span></div>
+        </div>
+      </div>
+    </section>
+  </aside>
+
+  <!-- ═══════════════ TOAST ═══════════════ -->
+  <div class="float toast" role="status">
+    <span class="okc"><svg class="ic"><use href="#i-check"/></svg></span>
+    <div class="tx"><b>1 change saved <span class="mono">· hero.dc.html</span></b><span>padding 24px → 32px · .hero-card</span></div>
+    <span class="vsep" style="margin:0"></span>
+    <button class="undo">Undo <kbd>⌘Z</kbd></button>
+  </div>
+
+  <!-- ═══════════════ DOCK ═══════════════ -->
+  <nav class="float dock" aria-label="Tools">
+    <button class="tool on" aria-label="Move (V)" aria-pressed="true"><svg class="ic"><use href="#i-cursor"/></svg></button>
+    <button class="tool" aria-label="Frame (F)"><svg class="ic"><use href="#i-frame"/></svg></button>
+    <button class="tool" aria-label="Rectangle (R)"><svg class="ic"><use href="#i-rect"/></svg></button>
+    <button class="tool" aria-label="Text (T)"><svg class="ic"><use href="#i-text"/></svg></button>
+    <button class="tool" aria-label="Image (I)"><svg class="ic"><use href="#i-image"/></svg></button>
+    <button class="tool" aria-label="Hand (H)"><svg class="ic"><use href="#i-hand"/></svg></button>
+    <span class="vsep"></span>
+    <button class="tool" aria-label="Fit selection (Shift 2)"><svg class="ic"><use href="#i-fit"/></svg></button>
+    <span class="vsep"></span>
+    <button class="cmd" aria-label="Open command palette (⌘K)"><svg class="ic"><use href="#i-search"/></svg><span class="grow" style="text-align:left">Run a command</span><kbd>⌘K</kbd></button>
+  </nav>
+
+</div>
+</body>
+</html>
