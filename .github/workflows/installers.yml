@@ -90,5 +90,6 @@ jobs:
 
           Then open a canvas folder made by `/design-pull` in Claude Code.
           NOTES
-          gh release create "${GITHUB_REF_NAME}" installers/*.dmg installers/*.exe \
+          # upload-artifact keeps each file's path, so the installers sit under installers/release/.
+          gh release create "${GITHUB_REF_NAME}" installers/release/*.dmg installers/release/*.exe \
             --title "Design Editor ${GITHUB_REF_NAME}" --notes-file notes.md --generate-notes --verify-tag
