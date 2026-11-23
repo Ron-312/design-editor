@@ -177,6 +177,22 @@ describe('values a style attribute must hold verbatim', () => {
   })
 })
 
+describe('several declarations for one element in one flush', () => {
+  it.each([
+    ['no style attribute', '<div class="a">x</div>', '<div class="a" style="width: 10px; height: 20px">x</div>'],
+    ['an empty style attribute', '<div style="">x</div>', '<div style="width: 10px; height: 20px">x</div>'],
+    ['a style without a trailing semicolon', '<div style="color: red">x</div>', '<div style="color: red; width: 10px; height: 20px">x</div>'],
+    ['a style with a trailing semicolon', '<div style="color: red;">x</div>', '<div style="color: red; width: 10px; height: 20px;">x</div>'],
+  ])('writes width and height into %s as one valid style', (_, before, after) => {
+    const { index, indexed, engine, text } = open(canvas(before))
+    const div = findId(indexed, /^<div/)
+    const outcome = applied(engine.apply(indexed, [setDecl(div, 'width', '10px'), setDecl(div, 'height', '20px')]))
+    expect(outcome.text).toBe(replaceOnce(text, before, after))
+    const declarations = index.indexFile(SNIPPET, outcome.text, outcome.offsets).inlineStyle(div)!.declarations
+    expect(declarations.map(({ prop }) => prop).slice(-2)).toEqual(['width', 'height'])
+  })
+})
+
 describe('removeDecl on an inline style', () => {
   it('removes a middle declaration and its separator only', () => {
     const { indexed, engine, text } = openHome()

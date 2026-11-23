@@ -143,6 +143,8 @@ class Flush {
   private readonly warnings: string[] = []
   private restructured = false
   private rules: HelmetRule[] | undefined
+  /** Declaration lists this flush starts from nothing, by insertion offset, so a second declaration joins the first. */
+  private readonly startedLists = new Map<number, { readonly splice: number; readonly wrap: (list: string) => string; readonly written: string[] }>()
 
   constructor(
     private readonly indexed: IndexedFile,
@@ -220,7 +222,8 @@ class Flush {
       if (op.kind === 'removeDecl') refuse(`there is no ${op.payload.prop} declaration to remove`)
       const { prop, value, important } = op.payload
       const declaration = `${prop}: ${inlineStyleValue(value, '"')}${important ? ' !important' : ''}`
-      this.splices.push(setAttrSplice(this.text, location.startTag, undefined, 'style', declaration))
+      const { start } = setAttrSplice(this.text, location.startTag, undefined, 'style', declaration)
+      this.startList(start, (list) => ` style="${list}"`, declaration)
       return null
     }
     const styleValue = attrValueOf(this.text, attr)!
@@ -247,8 +250,17 @@ class Flush {
       this.splices.push(replaceValueSplice(this.text, existing, escape(value), important))
       return existing.value
     }
-    this.splices.push(appendDeclarationSplice(this.text, declarations, emptyAt, { prop, value: escape(value), ...(important ? { important } : {}) }))
+    const appended = appendDeclarationSplice(this.text, declarations, emptyAt, { prop, value: escape(value), ...(important ? { important } : {}) })
+    if (declarations.length === 0) this.startList(appended.start, (list) => list, appended.content)
+    else this.splices.push(appended)
     return null
+  }
+
+  private startList(at: number, wrap: (list: string) => string, declaration: string): void {
+    const started = this.startedLists.get(at) ?? { splice: this.splices.push({ start: at, end: at, content: '' }) - 1, wrap, written: [] }
+    this.startedLists.set(at, started)
+    started.written.push(declaration)
+    this.splices[started.splice] = { start: at, end: at, content: started.wrap(started.written.join('; ')) }
   }
 
   private helmetRules(): HelmetRule[] {
