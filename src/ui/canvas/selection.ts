@@ -25,7 +25,7 @@ function pathTo(tree: TemplateNode, edId: EdId): EdId[] {
   return []
 }
 
-function parentOf(tree: TemplateNode, edId: EdId): EdId | null {
+export function parentOf(tree: TemplateNode, edId: EdId): EdId | null {
   const path = pathTo(tree, edId)
   return path.at(-2) ?? null
 }

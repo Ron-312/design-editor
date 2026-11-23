@@ -15,6 +15,9 @@ const UNITLESS = new Set([
   'stroke-opacity',
 ])
 
+/** The unit a typed bare number takes when nothing is authored yet. */
+const DEFAULT_UNITS: Readonly<Record<string, string>> = { rotate: 'deg' }
+
 const BARE_NUMBER = /^-?(?:\d+\.?\d*|\.\d+)$/
 const NUMBER_WITH_UNIT = /^(-?(?:\d+\.?\d*|\.\d+))([a-z%]*)$/i
 
@@ -36,7 +39,29 @@ function unitOf(authored: string | null): string | null {
 export function withAuthoredUnit(prop: string, typed: string, authored: string | null): string {
   const value = typed.trim()
   if (!BARE_NUMBER.test(value) || isUnitless(prop)) return value
-  return `${value}${unitOf(authored) ?? 'px'}`
+  return `${value}${unitOf(authored) ?? DEFAULT_UNITS[prop] ?? 'px'}`
+}
+
+const COMPUTED_LENGTH = /^(-?(?:\d+\.?\d*|\.\d+))(px|deg)$/
+const COMPUTED_RGB = /^rgba?\(\s*(\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\s*\)$/
+
+const UNSET_SHOWN_AS: Readonly<Record<string, string>> = { rotate: '0°' }
+
+/** A computed value as a field shows it: px dropped, degrees as °, numbers to a tenth. */
+export function shownComputed(prop: string, value: string): string {
+  if (value === 'none' && UNSET_SHOWN_AS[prop]) return UNSET_SHOWN_AS[prop]
+  const match = value.trim().match(COMPUTED_LENGTH)
+  if (!match) return value.trim()
+  const number = String(Number(Number(match[1]).toFixed(1)))
+  return match[2] === 'deg' ? `${number}°` : number
+}
+
+/** A computed `rgb()` as hex with its alpha from 0 to 1; null for anything else. */
+export function computedColour(value: string): { readonly hex: string; readonly alpha: number } | null {
+  const match = value.trim().match(COMPUTED_RGB)
+  if (!match) return null
+  const rgb = [match[1], match[2], match[3]].map(Number)
+  return { hex: `#${rgb.map((channel) => channel.toString(16).padStart(2, '0')).join('')}`, alpha: match[4] === undefined ? 1 : Number(match[4]) }
 }
 
 /** The value moved by `delta` in its own unit; null when it is not a single number. */

@@ -72,6 +72,8 @@ export interface PanelSection {
   readonly order: number
   readonly appliesTo: (ctx: EditorContext, selection: Selection) => boolean
   readonly component: ComponentType<PanelSectionProps>
+  /** A muted aside after the title, such as "in auto layout". */
+  readonly note?: ComponentType<PanelSectionProps>
 }
 
 export interface OverlayLayerProps {

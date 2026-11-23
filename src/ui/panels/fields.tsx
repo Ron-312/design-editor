@@ -1,8 +1,8 @@
-import { createContext, useContext, useState, type ChangeEvent, type KeyboardEvent, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useState, type ChangeEvent, type KeyboardEvent, type ReactNode } from 'react'
 import type { BoardIndex, DesignToken } from '../../shared/protocol'
 import type { AuthoredDeclaration, EdId, EditOp, RuleId, StyleSource } from '../../shared/types'
 import type { EditorContext } from '../plugin-api'
-import { colorAlpha, inAuthoredColorFormat, stepNumber, withAuthoredUnit, withColorAlpha } from './css-values'
+import { colorAlpha, computedColour, inAuthoredColorFormat, shownComputed, stepNumber, withAuthoredUnit, withColorAlpha } from './css-values'
 
 const ICON_PATHS = {
   'chev-d': <path d="M4 6l4 4 4-4" />,
@@ -81,6 +81,14 @@ const ICON_PATHS = {
       <path d="M13.5 5.5v6a2 2 0 0 1-2 2h-6" />
     </>
   ),
+  search: (
+    <>
+      <circle cx="7" cy="7" r="4.5" />
+      <path d="M10.5 10.5L14 14" />
+    </>
+  ),
+  rotate: <path d="M13 8a5 5 0 1 1-1.5-3.6M13 2.5V5h-2.5" />,
+  'font-size': <path d="M2 13l3.5-9 3.5 9M3.2 10h4.6M10 13l2-5 2 5M10.7 11.5h2.6" />,
   lh: <path d="M2.5 2.5h11M2.5 13.5h11M5.5 11l2.5-6 2.5 6M6.5 9h3" />,
   ls: <path d="M2.5 3v10M13.5 3v10M5.5 11l2.5-6 2.5 6M6.5 9h3" />,
 } as const
@@ -198,6 +206,28 @@ export function useDeclaration(prop: string): Declaration {
   }
 }
 
+/** The live value of `prop` on the one selected element, read again whenever the authored styles change; null for a multi-selection. */
+export function useComputedValue(prop: string): string | null {
+  const { ctx, edIds, styles } = usePanelState()
+  const only = edIds.length === 1 ? edIds[0]! : null
+  const [computed, setComputed] = useState<{ readonly edId: EdId; readonly value: string } | null>(null)
+  useEffect(() => {
+    if (!only) return
+    let current = true
+    ctx
+      .read({ kind: 'computed', edId: only, props: [prop] })
+      .then((result) => {
+        if (current) setComputed({ edId: only, value: result.values[prop] ?? '' })
+      })
+      // A reload rejects reads in flight; the next index change reads again.
+      .catch(() => {})
+    return () => {
+      current = false
+    }
+  }, [ctx, only, prop, styles])
+  return computed && computed.edId === only && computed.value !== '' ? computed.value : null
+}
+
 interface FieldText {
   readonly text: string
   readonly dirty: boolean
@@ -224,7 +254,7 @@ interface TextInputProps {
   readonly field: FieldTextState
   readonly onCommit: (text: string) => void
   readonly onStep?: (direction: 1 | -1, large: boolean) => void
-  readonly placeholder?: string
+  readonly placeholder?: string | undefined
   readonly disabled?: boolean
 }
 
@@ -247,6 +277,7 @@ function TextInput({ label, declaration, field, onCommit, onStep, placeholder, d
     <input
       className="v"
       aria-label={label}
+      title={label}
       value={field.text}
       placeholder={declaration.mixed ? 'Mixed' : placeholder}
       readOnly={declaration.locked}
@@ -338,12 +369,15 @@ export interface NumberFieldProps {
   readonly prop: string
   readonly label: string
   readonly icon?: IconName
+  /** The row names the field already, so it shows no label of its own. */
+  readonly bare?: boolean
 }
 
-export function NumberField({ prop, label, icon }: NumberFieldProps) {
+export function NumberField({ prop, label, icon, bare = false }: NumberFieldProps) {
   const declaration = useDeclaration(prop)
   const field = useFieldText(declaration.value ?? '')
   const token = boundTokenName(declaration.value)
+  const computed = useComputedValue(prop)
 
   function step(direction: 1 | -1, large: boolean) {
     const stepped = stepNumber(field.text, direction * (large ? 10 : 1))
@@ -355,14 +389,17 @@ export function NumberField({ prop, label, icon }: NumberFieldProps) {
 
   return (
     <FieldShell prop={prop} declaration={declaration}>
-      <span className="l" title={label}>
-        {icon ? <Icon name={icon} /> : label}
-      </span>
+      {!bare && (
+        <span className="l" title={label}>
+          {icon ? <Icon name={icon} /> : label}
+        </span>
+      )}
       {token && <TokenPill name={token} />}
       <TextInput
         label={label}
         declaration={declaration}
         field={field}
+        placeholder={computed === null ? undefined : shownComputed(prop, computed)}
         onStep={step}
         onCommit={(text) => (text ? declaration.write(withAuthoredUnit(prop, text, declaration.value)) : declaration.remove())}
       />
@@ -374,12 +411,14 @@ export function NumberField({ prop, label, icon }: NumberFieldProps) {
 export function TextField({ prop, label }: { readonly prop: string; readonly label: string }) {
   const declaration = useDeclaration(prop)
   const field = useFieldText(declaration.value ?? '')
+  const computed = useComputedValue(prop)
   return (
     <FieldShell prop={prop} declaration={declaration}>
       <TextInput
         label={label}
         declaration={declaration}
         field={field}
+        placeholder={computed ?? undefined}
         onCommit={(text) => (text ? declaration.write(text) : declaration.remove())}
       />
       <TokenPicker declaration={declaration} />
@@ -402,6 +441,9 @@ export function ColourField({ prop, label }: { readonly prop: string; readonly l
   const alpha = colorAlpha(authored)
   const colourText = useFieldText(token ? '' : authored)
   const alphaText = useFieldText(alpha === null ? '' : `${Math.round(alpha * 100)}%`)
+  const computedValue = useComputedValue(prop)
+  const computed = declaration.value === null && computedValue ? computedColour(computedValue) : null
+  const shownComputedColour = computed && computed.alpha > 0 ? computed : null
 
   function commitColour(text: string) {
     if (!text) return declaration.remove()
@@ -416,10 +458,27 @@ export function ColourField({ prop, label }: { readonly prop: string; readonly l
 
   return (
     <FieldShell prop={prop} declaration={declaration}>
-      {token ? <TokenPill name={token} /> : <span className="sw" title={label} style={{ background: authored || 'transparent' }} />}
-      <TextInput label="Colour" declaration={declaration} field={colourText} onCommit={commitColour} placeholder={token ? 'Type to detach' : ''} />
+      {token ? (
+        <TokenPill name={token} />
+      ) : (
+        <span className="sw" title={label} style={{ background: authored || shownComputedColour?.hex || 'transparent' }} />
+      )}
+      <TextInput
+        label="Colour"
+        declaration={declaration}
+        field={colourText}
+        onCommit={commitColour}
+        placeholder={token ? 'Type to detach' : (shownComputedColour?.hex.toUpperCase() ?? '')}
+      />
       <span className="alpha">
-        <TextInput label="Alpha" declaration={declaration} field={alphaText} onCommit={commitAlpha} disabled={alpha === null} />
+        <TextInput
+          label="Alpha"
+          declaration={declaration}
+          field={alphaText}
+          onCommit={commitAlpha}
+          disabled={alpha === null}
+          placeholder={shownComputedColour ? `${Math.round(shownComputedColour.alpha * 100)}%` : undefined}
+        />
       </span>
       <TokenPicker declaration={declaration} />
     </FieldShell>

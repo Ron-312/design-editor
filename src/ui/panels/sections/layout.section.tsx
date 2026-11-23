@@ -37,6 +37,7 @@ const SIZING_MODES: readonly (readonly [SizingMode, string])[] = [
   ['fixed', 'Fixed'],
 ]
 const AXIS_NAMES: Readonly<Record<Axis, string>> = { width: 'Width', height: 'Height' }
+const AXIS_LABELS: Readonly<Record<Axis, string>> = { width: 'W', height: 'H' }
 
 const ARROWS = {
   right: <path d="M2.5 8h11M9.5 4l4 4-4 4" />,
@@ -125,9 +126,12 @@ function AutoLayoutSection({ selection }: PanelSectionProps) {
 
   if (!isFlexDisplay(display.value ?? computed['display']!)) {
     return (
-      <button type="button" className="add-al" disabled={display.locked} onClick={() => display.write('flex')}>
-        Add auto layout
-      </button>
+      <div className="rows layout">
+        <style>{SECTION_CSS}</style>
+        <button type="button" className="add-al" disabled={display.locked} onClick={() => display.write('flex')}>
+          Add auto layout
+        </button>
+      </div>
     )
   }
 
@@ -331,12 +335,20 @@ function SizeSection({ ctx, selection }: PanelSectionProps) {
   return (
     <div className="rows layout">
       <style>{SECTION_CSS}</style>
-      {(['width', 'height'] as const).map((axis) => (
-        <div className={inFlex ? 'sz' : 'sz plain'} key={axis}>
-          {inFlex && <SizingControl axis={axis} onMain={axis === mainAxis} item={item} />}
-          <NumberField prop={axis} label={axis === 'width' ? 'W' : 'H'} />
+      {inFlex ? (
+        (['width', 'height'] as const).map((axis) => (
+          <div className="sz" key={axis}>
+            <span className="ax">{AXIS_LABELS[axis]}</span>
+            <SizingControl axis={axis} onMain={axis === mainAxis} item={item} />
+            <NumberField prop={axis} label={AXIS_LABELS[axis]} bare />
+          </div>
+        ))
+      ) : (
+        <div className="r r2">
+          <NumberField prop="width" label="W" />
+          <NumberField prop="height" label="H" />
         </div>
-      ))}
+      )}
       <ContentBoxMaxWarning>
         <div className="r r2">
           <NumberField prop="min-width" label="Min W" />
@@ -373,8 +385,8 @@ const SECTION_CSS = `
 .props .layout .nine button::before{content:"";width:3px;height:3px;border-radius:50%;background:var(--text-3);opacity:.7}
 .props .layout .nine button.on{background:var(--seg-on);box-shadow:0 1px 2px rgba(0,0,0,.2)}
 .props .layout .nine button.on::before{width:8px;height:2px;border-radius:1px;background:var(--accent);opacity:1}
-.props .layout .sz{display:grid;grid-template-columns:1fr 88px;gap:8px;align-items:center}
-.props .layout .sz.plain{grid-template-columns:1fr}
+.props .layout .sz{display:grid;grid-template-columns:16px minmax(0,1fr) 72px;gap:8px;align-items:center}
+.props .layout .sz .ax{color:var(--text-3);font-size:11px;font-weight:600}
 .props .layout .add-al{height:28px;border-radius:var(--r-sm);border:1px dashed var(--line-strong);color:var(--text-2);font-weight:500}
 .props .layout .add-al:hover:not(:disabled){background:var(--field);color:var(--text)}
 `

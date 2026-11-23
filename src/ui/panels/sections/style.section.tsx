@@ -37,7 +37,7 @@ function FillSection() {
 
 function StrokeSection() {
   return (
-    <div className="rows">
+    <div className="r stroke">
       <ColourField prop="border-color" label="Stroke colour" />
       <NumberField prop="border-width" label="Stroke width" icon="stroke" />
     </div>
@@ -120,12 +120,12 @@ function TextBoxTrim() {
 function TypographySection() {
   return (
     <div className="rows">
-      <TextField prop="font-family" label="Font family" />
-      <div className="r r2">
-        <NumberField prop="font-size" label="Size" />
-        <NumberField prop="font-weight" label="Weight" />
+      <div className="r family">
+        <TextField prop="font-family" label="Font family" />
+        <NumberField prop="font-weight" label="Weight" bare />
       </div>
-      <div className="r r2">
+      <div className="r r3">
+        <NumberField prop="font-size" label="Size" icon="font-size" />
         <NumberField prop="line-height" label="Line height" icon="lh" />
         <NumberField prop="letter-spacing" label="Letter spacing" icon="ls" />
       </div>

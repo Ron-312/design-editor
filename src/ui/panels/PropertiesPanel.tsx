@@ -4,7 +4,7 @@ import type { BoardIndex } from '../../shared/protocol'
 import type { EdId, ProjectPath, ReadOnlyReason, StyleSource, TemplateNode } from '../../shared/types'
 import { findNode } from '../canvas/selection'
 import type { EditorContext, PanelSection, Selection } from '../plugin-api'
-import { Icon, PanelStateContext, labelOf, type PanelState, type StyleTarget, type Token } from './fields'
+import { Icon, PanelStateContext, labelOf, type IconName, type PanelState, type StyleTarget, type Token } from './fields'
 
 export type { Token } from './fields'
 
@@ -92,6 +92,7 @@ function SelectionProperties({ ctx, index, selection, tokens, sections, readOnly
 
   return (
     <PanelStateContext.Provider value={state}>
+      <SelectionHeading tree={index.tree} edIds={selection.edIds} />
       <div className="target">
         <SelectorChip index={index} selection={selection} target={target} onPick={setTarget} />
         <RepeatsNotice ctx={ctx} tree={index.tree} edIds={selection.edIds} />
@@ -100,12 +101,37 @@ function SelectionProperties({ ctx, index, selection, tokens, sections, readOnly
       {shown.map((section) => (
         <section className="sec" data-section={section.id} key={section.id}>
           <div className="sh">
-            <h3>{section.title}</h3>
+            <h3>
+              {section.title}
+              {section.note && (
+                <small>
+                  <section.note ctx={ctx} selection={selection} />
+                </small>
+              )}
+            </h3>
           </div>
           <section.component ctx={ctx} selection={selection} />
         </section>
       ))}
     </PanelStateContext.Provider>
+  )
+}
+
+const TEXT_TAGS = new Set(['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'span', 'a', 'label', 'li', 'strong', 'em', 'small'])
+
+function headingIcon(node: TemplateNode): IconName {
+  if (node.tag === 'img' || node.tag === 'picture' || node.tag === 'svg') return 'image'
+  return TEXT_TAGS.has(node.tag) ? 'text' : 'box'
+}
+
+function SelectionHeading({ tree, edIds }: { readonly tree: TemplateNode; readonly edIds: readonly EdId[] }) {
+  const only = edIds.length === 1 ? findNode(tree, edIds[0]!) : null
+  return (
+    <div className="ctx">
+      <Icon name={only ? headingIcon(only) : 'grid'} />
+      <span className="nm">{only ? only.name : `${edIds.length} layers`}</span>
+      {only && <span className="tg">{only.tag}</span>}
+    </div>
   )
 }
 
@@ -229,6 +255,10 @@ const PANEL_CSS = `
 .props .mono{font-family:"JetBrains Mono",ui-monospace,monospace;font-size:11px;letter-spacing:-.1px}
 .props .dimmed{color:var(--text-3);margin-left:auto}
 .props .empty{padding:16px 12px;color:var(--text-3)}
+.props .ctx{height:40px;flex:none;display:flex;align-items:center;gap:8px;padding:0 8px 0 12px;border-bottom:1px solid var(--line);min-width:0}
+.props .ctx svg.i{color:var(--accent-text)}
+.props .ctx .nm{font-weight:600;font-size:13px;line-height:20px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.props .ctx .tg{color:var(--text-3);font:10px/16px "JetBrains Mono",ui-monospace,monospace}
 .props .target{padding:12px;border-bottom:1px solid var(--line);display:grid;gap:8px}
 .props .chip{width:100%;height:28px;display:flex;align-items:center;gap:8px;padding:0 8px;border-radius:var(--r-sm);background:var(--field);border:1px solid var(--line-strong)}
 .props .chip svg.i{color:var(--accent-text)}
@@ -240,17 +270,22 @@ const PANEL_CSS = `
 .props .sec{padding:8px 12px 12px;border-bottom:1px solid var(--line)}
 .props .sh{height:24px;display:flex;align-items:center;margin-bottom:4px}
 .props .sh h3{font-size:12px;font-weight:600;line-height:16px;margin:0}
+.props .sh h3 small{font-weight:400;color:var(--text-3);margin-left:6px;font-size:11px}
 .props .rows{display:grid;gap:8px}
 .props .r{display:grid;gap:8px;align-items:center}
-.props .r2{grid-template-columns:1fr 1fr}
-.props .shadow{grid-template-columns:1fr 28px;gap:4px}
+.props .r > *,.props .field{min-width:0}
+.props .r2{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+.props .r3{grid-template-columns:repeat(3,minmax(0,1fr))}
+.props .family{grid-template-columns:minmax(0,1fr) 96px}
+.props .stroke{grid-template-columns:minmax(0,1fr) 80px}
+.props .shadow{grid-template-columns:minmax(0,1fr) 28px;gap:4px}
 .props .f{height:28px;border-radius:var(--r-sm);background:var(--field);display:flex;align-items:center;gap:6px;padding:0 8px;min-width:0;border:1px solid transparent}
 .props .f:focus-within{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft)}
 .props .f.dis{background:transparent;border-color:var(--line)}
 .props .f.dis .v{color:var(--text-3)}
 .props .f .l{color:var(--text-3);font-size:11px;min-width:12px;flex:none;display:grid;place-items:center}
 .props .f .v{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.props .f input.v{background:none;border:0;outline:none;color:inherit;font:inherit;padding:0}
+.props .f input.v{width:0;background:none;border:0;outline:none;color:inherit;font:inherit;padding:0;text-overflow:ellipsis}
 .props .f input.v::placeholder{color:var(--text-3)}
 .props .alpha{width:44px;flex:none;display:flex;border-left:1px solid var(--line);padding-left:6px}
 .props .ib{width:24px;height:24px;flex:none;border-radius:var(--r-xs);display:grid;place-items:center;color:var(--text-3)}
@@ -259,6 +294,10 @@ const PANEL_CSS = `
 .props .tok{display:inline-flex;align-items:center;gap:4px;height:20px;padding:0 6px 0 4px;border-radius:10px;background:var(--token-bg);border:1px solid var(--token-line);color:var(--token);font:500 11px/16px "JetBrains Mono",monospace;white-space:nowrap}
 .props .tok svg.i{width:12px;height:12px}
 .props .picker{position:relative;display:flex}
+.props .f{position:relative}
+.props .f > .picker{position:absolute;right:1px;top:1px}
+.props .f > .picker .ib{width:24px;height:24px;background:var(--field);opacity:0}
+.props .f:hover > .picker .ib,.props .f:focus-within > .picker .ib,.props .f > .picker .ib[aria-expanded="true"]{opacity:1}
 .props .pop{position:absolute;z-index:10;top:calc(100% + 4px);right:0;min-width:100%;width:max-content;max-width:260px;max-height:240px;overflow:auto;padding:4px;border-radius:var(--r-lg);background:var(--panel);box-shadow:var(--pop-shadow);display:grid}
 .props .opt{height:28px;display:flex;align-items:center;gap:8px;padding:0 8px;border-radius:var(--r-sm);text-align:left}
 .props .opt:hover,.props .opt[aria-selected="true"]{background:var(--accent-soft)}

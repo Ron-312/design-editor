@@ -499,6 +499,60 @@ describe('style sections', () => {
   })
 })
 
+describe('computed values', () => {
+  it('shows the live value as a muted placeholder where nothing is authored', async () => {
+    await mountPanel({ probe: { computed: { width: '336px', 'border-color': 'rgb(230, 221, 207)' } } })
+
+    expect(inputOf('width').value).toBe('')
+    expect(inputOf('width').placeholder).toBe('336')
+    expect(colourInput('border-color').placeholder).toBe('#E6DDCF')
+    expect(alphaInput('border-color').placeholder).toBe('100%')
+  })
+
+  it('shows the authored value, not the live one, where one is authored', async () => {
+    await mountPanel({ probe: { computed: { 'font-size': '14px' } } })
+
+    expect(inputOf('font-size').value).toBe('14px')
+  })
+
+  it('shows no live value for a multi-selection, whose elements may differ', async () => {
+    await mountPanel({ selection: ['card', 'other'], probe: { computed: { width: '336px' } } })
+
+    expect(inputOf('width').placeholder).toBe('')
+  })
+})
+
+describe('position section', () => {
+  const position = () => document.querySelector<HTMLElement>('[data-section="position"]')!
+
+  it('shows where auto layout placed the element, read-only, with the "in auto layout" note', async () => {
+    await mountPanel({ probe: { computed: { display: 'flex' } } })
+
+    expect(squashed(position().querySelector('h3')?.textContent)).toBe('Positionin auto layout')
+    expect(squashed(position().querySelector('[data-placed="X"]')?.textContent)).toBe('X0')
+    expect(position().querySelector('[data-prop="left"]')).toBeNull()
+  })
+
+  it('edits left and top as X and Y for a positioned element', async () => {
+    const view = await mountPanel({ probe: { computed: { position: 'absolute', left: '24px' } } })
+
+    expect(squashed(position().querySelector('h3')?.textContent)).toBe('Positionabsolute')
+    expect(inputOf('left').placeholder).toBe('24')
+    await commit(inputOf('left'), '40')
+
+    expect(lastOp(view)).toEqual({ target: [edId('card')], kind: 'setDecl', payload: { prop: 'left', value: '40px' } })
+  })
+
+  it('writes a typed rotation in degrees', async () => {
+    const view = await mountPanel({ probe: { computed: { rotate: 'none' } } })
+
+    expect(inputOf('rotate').placeholder).toBe('0°')
+    await commit(inputOf('rotate'), '45')
+
+    expect(lastOp(view)).toEqual({ target: [edId('card')], kind: 'setDecl', payload: { prop: 'rotate', value: '45deg' } })
+  })
+})
+
 describe('text-box trim', () => {
   const toggle = () => {
     const found = field('text-box').querySelector<HTMLElement>('[role="switch"]')
