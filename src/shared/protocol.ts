@@ -99,6 +99,8 @@ export type ClientMessage =
   | { readonly type: 'resolvePending'; readonly file: ProjectPath; readonly keep: boolean }
   | { readonly type: 'revertFile'; readonly file: ProjectPath }
   | { readonly type: 'saveEditorState'; readonly state: EditorState }
+  /** The user's answer to `pushStale`: the push stopped in Claude Code, so the editor releases its lock. */
+  | { readonly type: 'unlockStalePush' }
 
 export interface BoardIndex {
   readonly board: ProjectPath
@@ -112,6 +114,13 @@ export interface BoardIndex {
 /** The value the re-indexed source now resolves for each target, for the ack-vs-live check. */
 export type ResolvedValues = Readonly<Record<EdId, string | null>>
 
+/** One inline declaration as a restored file now holds it; null when the file has none. */
+export interface RestoredDeclaration {
+  readonly edId: EdId
+  readonly prop: string
+  readonly value: string | null
+}
+
 export interface UndoState {
   readonly canUndo: boolean
   readonly canRedo: boolean
@@ -122,6 +131,8 @@ export interface UndoState {
 export type ServerMessage =
   | { readonly type: 'hello'; readonly layout: CanvasLayout; readonly editorState: EditorState; readonly readOnly: boolean }
   | { readonly type: 'index'; readonly index: BoardIndex }
+  /** canvas.json changed under a push: boards were added or removed. */
+  | { readonly type: 'layout'; readonly layout: CanvasLayout }
   | {
       readonly type: 'ack'
       readonly opId: string
@@ -130,6 +141,8 @@ export type ServerMessage =
       readonly locations: Readonly<Record<EdId, ElementLocation>>
       readonly resolved: ResolvedValues
       readonly reload: boolean
+      /** One-line warnings about the op, such as a move that can change which selectors match (R04). */
+      readonly warnings: readonly string[]
     }
   | { readonly type: 'rejected'; readonly opId: string; readonly reason: string }
   | { readonly type: 'undoState'; readonly state: UndoState }
@@ -139,8 +152,16 @@ export type ServerMessage =
       readonly locations: Readonly<Record<EdId, ElementLocation>>
       readonly resolved: ResolvedValues
       readonly reload: boolean
+      /** Every declaration a style-only entry restored, so the preview covers all of them, not just the last record's. */
+      readonly declarations: readonly RestoredDeclaration[]
     }
-  | { readonly type: 'outsideChange'; readonly file: ProjectPath; readonly pendingOps: boolean }
+  | {
+      readonly type: 'outsideChange'
+      readonly file: ProjectPath
+      readonly pendingOps: boolean
+      /** Old id of a node that no longer matches -> the id of the node now at its element path, so selection survives the reload. */
+      readonly replacedIds: Readonly<Record<EdId, EdId>>
+    }
   | { readonly type: 'writeFailed'; readonly file: ProjectPath; readonly reason: 'locked' | 'error'; readonly message: string }
   | { readonly type: 'pushLock'; readonly held: boolean }
   | { readonly type: 'pushStale'; readonly heldForMs: number }

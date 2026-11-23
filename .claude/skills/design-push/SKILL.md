@@ -51,9 +51,17 @@ node tools/edsync.mjs classify --slug <slug> --remote-dir "<snapshot folder>" --
      `read` and `paths`, and run `node tools/edsync.mjs cache --slug <slug> --from "<fetched folder>" --release <type release>`
      until it prints no missing ids, before the commit.
 
-4. **Publish once.** When `publish` is not null, make a single Artifact publish to the canvas `url`
-   with `root` and `files` exactly as classify printed them: one call carrying every changed artboard,
-   never one call per artboard. When `publish` is null there is nothing to send; go to step 5.
+4. **Publish once.** When `publish` is null there is nothing to send; go to step 5. Otherwise, right
+   before the publish, re-check that this push still holds the lock:
+
+```
+node tools/edsync.mjs lock --slug <slug> --nonce <nonce>
+```
+
+   A non-zero exit means the lock is gone or another push holds it: send nothing, report its message,
+   unlock (step 6) and stop. On exit 0 make a single Artifact publish to the canvas `url` with `root` and
+   `files` exactly as classify printed them: one call carrying every changed artboard, never one call
+   per artboard.
 
    If the publish is refused because the remote changed since step 2, report the refusal to the user,
    delete the lock with `node tools/edsync.mjs unlock --slug <slug> --nonce <nonce>`, and leave the

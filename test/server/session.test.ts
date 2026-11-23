@@ -404,6 +404,26 @@ describe('the edit session over the ws', () => {
     expect(diskText(root, HOME)).toBe(duplicated)
   })
 
+  it('names every declaration a multi-declaration style-only undo restored', async () => {
+    const { client, firstCol } = await sessionOn()
+    const width = sendOp(client, op('setDecl', [firstCol], { prop: 'width', value: '200px' }))
+    const padding = sendOp(client, op('setDecl', [firstCol], { prop: 'padding', value: '4px' }))
+    await settled(client, width)
+    await settled(client, padding)
+
+    const at = client.messages.length
+    client.send({ type: 'undo' })
+    const restored = await client.waitFor('restored', () => true, at)
+
+    expect(restored.reload).toBe(false)
+    expect(restored.declarations).toEqual(
+      expect.arrayContaining([
+        { edId: firstCol, prop: 'width', value: '240px' },
+        { edId: firstCol, prop: 'padding', value: '16px' },
+      ]),
+    )
+  })
+
   it('undoes a style-only entry by re-applying the pre-image value as a preview, with no reload', async () => {
     const { root, client, h1 } = await sessionOn()
     await acked(client, op('setDecl', [h1], { prop: 'font-size', value: '56px' }))
@@ -437,6 +457,21 @@ describe('outside edits seen by the watcher', () => {
     client.send({ type: 'undo' })
     await delay(QUIET_MS)
     expect(diskText(root, HOME)).toBe(outside)
+  })
+
+  it('names the fresh id now at the element path of each node the outside edit replaced', async () => {
+    const { root, client, h1 } = await sessionOn()
+    const outside = replaceOnce(HOME_TEXT, '<h1 style="margin: 0; font-size: 48px">Studio Weekly</h1>', '<h2 style="margin: 0">Studio Weekly</h2>')
+
+    const at = client.messages.length
+    writeOutside(root, HOME, outside)
+
+    const change = await client.waitFor('outsideChange', (message) => message.file === HOME, at)
+    const replacement = change.replacedIds[h1]
+    expect(replacement).toBeDefined()
+    const reindexed = (await client.waitFor('index', (message) => message.index.board === HOME, at)).index
+    const location = reindexed.locations[replacement!]!
+    expect(outside.slice(location.startTag.start, location.startTag.end)).toBe('<h2 style="margin: 0">')
   })
 
   async function pendingDuringOutsideEdit() {
@@ -544,6 +579,24 @@ describe('the push lock endpoints', () => {
     }
   })
 
+  it('after a push that removed an artboard, unlocks, sends the new layout and keeps editing the boards left', async () => {
+    const { root, editor, client, h1 } = await sessionOn()
+    const nonce = await beginPush(editor)
+    const canvasJson = path.join(root, 'project', 'canvas.json')
+    const canvas = JSON.parse(readFileSync(canvasJson, 'utf8')) as { boards: Record<string, unknown>; order: string[] }
+    delete canvas.boards['card.dc.html']
+    canvas.order = ['home.dc.html']
+    writeFileSync(canvasJson, JSON.stringify(canvas))
+    rmSync(path.join(root, 'project', 'card.dc.html'))
+
+    const at = client.messages.length
+    expect((await post(editor, HTTP_ROUTES.pushEnd, { nonce })).status).toBe(200)
+
+    await client.waitFor('pushLock', (message) => !message.held, at)
+    expect((await client.waitFor('layout', () => true, at)).layout.order).toEqual([HOME])
+    await acked(client, op('setDecl', [h1], { prop: 'font-size', value: '56px' }))
+  })
+
   it('refuses push/end with a wrong nonce or without the token, and keeps the lock', async () => {
     const { root, editor, client, h1 } = await sessionOn()
     const nonce = await beginPush(editor)
@@ -618,6 +671,34 @@ describe('the push lock endpoints', () => {
     expect((await settled(client, sendOp(client, op('setDecl', [h1], { prop: 'font-size', value: '64px' })))).type).toBe('rejected')
     vi.useRealTimers()
     expect((await post(editor, HTTP_ROUTES.pushEnd, { nonce })).status).toBe(200)
+  }, 30_000)
+})
+
+describe('unlocking a stale push from the canvas', () => {
+  it('ignores the unlock before the editor has asked, and releases the lock once the user answers the 30-minute question', async () => {
+    const { root, editor, client, h1 } = await sessionOn()
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] })
+    const nonce = await beginPush(editor)
+
+    client.send({ type: 'unlockStalePush' })
+    await vi.advanceTimersByTimeAsync(LEASE.editorRenewMs)
+    await delay(QUIET_MS)
+    expect((await readPushLock(root))?.nonce).toBe(nonce)
+
+    const at = client.messages.length
+    for (let held = LEASE.editorRenewMs; held <= LEASE.askUnlockAfterMs; held += LEASE.editorRenewMs) {
+      await vi.advanceTimersByTimeAsync(LEASE.editorRenewMs)
+      await delay(5)
+    }
+    await client.waitFor('pushStale', () => true, at)
+    vi.useRealTimers()
+
+    const asked = client.messages.length
+    client.send({ type: 'unlockStalePush' })
+
+    await client.waitFor('pushLock', (message) => !message.held, asked)
+    expect(await readPushLock(root)).toBeNull()
+    await acked(client, op('setDecl', [h1], { prop: 'font-size', value: '64px' }))
   }, 30_000)
 })
 

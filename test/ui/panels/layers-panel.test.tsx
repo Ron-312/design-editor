@@ -74,6 +74,7 @@ function ackFor(op: EditOp): AckMessage {
     locations: {},
     resolved: {},
     reload: true,
+    warnings: [],
   }
 }
 

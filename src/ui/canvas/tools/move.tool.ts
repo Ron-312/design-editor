@@ -1,5 +1,6 @@
 import type { ProbeReadResult, Rect } from '../../../shared/protocol'
 import type { EdId, EditOp, OpOf, TemplateNode } from '../../../shared/types'
+import { applyStructural } from '../../actions/layer.actions'
 import type { CanvasPointer, CanvasTool, EditorContext, Unsubscribe } from '../../plugin-api'
 import { screenBoxOf, type ScreenBox } from '../overlay'
 import { snapMove, type Axis, type SnapGuide, type SnapTargets } from '../snap'
@@ -324,8 +325,7 @@ function commitShift(ctx: EditorContext, plan: DragPlan, delta: Point): void {
 }
 
 function applyReorder(ctx: EditorContext, op: EditOp): void {
-  // The ws client reports a refused op with its own toast.
-  ctx.apply(op).catch(() => {})
+  void applyStructural(ctx, op)
 }
 
 // ── The drag ──────────────────────────────────────────────────────────────────

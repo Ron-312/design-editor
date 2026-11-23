@@ -52,7 +52,7 @@ export class EditSession {
 
   private constructor(
     private readonly root: string,
-    private readonly layout: CanvasLayout,
+    private layout: CanvasLayout,
     private state: EditorState,
   ) {
     this.writer = new Writer({ root, index: this.index, undo: this.undoLog, send: (message) => this.relay(message) })
@@ -146,6 +146,7 @@ export class EditSession {
     if (message.type === 'op') return this.submit(socket, message.opId, message.op)
     if (message.type === 'open') return this.openBoard(socket, message.board)
     if (message.type === 'saveEditorState') return this.saveEditorState(message.state)
+    if (message.type === 'unlockStalePush') return this.unlockStalePush()
     if (this.lock) return
     switch (message.type) {
       case 'undo':
@@ -246,6 +247,13 @@ export class EditSession {
     this.broadcast({ type: 'pushStale', heldForMs })
   }
 
+  /** Only a push the editor already asked about can be unlocked from the canvas. */
+  private async unlockStalePush(): Promise<void> {
+    if (this.lock?.kind !== 'own' || !this.lock.askedStale) return
+    await releasePushLock(this.root, this.lock.lock.nonce)
+    await this.resume()
+  }
+
   private watchForeignLock(): void {
     const poll = setInterval(() => inBackground(this.resumeOnceForeignLockEnds()), FOREIGN_LOCK_POLL_MS)
     this.lock = { kind: 'foreign', poll }
@@ -256,12 +264,32 @@ export class EditSession {
     await this.resume()
   }
 
-  /** Files the push rewrote are reconciled before input resumes, dropping only their undo entries. */
+  /** Files the push rewrote are reconciled before input resumes, dropping only their undo entries; the canvas unlocks even if that fails. */
   private async resume(): Promise<void> {
     this.stopLockTimer()
-    for (const board of this.layout.order) await this.writer.outsideChange(board)
-    this.lock = null
-    this.broadcast({ type: 'pushLock', held: false })
+    try {
+      await this.reconcileBoards()
+    } finally {
+      this.lock = null
+      this.broadcast({ type: 'pushLock', held: false })
+    }
+  }
+
+  /** A push may carry boards added or removed in Claude Design across, with the canvas.json that lists them. */
+  private async reconcileBoards(): Promise<void> {
+    const layout = await readCanvasLayout(this.root)
+    const removed = this.layout.order.filter((board) => !layout.order.includes(board))
+    for (const board of removed) {
+      await this.writer.close(board)
+      this.sentIndexes.delete(board)
+    }
+    for (const board of layout.order) {
+      if (this.writer.indexed(board)) await this.writer.outsideChange(board)
+      else await this.writer.open(board)
+    }
+    if (JSON.stringify(layout) === JSON.stringify(this.layout)) return
+    this.layout = layout
+    this.broadcast({ type: 'layout', layout })
   }
 
   private stopLockTimer(): void {

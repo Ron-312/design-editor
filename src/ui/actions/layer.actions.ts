@@ -1,9 +1,6 @@
 import type { EdId, EditOp } from '../../shared/types'
 import type { AckMessage, EditorAction, EditorContext } from '../plugin-api'
 
-/** A structural ack may carry the server's selector-match warnings (R04). */
-type StructuralAck = AckMessage & { readonly warnings?: readonly string[] }
-
 type EditorToggle = 'hidden' | 'locked'
 
 /** The layers panel's row buttons, named for what a press does next. */
@@ -19,15 +16,16 @@ function selected(ctx: EditorContext): readonly EdId[] {
 const hasSelection = (ctx: EditorContext) => selected(ctx).length > 0
 const whileEditable = (ctx: EditorContext) => !ctx.readOnly() && hasSelection(ctx)
 
-async function applyStructural(ctx: EditorContext, op: EditOp): Promise<void> {
-  let ack: StructuralAck
+/** Shows the server's selector-match warnings (R04) for a structural op as toasts. */
+export async function applyStructural(ctx: EditorContext, op: EditOp): Promise<void> {
+  let ack: AckMessage
   try {
     ack = await ctx.apply(op)
   } catch {
     // The ws client already toasted the server's one-line refusal; it is never retried with another tag.
     return
   }
-  for (const warning of ack.warnings ?? []) ctx.toast({ message: warning, tone: 'warning' })
+  for (const warning of ack.warnings) ctx.toast({ message: warning, tone: 'warning' })
 }
 
 function structural(kind: 'unwrapNode' | 'duplicateNode' | 'deleteNode') {

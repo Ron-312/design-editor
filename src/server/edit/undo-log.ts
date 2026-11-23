@@ -88,6 +88,12 @@ export class UndoLog {
     this.redoStack = withoutFile(this.redoStack, file)
   }
 
+  /** The file is gone, so no entry may write it back. */
+  dropFile(file: ProjectPath): void {
+    this.undoStack = withoutFile(this.undoStack, file)
+    this.redoStack = withoutFile(this.redoStack, file)
+  }
+
   state(): UndoState {
     return {
       canUndo: this.undoStack.length > 0,

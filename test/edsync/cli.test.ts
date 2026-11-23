@@ -179,6 +179,34 @@ describe('edsync lock', () => {
   })
 })
 
+describe('edsync lock --nonce, the guard before the publish', () => {
+  beforeEach(async () => {
+    await space.pull()
+  })
+
+  it('confirms a lock this push still holds and takes no new one', async () => {
+    const nonce = await space.lock()
+    const before = space.pushLock()
+
+    expect(parsedOk<{ nonce: string; held: boolean }>(await space.edsync('lock', '--slug', SLUG, '--nonce', nonce))).toEqual({ nonce, held: true })
+    expect(space.pushLock()).toEqual(before)
+  })
+
+  it('fails, saying nothing was sent, once the lock is gone or belongs to another push', async () => {
+    const nonce = await space.lock()
+    expectOk(await space.unlockRun(nonce))
+    const gone = await space.edsync('lock', '--slug', SLUG, '--nonce', nonce)
+    const other = await acquirePushLock(space.projectDir, { holder: 'editor', leaseMs: LEASE.editorMs })
+    const taken = await space.edsync('lock', '--slug', SLUG, '--nonce', nonce)
+
+    for (const run of [gone, taken]) {
+      expect(run.exitCode).not.toBe(0)
+      expect(run.stderr).toMatch(/nothing was written or sent/)
+    }
+    expect(space.pushLock()?.nonce).toBe(other!.nonce)
+  })
+})
+
 describe('edsync lock through a slow editor', () => {
   beforeEach(async () => {
     await space.pull()

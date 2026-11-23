@@ -50,6 +50,7 @@ function isClientMessage(value: unknown): value is ClientMessage {
       return isString(value.opId) && isEditOp(value.op)
     case 'undo':
     case 'redo':
+    case 'unlockStalePush':
       return true
     case 'resolvePending':
       return isString(value.file) && typeof value.keep === 'boolean'

@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import type { EditorState, ServerMessage, UndoState } from '../shared/protocol'
-import type { CanvasLayout, EdId, EditRecord, ProjectPath } from '../shared/types'
+import type { CanvasLayout, EditRecord, ProjectPath } from '../shared/types'
 import { createDefaultRegistry, type Platform } from './actions/registry'
 import { canvasContext, CanvasView } from './canvas/CanvasView'
 import { describeEdit, DiffPanel, fileName } from './DiffPanel'
@@ -36,7 +36,6 @@ type RestoredMessage = Extract<ServerMessage, { type: 'restored' }>
 const NO_UNDO: UndoState = { canUndo: false, canRedo: false, undoLabel: null, redoLabel: null }
 const TOAST_MS = 6000
 const OFFLINE_BANNER = 'offline'
-const STALE_PUSH_BANNER = 'push-stale'
 
 const SHORTCUTS: Readonly<Record<Platform, { readonly undo: string; readonly redo: string }>> = {
   mac: { undo: '⌘Z', redo: '⇧⌘Z' },
@@ -89,10 +88,9 @@ function lineOf(store: EditorStore, record: EditRecord): number | null {
   return sources.find((source) => source.target === target)?.line ?? null
 }
 
-/** A style-only undo needs no reload: the iframe takes the values the restored file now resolves. */
-function previewRestored(probe: ProbeClient, { record, resolved }: RestoredMessage): void {
-  if (!record.prop) return
-  for (const [edId, value] of Object.entries(resolved)) probe.previewDecl([edId as EdId], record.prop, value)
+/** A style-only undo needs no reload: the iframe takes every value the restored file now resolves. */
+function previewRestored(probe: ProbeClient, { declarations }: RestoredMessage): void {
+  for (const { edId, prop, value } of declarations) probe.previewDecl([edId], prop, value)
 }
 
 function isTextEntry(target: EventTarget | null): boolean {
@@ -114,6 +112,18 @@ function askAboutPendingEdits(store: EditorStore, ws: WsClient, file: ProjectPat
   })
 }
 
+/** Stays until answered; Unlock releases the lock the stalled push left on the canvas. */
+function askToUnlockStalePush(store: EditorStore, ws: WsClient, heldForMs: number): string {
+  return store.toast({
+    message: `A push has held the canvas for ${Math.round(heldForMs / 60_000)} min. It may still be running in Claude Code: unlock?`,
+    tone: 'warning',
+    actions: [
+      { label: 'Unlock', run: () => ws.send({ type: 'unlockStalePush' }) },
+      { label: 'Keep waiting', run: () => {} },
+    ],
+  })
+}
+
 function toggleTheme(): void {
   document.documentElement.classList.toggle('light')
 }
@@ -126,6 +136,7 @@ export function App({ store, ws, platform, projectName }: AppProps) {
   const [saved, setSaved] = useState<SavedEdit | null>(null)
   const [leftTab, setLeftTab] = useState<LeftTab>('layers')
   const [tokens, setTokens] = useState<readonly Token[]>([])
+  const staleToast = useRef<string | null>(null)
   const registry = useMemo(() => createDefaultRegistry(platform), [platform])
   const editorState = session?.editorState
   const ctx = useMemo(
@@ -140,6 +151,9 @@ export function App({ store, ws, platform, projectName }: AppProps) {
           case 'hello':
             store.setReadOnly(message.readOnly)
             setSession({ layout: message.layout, editorState: message.editorState })
+            break
+          case 'layout':
+            setSession((current) => current && { ...current, layout: message.layout })
             break
           case 'undoState':
             setUndoState(message.state)
@@ -157,10 +171,10 @@ export function App({ store, ws, platform, projectName }: AppProps) {
             if (message.pendingOps) askAboutPendingEdits(store, ws, message.file)
             break
           case 'pushStale':
-            store.showBanner({ id: STALE_PUSH_BANNER, message: `A push has held the canvas for ${Math.round(message.heldForMs / 60_000)} min; run \`edsync unlock\` if it has stopped` })
+            staleToast.current = askToUnlockStalePush(store, ws, message.heldForMs)
             break
           case 'pushLock':
-            if (!message.held) store.hideBanner(STALE_PUSH_BANNER)
+            if (!message.held && staleToast.current) store.dismissToast(staleToast.current)
             break
         }
       }),

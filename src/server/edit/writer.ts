@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { atomicWrite } from '../../core/atomic-write'
 import { toNativePath } from '../../shared/paths'
-import type { ResolvedValues, ServerMessage } from '../../shared/protocol'
+import type { ResolvedValues, RestoredDeclaration, ServerMessage } from '../../shared/protocol'
 import type { EdId, EditOp, EditRecord, ElementLocation, ProjectPath } from '../../shared/types'
 import { decodeSource, encodeSource } from '../source/bytes'
 import type { IndexedFile, SourceIndex } from '../source/source-index'
@@ -192,11 +192,24 @@ export class Writer {
       const bytes = await readFile(this.nativeOf(file))
       const hash = contentHash(bytes)
       if (hash === open.hash) return
-      open.indexed = reconcile(this.options.index, open.indexed, decodeSource(bytes)).indexed
+      const { indexed, restoreByPath } = reconcile(this.options.index, open.indexed, decodeSource(bytes))
+      open.indexed = indexed
       open.hash = hash
       open.paused = open.pending.length > 0
       this.options.undo.outsideChange(file, hash)
-      this.options.send({ type: 'outsideChange', file, pendingOps: open.paused })
+      this.options.send({ type: 'outsideChange', file, pendingOps: open.paused, replacedIds: Object.fromEntries(restoreByPath) })
+      this.sendUndoState()
+    })
+  }
+
+  /** The board was removed: its pending ops are refused and its undo history dropped. */
+  close(file: ProjectPath): Promise<void> {
+    return this.serialized(async () => {
+      const open = this.files.get(file)
+      if (!open) return
+      this.files.delete(file)
+      this.reject(open.pending, GONE)
+      this.options.undo.dropFile(file)
       this.sendUndoState()
     })
   }
@@ -265,7 +278,7 @@ export class Writer {
     return {
       snapshot: { file, text: before.text, offsets: before.startOffsets(), postWriteHash: open.hash },
       records: outcome.records,
-      acks: batch.flatMap((pending, i) => this.acks(open.indexed, pending, outcome.records[i]!, outcome.minted)),
+      acks: batch.flatMap((pending, i) => this.acks(open.indexed, pending, outcome.records[i]!, outcome.minted, outcome.warnings)),
     }
   }
 
@@ -277,12 +290,15 @@ export class Writer {
     }
   }
 
-  private acks(indexed: IndexedFile, pending: PendingOp, record: EditRecord, minted: readonly EdId[]): ServerMessage[] {
-    const mintedIds = STRUCTURAL_KINDS.has(pending.op.kind) ? minted : []
+  /** Structural ops carry the flush's minted ids and warnings; the engine collects both per flush, not per op. */
+  private acks(indexed: IndexedFile, pending: PendingOp, record: EditRecord, minted: readonly EdId[], flushWarnings: readonly string[]): ServerMessage[] {
+    const structural = STRUCTURAL_KINDS.has(pending.op.kind)
+    const mintedIds = structural ? minted : []
+    const warnings = structural ? flushWarnings : []
     const locations = locationsOf(indexed, [...record.target, ...mintedIds])
     const resolved = resolvedValues(indexed, record)
     const reload = !isInlineStyleRecord(record)
-    return pending.opIds.map((opId) => ({ type: 'ack', opId, record, mintedIds, locations, resolved, reload }))
+    return pending.opIds.map((opId) => ({ type: 'ack', opId, record, mintedIds, locations, resolved, reload, warnings }))
   }
 
   /** The hash is recorded before the rename lands, so the watcher never mistakes this write for an outside edit. */
@@ -317,12 +333,17 @@ export class Writer {
   private announceRestored(entry: UndoEntry): void {
     const locations: Record<EdId, ElementLocation> = {}
     const resolved: Record<EdId, string | null> = {}
+    const declarations: RestoredDeclaration[] = []
     for (const record of entry.records) {
       const indexed = this.files.get(record.files[0]!)!.indexed
+      const values = resolvedValues(indexed, record)
       Object.assign(locations, locationsOf(indexed, record.target))
-      Object.assign(resolved, resolvedValues(indexed, record))
+      Object.assign(resolved, values)
+      if (!isInlineStyleRecord(record)) continue
+      for (const [edId, value] of Object.entries(values)) declarations.push({ edId: edId as EdId, prop: record.prop!, value })
     }
-    this.options.send({ type: 'restored', record: entry.records.at(-1)!, locations, resolved, reload: !entry.styleOnly })
+    const record = entry.records.at(-1)!
+    this.options.send({ type: 'restored', record, locations, resolved, reload: !entry.styleOnly, declarations })
     this.sendUndoState()
   }
 

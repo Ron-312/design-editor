@@ -109,6 +109,13 @@ describe('the design-push skill', () => {
     expect(text.lastIndexOf(`${EDSYNC} unlock`)).toBeGreaterThan(order[2]!)
   })
 
+  it('re-checks the lock with its nonce after classify and before the one publish', () => {
+    const text = skillText('design-push')
+    const recheck = text.indexOf(`${EDSYNC} lock --slug <slug> --nonce <nonce>`)
+    expect(recheck).toBeGreaterThan(text.indexOf(`${EDSYNC} classify`))
+    expect(recheck).toBeLessThan(text.indexOf('single Artifact publish'))
+  })
+
   it('passes classify the re-read remote snapshot folder', () => {
     const commands = commandsIn(skillText('design-push'))
     expect(commands.some((command) => /^node tools\/edsync\.mjs classify .*--remote-dir "[^"]+"/.test(command))).toBe(true)

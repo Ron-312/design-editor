@@ -88,6 +88,10 @@ export function connectWsClient({ host, token, store, reloadFrame }: WsClientOpt
       case 'restored':
         if (message.reload) reloadFrame()
         break
+      case 'outsideChange':
+        store.replaceIds(message.replacedIds)
+        if (message.file === store.getState().board) reloadFrame()
+        break
     }
     for (const listener of listeners) listener(message)
   }

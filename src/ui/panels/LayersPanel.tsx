@@ -9,6 +9,7 @@ import {
   type PointerEvent,
 } from 'react'
 import { isVoidElement, nestingViolation } from '../../shared/content-model'
+import { applyStructural } from '../actions/layer.actions'
 import type { EditorState } from '../../shared/protocol'
 import type { EdId, TemplateNode } from '../../shared/types'
 import type { EditorContext } from '../plugin-api'
@@ -184,8 +185,7 @@ export function LayersPanel({ ctx, onEditorStateChange }: LayersPanelProps) {
     const { parent, before } = moveFor(source, spot)
     const refusal = parentRefusal(source, parent)
     if (refusal) return ctx.toast({ message: refusal, tone: 'warning' })
-    // A refused move is already reported by the ws client's error toast.
-    ctx.apply({ target: [source.node.edId], kind: 'moveNode', payload: { parent: parent.node.edId, before } }).catch(() => {})
+    void applyStructural(ctx, { target: [source.node.edId], kind: 'moveNode', payload: { parent: parent.node.edId, before } })
   }
 
   function select(edId: EdId, additive: boolean) {

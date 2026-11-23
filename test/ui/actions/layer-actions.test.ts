@@ -57,7 +57,7 @@ const COMPUTED = {
   width: '240px',
 }
 
-function ackFor(op: EditOp, extra: Partial<AckMessage> & { readonly warnings?: readonly string[] } = {}): AckMessage {
+function ackFor(op: EditOp, extra: Partial<AckMessage> = {}): AckMessage {
   return {
     type: 'ack',
     opId: 'op-1',
@@ -66,6 +66,7 @@ function ackFor(op: EditOp, extra: Partial<AckMessage> & { readonly warnings?: r
     locations: {},
     resolved: {},
     reload: op.kind !== 'setDecl' && op.kind !== 'removeDecl',
+    warnings: [],
     ...extra,
   }
 }

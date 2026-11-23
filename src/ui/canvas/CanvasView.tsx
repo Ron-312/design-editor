@@ -178,7 +178,8 @@ export function CanvasView({ store, ws, layout, editorState, platform, tools = D
   }
 
   useEffect(() => {
-    const first = store.getState().board ?? layout.order[0]
+    const current = store.getState().board
+    const first = current && layout.order.includes(current) ? current : layout.order[0]
     if (!first) return
     store.setBoard(first)
     ws.send({ type: 'open', board: first })

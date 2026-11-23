@@ -185,7 +185,7 @@ async function editAndAck(shell: Shell, record: EditRecord) {
   const acked = shell.ws.sendOp(setRadius, {})
   const sent = shell.socket.sent.filter((message) => message.type === 'op').at(-1)
   if (sent?.type !== 'op') throw new Error('the ws client sent no op')
-  await receive(shell.socket, { type: 'ack', opId: sent.opId, record, mintedIds: [], locations: {}, resolved: {}, reload: false })
+  await receive(shell.socket, { type: 'ack', opId: sent.opId, record, mintedIds: [], locations: {}, resolved: {}, reload: false, warnings: [] })
   await acked
 }
 
@@ -379,6 +379,18 @@ describe('editor shell', () => {
     expect(sent?.op).toMatchObject({ kind: 'setDecl', target: ['header'], payload: { prop: 'background-color', value: '#fff7ed' } })
   })
 
+  it('falls back to the first remaining board when a push removes the open one', async () => {
+    const { container, socket, store } = await openHome()
+    act(() => store.setBoard(card))
+    await settle()
+
+    await receive(socket, { type: 'layout', layout: { boards: [layout.boards[0]!], order: [home], pages: [home] } })
+
+    expect(store.getState().board).toBe(home)
+    expect(sentOfType(socket, 'open').at(-1)).toEqual({ type: 'open', board: home })
+    expect(container.querySelectorAll('[data-board-switcher] [data-board]')).toHaveLength(1)
+  })
+
   it('saves a layer hidden in the layers panel through saveEditorState', async () => {
     const { container, socket } = await openHome()
     const headerRow = container.querySelector('[role="treeitem"][data-layer-id="header"]')!
@@ -452,6 +464,47 @@ describe('banners', () => {
     await settle()
 
     expect(text(container)).toContain('offline: Fraunces not loaded, layout may differ; sizes tuned now may be off')
+  })
+})
+
+describe('style-only undo', () => {
+  it('previews every declaration the undo restored, not only the last one', async () => {
+    const { socket } = await openHome()
+    const probe = probes.created.at(-1)
+    if (!probe) throw new Error('the canvas created no probe client')
+    const previewDecl = vi.spyOn(probe, 'previewDecl')
+
+    await receive(socket, {
+      type: 'restored',
+      record: radiusRecord('16px', '12px'),
+      locations: {},
+      resolved: { [edId('header')]: '12px' },
+      reload: false,
+      declarations: [
+        { edId: edId('header'), prop: 'width', value: '240px' },
+        { edId: edId('header'), prop: 'border-radius', value: '12px' },
+        { edId: edId('title'), prop: 'color', value: null },
+      ],
+    })
+
+    expect(previewDecl.mock.calls).toEqual([
+      [[edId('header')], 'width', '240px'],
+      [[edId('header')], 'border-radius', '12px'],
+      [[edId('title')], 'color', null],
+    ])
+  })
+})
+
+describe('stale push', () => {
+  it('asks whether to unlock after 30 minutes, and Unlock asks the server to release the lock', async () => {
+    const { container, socket } = await openHome({ readOnly: true })
+
+    await receive(socket, { type: 'pushStale', heldForMs: 31 * 60_000 })
+    const question = [...container.querySelectorAll('[role="status"]')].find((toast) => text(toast).includes('unlock?'))!
+    expect(text(question)).toContain('31 min')
+    await click(buttonNamed(question, /^Unlock$/))
+
+    expect(sentOfType(socket, 'unlockStalePush')).toHaveLength(1)
   })
 })
 

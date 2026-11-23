@@ -202,6 +202,24 @@ describe('shape check', () => {
   })
 })
 
+describe('selector-match warnings', () => {
+  it('acks a move that can change which positional selectors match with the warning, and a style edit with none', async () => {
+    const text = SNIPPET_TEXT.replace(
+      '<x-dc>\n<p class="target">t</p>\n<span class="s"><div>x</div></span>\n</x-dc>',
+      '<x-dc>\n<helmet><style>.a:first-child { color: red; }</style></helmet>\n<section class="one">\n  <div class="a">a</div>\n  <div class="b">b</div>\n</section>\n<section class="two">\n  <div class="c">c</div>\n</section>\n</x-dc>',
+    )
+    const { writer, messages, current } = await openSession({ 'snippet.dc.html': text })
+    const indexed = current(SNIPPET)
+    const moved = submit(writer, op('moveNode', [findId(indexed, /^<div class="a"/)], { parent: findId(indexed, /^<section class="two"/), before: null }))
+    await writer.flush()
+    const styled = submit(writer, setDecl(findId(current(SNIPPET), /^<div class="c"/), 'color', 'blue'))
+    await writer.flush()
+
+    expect((await ackFor(messages, moved)).warnings).toEqual([expect.stringMatching(/\.a:first-child/)])
+    expect((await ackFor(messages, styled)).warnings).toEqual([])
+  })
+})
+
 describe('atomic write', () => {
   it('writes through the core atomic write with the bytes that land on disk', async () => {
     const { writer, messages, current, nativeOf } = await openSession({ 'home.dc.html': HOME_TEXT })

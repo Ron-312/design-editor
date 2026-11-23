@@ -59,6 +59,7 @@ function ackFor(opId: string, op: EditOp, resolved: ResolvedValues): ServerMessa
     locations: {},
     resolved,
     reload: false,
+    warnings: [],
   }
 }
 
@@ -134,6 +135,31 @@ describe('ops and acks', () => {
 
     expect(store.getState().toasts).toHaveLength(1)
     expect(reloadFrame).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('outside edits', () => {
+  it('reloads the open board and moves the selection onto the ids now at the replaced nodes’ element paths', async () => {
+    const server = await connected
+    const home = 'project/home.dc.html' as ProjectPath
+    store.setBoard(home)
+    store.select([edId('e5'), edId('e7')])
+
+    server.send({ type: 'outsideChange', file: home, pendingOps: false, replacedIds: { [edId('e5')]: edId('e41') } })
+
+    await vi.waitFor(() => expect(reloadFrame).toHaveBeenCalledTimes(1))
+    expect(store.getState().view.selection).toEqual([edId('e41'), edId('e7')])
+  })
+
+  it('does not reload for a change to a board that is not open', async () => {
+    const server = await connected
+    store.setBoard('project/home.dc.html' as ProjectPath)
+
+    server.send({ type: 'outsideChange', file: 'project/card.dc.html' as ProjectPath, pendingOps: false, replacedIds: {} })
+    server.send({ type: 'pushLock', held: false })
+
+    await vi.waitFor(() => expect(store.getState().readOnly).toBe(false))
+    expect(reloadFrame).not.toHaveBeenCalled()
   })
 })
 

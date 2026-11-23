@@ -113,6 +113,12 @@ export function createEditorStore() {
     select(edIds: readonly EdId[]) {
       updateView({ selection: withoutSelectedDescendants(edIds, state.index?.tree) })
     },
+    /** An outside edit re-ids the nodes it replaced; each board's selection follows them by element path. */
+    replaceIds(replaced: Readonly<Record<EdId, EdId>>) {
+      const follow = (view: BoardView): BoardView => ({ ...view, selection: view.selection.map((edId) => replaced[edId] ?? edId) })
+      for (const [board, view] of views) views.set(board, follow(view))
+      update({ view: follow(state.view), hover: null })
+    },
     setViewport(viewport: Viewport) {
       updateView({ viewport })
     },

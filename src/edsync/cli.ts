@@ -120,9 +120,17 @@ async function unlockThroughEditor(editor: ServerInfo, nonce: string): Promise<v
 
 // ── verbs ─────────────────────────────────────────────────────────────────────
 
-/** Push step 1: the editor takes the lock when one answers, so it flushes first and renews the lease itself. */
+/**
+ * Push step 1: the editor takes the lock when one answers, so it flushes first and renews the lease itself.
+ * With `--nonce` it takes nothing and only re-checks that the push still holds the lock, the guard right before the publish.
+ */
 async function lock(flags: Flags, cwd: string): Promise<VerbResult> {
   const projectDir = projectDirOf(flags, cwd)
+  const held = flags.nonce
+  if (held) {
+    await assertHoldsLock(projectDir, held)
+    return ok({ nonce: held, held: true })
+  }
   const editor = await runningEditor(projectDir)
   if (editor) return ok(await lockThroughEditor(editor))
   const taken = await acquirePushLock(projectDir, { holder: 'edsync', leaseMs: LEASE.cliMs })
