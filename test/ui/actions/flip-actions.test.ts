@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { EditOp, StyleSource } from '../../../src/shared/types'
 import { createDefaultRegistry } from '../../../src/ui/actions/registry'
+import { helmetRule, withRules } from '../canvas/matched-rules'
 import { edId, fakeContext, inline, node, rect, settle, type FakeContext } from '../canvas/tool-context'
 
 const tree = node('root', [node('logo')])
@@ -168,6 +169,64 @@ describe('flipping twice', () => {
     await settle()
 
     expect(scaleOps(fake)).toEqual([setScale('-1 1'), removeScale])
+  })
+})
+
+describe('flipping again before the index catches up', () => {
+  it('builds Shift-V on the Shift-H still in flight', async () => {
+    const { fake, flip } = editor(null)
+
+    flip('H')
+    await settle()
+    flip('V')
+    await settle()
+
+    expect(scaleOps(fake)).toEqual([setScale('-1 1'), setScale('-1 -1')])
+  })
+
+  it('takes a second Shift-H back to no scale', async () => {
+    const { fake, flip } = editor(null)
+
+    flip('H')
+    await settle()
+    flip('H')
+    await settle()
+
+    expect(scaleOps(fake)).toEqual([setScale('-1 1'), removeScale])
+  })
+})
+
+describe('a scale set by a stylesheet rule', () => {
+  const mirrored = helmetRule('.mirrored', { scale: '-1 1' })
+
+  it('overrides the rule inline when flipping back to 1 1, since there is no inline scale to remove', async () => {
+    const { fake, flip } = editor(null)
+    withRules(fake, [mirrored], { '.mirrored': ['logo'] })
+
+    flip('H')
+    await settle()
+
+    expect(scaleOps(fake)).toEqual([setScale('1 1')])
+  })
+
+  it('flips the rule value when no inline scale overrides it', async () => {
+    const { fake, flip } = editor(null)
+    withRules(fake, [mirrored], { '.mirrored': ['logo'] })
+
+    flip('V')
+    await settle()
+
+    expect(scaleOps(fake)).toEqual([setScale('-1 -1')])
+  })
+
+  it('keeps an inline 1 1 over the rule rather than removing it, which would bring the rule back', async () => {
+    const { fake, flip } = editor('-1 1')
+    withRules(fake, [mirrored], { '.mirrored': ['logo'] })
+
+    flip('H')
+    await settle()
+
+    expect(scaleOps(fake)).toEqual([setScale('1 1')])
   })
 })
 

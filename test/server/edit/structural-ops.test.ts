@@ -347,6 +347,17 @@ describe('wrapNode with a style', () => {
     expect(outcome.text).toBe(replaceOnce(text, '<p><span>a</span></p>', '<p><em><span>a</span></em></p>'))
   })
 
+  it.each([
+    ['CRLF', 'crlf', '\r\n'],
+    ['BOM', 'bom', '\n'],
+  ] as const)('writes the styled wrapper in a %s file byte for byte', (_case, ending, eol) => {
+    const { indexed, engine, text } = open(readFixtureText(EDGE_FILE(ending)))
+    const hr = `   <hr style="border: 0; border-top: 1px solid #e7e5e4">${eol}`
+    const outcome = applied(engine.apply(indexed, [wrapNode([findId(indexed, /^<hr/)], 'div', FLEX_ROW)]))
+    if (ending === 'bom') expect(outcome.text.charCodeAt(0)).toBe(0xfeff)
+    expect(outcome.text).toBe(replaceOnce(text, hr, `   <div style="display: flex; gap: 8px">${eol}${hr}   </div>${eol}`))
+  })
+
   it('refuses a style declaration whose property is not a CSS property name', () => {
     const { indexed, engine } = open(canvas('<p><span>a</span></p>'))
     const style = [{ prop: 'color" onclick="x()', value: 'red' }]

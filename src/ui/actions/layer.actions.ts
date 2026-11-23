@@ -92,7 +92,14 @@ export const actions: EditorAction[] = [
     run: (ctx) => void applyStructural(ctx, { target: selected(ctx), kind: 'wrapNode', payload: { tag: 'div' } }),
     when: whileEditable,
   },
-  { id: 'layer.frame', label: 'Frame selection', kbd: 'Mod+Alt+G', run: (ctx) => void frameSelection(ctx), when: whileEditable },
+  {
+    id: 'layer.frame',
+    label: 'Frame selection',
+    kbd: 'Mod+Alt+G',
+    // A reload rejects the reads in flight; nothing has been written by then.
+    run: (ctx) => void frameSelection(ctx).catch(() => {}),
+    when: whileEditable,
+  },
   { id: 'layer.ungroup', label: 'Ungroup', kbd: ['Mod+Shift+G', 'Mod+Backspace'], run: structural('unwrapNode'), when: whileEditable },
   { id: 'layer.duplicate', label: 'Duplicate', kbd: 'Mod+D', run: structural('duplicateNode'), when: whileEditable },
   {

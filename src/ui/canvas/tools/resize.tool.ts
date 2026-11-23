@@ -1,6 +1,7 @@
 import type { Rect } from '../../../shared/protocol'
 import type { EdId } from '../../../shared/types'
 import type { CanvasPointer, CanvasTool, EditorContext } from '../../plugin-api'
+import { authoredValue, readMatchedRules, writeDecl, type MatchedRules } from '../authored'
 import { screenBoxOf, type ScreenBox } from '../overlay'
 import { snapEdges, type Axis, type Edge, type Snap, type SnapGuide, type SnapTargets } from '../snap'
 import { toAuthoredUnit, type UnitBasis } from '../units'
@@ -22,6 +23,7 @@ interface SizingPlan {
   readonly flexAxis: Axis | null
   readonly absolute: boolean
   readonly computed: Computed
+  readonly rules: MatchedRules
   readonly rootFontSize: number
   readonly containing: Rect
   readonly targets: SnapTargets
@@ -172,11 +174,12 @@ const NO_VALUES: Computed = {}
 async function readSizingPlan(ctx: EditorContext, edId: EdId): Promise<SizingPlan> {
   const tree = ctx.index()?.tree
   const parent = tree ? parentNodeOf(tree, edId) : null
-  const [self, parentStyle, root, rects] = await Promise.all([
+  const [self, parentStyle, root, rects, rules] = await Promise.all([
     ctx.read({ kind: 'computed', edId, props: SELF_PROPS }),
     parent ? ctx.read({ kind: 'computed', edId: parent.edId, props: PARENT_PROPS }) : null,
-    tree ? ctx.read({ kind: 'computed', edId: tree.edId, props: ['font-size'] }) : null,
+    ctx.read({ kind: 'rootFontSize' }),
     ctx.read({ kind: 'snapRects', edId }),
+    readMatchedRules(ctx, edId),
   ])
   const computed = self.values
   const value = (prop: string) => pxOf(computed[prop])
@@ -189,7 +192,8 @@ async function readSizingPlan(ctx: EditorContext, edId: EdId): Promise<SizingPla
     flexAxis: FLEX_DISPLAYS.includes(parentValues.display ?? '') ? (parentValues['flex-direction']?.startsWith('column') ? 'y' : 'x') : null,
     absolute,
     computed,
-    rootFontSize: pxOf(root?.values['font-size']),
+    rules,
+    rootFontSize: root.fontSize,
     containing: absolute ? containingBlockOf(rects.self, computed) : contentBoxOf(parentValues),
     targets: rects,
   }
@@ -201,17 +205,6 @@ function basisOf(plan: SizingPlan, axis: Axis): UnitBasis {
     fontSize: pxOf(plan.computed['font-size']),
     containingSize: axis === 'x' ? plan.containing.width : plan.containing.height,
   }
-}
-
-/** The declared value the element renders with: inline style first, then the last rule that sets it. */
-function authoredValue(ctx: EditorContext, edId: EdId, prop: string): string | null {
-  const sources = ctx.index()?.styles[edId] ?? []
-  const ordered = [...sources.filter((source) => source.target === 'inline'), ...[...sources].reverse()]
-  for (const source of ordered) {
-    const declaration = source.declarations.find((entry) => entry.prop === prop)
-    if (declaration) return declaration.value
-  }
-  return null
 }
 
 function resizedFor(resize: Resize, pointer: CanvasPointer): Resized {
@@ -250,14 +243,9 @@ function drawResize(ctx: EditorContext, resized: Resized): void {
   drawLayer(DRAG_LAYER, [outline, label, ...resized.guides.map((guide) => guideMark(ctx, guide))])
 }
 
-function writeDecl(ctx: EditorContext, edId: EdId, prop: string, value: string, actionId: string): void {
-  // The ws client reports a refused op with its own toast.
-  ctx.apply({ target: [edId], kind: 'setDecl', payload: { prop, value } }, actionId).catch(() => {})
-}
-
 /** Writes `px` in the property's authored unit; returns false when it had to fall back to px. */
 function writeLength(resize: Resize, plan: SizingPlan, prop: string, axis: Axis, px: number): boolean {
-  const converted = toAuthoredUnit(px, authoredValue(resize.ctx, resize.edId, prop), basisOf(plan, axis))
+  const converted = toAuthoredUnit(px, authoredValue(resize.ctx, resize.edId, prop, plan.rules), basisOf(plan, axis))
   writeDecl(resize.ctx, resize.edId, prop, converted ?? `${Math.round(px)}px`, resize.actionId)
   return converted !== null
 }
@@ -265,7 +253,8 @@ function writeLength(resize: Resize, plan: SizingPlan, prop: string, axis: Axis,
 /** Writes the inset the element is anchored by, so a `right`-anchored element stays right-anchored. */
 function writeInset(resize: Resize, plan: SizingPlan, axis: Axis, box: Rect): boolean {
   const [start, end] = axis === 'x' ? (['left', 'right'] as const) : (['top', 'bottom'] as const)
-  const anchoredAtEnd = authoredValue(resize.ctx, resize.edId, start) === null && authoredValue(resize.ctx, resize.edId, end) !== null
+  const authored = (prop: string) => authoredValue(resize.ctx, resize.edId, prop, plan.rules)
+  const anchoredAtEnd = authored(start) === null && authored(end) !== null
   const startMoved = axis === 'x' ? box.x - resize.start.x : box.y - resize.start.y
   const endMoved = axis === 'x' ? box.x + box.width - resize.start.x - resize.start.width : box.y + box.height - resize.start.y - resize.start.height
   const prop = anchoredAtEnd ? end : start

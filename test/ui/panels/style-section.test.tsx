@@ -59,6 +59,8 @@ function answer(read: ProbeRead): ProbeReadResult {
       return { kind: 'matches', matched: read.selectors.map(() => false) }
     case 'documentHeight':
       return { kind: 'documentHeight', scrollHeight: 0 }
+    case 'rootFontSize':
+      return { kind: 'rootFontSize', fontSize: 16 }
   }
 }
 
@@ -112,7 +114,7 @@ async function settle() {
   for (let i = 0; i < 5; i++) await act(() => new Promise((resolve) => setTimeout(resolve, 20)))
 }
 
-let mounted: { root: Root; container: HTMLElement } | null = null
+let mounted: { root: Root; container: HTMLElement; store: EditorStore } | null = null
 
 async function mountPanel(declarations: Record<string, string> = {}): Promise<Context> {
   const store = createEditorStore()
@@ -123,10 +125,17 @@ async function mountPanel(declarations: Record<string, string> = {}): Promise<Co
   const container = document.createElement('div')
   document.body.append(container)
   const root = createRoot(container)
-  mounted = { root, container }
+  mounted = { root, container, store }
   act(() => root.render(<PropertiesPanel ctx={ctx} tokens={[]} />))
   await settle()
   return ctx
+}
+
+/** The index update the server sends once a write lands. */
+async function reindex(declarations: Record<string, string>) {
+  const { store } = mounted!
+  act(() => store.setIndex({ ...store.getState().index!, styles: cardStyles(declarations) }))
+  await settle()
 }
 
 function field(prop: string): HTMLElement {
@@ -341,6 +350,40 @@ describe('the shadow list', () => {
     await commit(inputIn(shadowRow(at), label), typed)
 
     expect(applied(ctx)).toEqual([setDecl('box-shadow', written)])
+  })
+
+  it('keeps focus and the text typed in a row when the index update for its last commit arrives', async () => {
+    const ctx = await mountPanel({ 'box-shadow': '0 4px 12px #000' })
+    const x = inputIn(shadowRow(0), 'X')
+    act(() => {
+      x.focus()
+      setNativeValue(x, '2')
+    })
+    const y = inputIn(shadowRow(0), 'Y')
+    act(() => {
+      y.focus()
+      setNativeValue(y, '9')
+    })
+    expect(lastWritten(ctx)).toBe('2px 4px 12px #000')
+
+    await reindex({ 'box-shadow': '2px 4px 12px #000' })
+
+    expect(inputIn(shadowRow(0), 'Y')).toBe(y)
+    expect(y.value).toBe('9')
+    expect(document.activeElement).toBe(y)
+    expect(inputIn(shadowRow(0), 'X').value).toBe('2px')
+  })
+
+  it('shows the new values when the shadows change from outside', async () => {
+    await mountPanel({ 'box-shadow': AUTHORED_SHADOWS })
+
+    await reindex({ 'box-shadow': '1px 2px 3px 4px #111, 5px 6px #222' })
+
+    const shown = shadowRows().map((row) => ['X', 'Y', 'Blur', 'Spread'].map((label) => inputIn(row, label).value))
+    expect(shown).toEqual([
+      ['1px', '2px', '3px', '4px'],
+      ['5px', '6px', '', ''],
+    ])
   })
 
   it('keeps the authored unit of a typed length', async () => {

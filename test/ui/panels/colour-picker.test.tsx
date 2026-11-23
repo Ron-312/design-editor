@@ -22,16 +22,23 @@ const tree: TemplateNode = {
   tag: 'x-dc',
   name: 'root',
   readOnly: 'artboard-root',
-  children: [{ edId: edId('card'), kind: 'element', tag: 'div', name: 'card', children: [] }],
+  children: [
+    { edId: edId('card'), kind: 'element', tag: 'div', name: 'card', children: [] },
+    { edId: edId('card2'), kind: 'element', tag: 'div', name: 'card2', children: [] },
+  ],
 }
 
 function decl(prop: string, value: string): AuthoredDeclaration {
   return { prop, value, important: false, hasHole: false }
 }
 
-function cardStyles(background: string): BoardIndex['styles'] {
-  const inline: StyleSource = { target: 'inline', file: board, line: 12, range: { start: 0, end: 0 }, declarations: [decl('background-color', background)] }
-  return { card: [inline] } as BoardIndex['styles']
+function inlineBackground(background: string): StyleSource {
+  return { target: 'inline', file: board, line: 12, range: { start: 0, end: 0 }, declarations: [decl('background-color', background)] }
+}
+
+/** Every layer named gets its own inline background; the first is the one selected alone. */
+function layerStyles(backgrounds: Readonly<Record<string, string>>): BoardIndex['styles'] {
+  return Object.fromEntries(Object.entries(backgrounds).map(([id, background]) => [id, [inlineBackground(background)]])) as BoardIndex['styles']
 }
 
 function answer(read: ProbeRead): ProbeReadResult {
@@ -50,6 +57,8 @@ function answer(read: ProbeRead): ProbeReadResult {
       return { kind: 'matches', matched: read.selectors.map(() => false) }
     case 'documentHeight':
       return { kind: 'documentHeight', scrollHeight: 0 }
+    case 'rootFontSize':
+      return { kind: 'rootFontSize', fontSize: 16 }
   }
 }
 
@@ -106,10 +115,15 @@ async function settle() {
 let mounted: { root: Root; container: HTMLElement } | null = null
 
 async function mountPanel(background = '#1a73e8'): Promise<Context> {
+  return mountLayers({ card: background })
+}
+
+/** Mounts the panel with every layer named selected. */
+async function mountLayers(backgrounds: Readonly<Record<string, string>>): Promise<Context> {
   const store = createEditorStore()
   store.setBoard(board)
-  store.setIndex({ board, frameSrc: `/project/secret/${board}`, tree, text: '', rules: [], locations: {}, styles: cardStyles(background) })
-  store.select([edId('card')])
+  store.setIndex({ board, frameSrc: `/project/secret/${board}`, tree, text: '', rules: [], locations: {}, styles: layerStyles(backgrounds) })
+  store.select(Object.keys(backgrounds).map(edId))
   const ctx = contextFor(store)
   const container = document.createElement('div')
   document.body.append(container)
@@ -301,6 +315,23 @@ describe('dragging on the square', () => {
     await settle()
 
     expect(valueOf(previewed(ctx).at(-1)!)).toBe('#1a73e8')
+    expect(ctx.apply).not.toHaveBeenCalled()
+  })
+
+  it('gives each layer of a mixed selection its own colour back on Escape and writes nothing', async () => {
+    const ctx = await mountLayers({ card: '#ff0000', card2: '#0000ff' })
+    await openPicker()
+
+    dragOnSquare([[150, 30]], BOTTOM_LEFT)
+    const target = square()
+    act(() => key(target, 'keydown', 'Escape'))
+    act(() => pointer('pointerup', target, ...BOTTOM_LEFT))
+    await settle()
+
+    expect(previewed(ctx).slice(-2)).toEqual([
+      { target: [edId('card')], kind: 'setDecl', payload: { prop: 'background-color', value: '#ff0000' } },
+      { target: [edId('card2')], kind: 'setDecl', payload: { prop: 'background-color', value: '#0000ff' } },
+    ])
     expect(ctx.apply).not.toHaveBeenCalled()
   })
 })

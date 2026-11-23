@@ -180,7 +180,7 @@ describe("one action's ops", () => {
     expect(store.getState().records).toHaveLength(1)
   })
 
-  it('stays quiet when a held-arrow nudge has its earlier acks arrive superseded by a later press', async () => {
+  it('stays quiet and records each write when a held-arrow nudge has its earlier acks arrive superseded by a later press', async () => {
     const nudge = ['11px', '12px', '13px'].map((value) => setDeclIn('nudge-1', 'left', value))
     const { server, acks, opIds } = await sendAll(nudge, ['11px', '12px', '13px'])
     server.send(ackFor(opIds[0]!, nudge[1]!, { [edId('e3')]: '12px' }))
@@ -190,7 +190,10 @@ describe("one action's ops", () => {
     await Promise.all(acks)
     expect(store.getState().toasts).toEqual([])
     expect(reloadFrame).not.toHaveBeenCalled()
-    expect(store.getState().records).toEqual([expect.objectContaining({ prop: 'left', after: '13px' })])
+    expect(store.getState().records).toEqual([
+      expect.objectContaining({ prop: 'left', after: '12px' }),
+      expect.objectContaining({ prop: 'left', after: '13px' }),
+    ])
   })
 
   it('checks and records an op whose newer neighbour sets another property', async () => {

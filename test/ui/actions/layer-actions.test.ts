@@ -132,6 +132,8 @@ function answer(scene: Scene, read: ProbeRead): ProbeReadResult {
       return { kind: 'matches', matched: read.selectors.map(() => false) }
     case 'documentHeight':
       return { kind: 'documentHeight', scrollHeight: 0 }
+    case 'rootFontSize':
+      return { kind: 'rootFontSize', fontSize: 16 }
   }
 }
 
@@ -621,6 +623,20 @@ describe('Frame selection', () => {
 
     expect(empty.ctx.apply).not.toHaveBeenCalled()
     expect(locked.ctx.apply).not.toHaveBeenCalled()
+  })
+
+  it('drops the frame quietly when a reload rejects the reads', async () => {
+    const { ctx, press } = editor(['a', 'b'], { scene: LAYOUT_SCENE })
+    ctx.read.mockRejectedValue(new Error('the frame reloaded before the probe answered'))
+    const unhandled = vi.fn()
+    process.on('unhandledRejection', unhandled)
+
+    press('g', FRAME)
+    await settle()
+    process.off('unhandledRejection', unhandled)
+
+    expect(unhandled).not.toHaveBeenCalled()
+    expect(ctx.apply).not.toHaveBeenCalled()
   })
 
   it('Mod+G stays the plain wrap with no style', async () => {

@@ -6,6 +6,7 @@ import { CanvasView, openBoard, type CanvasCommands } from './canvas/CanvasView'
 import { ToolDock } from './canvas/ToolDock'
 import { describeEdit, DiffPanel, fileName } from './DiffPanel'
 import { ErrorBoundary } from './ErrorBoundary'
+import { FrameGeneration, useProbeReadyCount } from './frame-generation'
 import { LayersPanel } from './panels/LayersPanel'
 import { PropertiesPanel, type Token } from './panels/PropertiesPanel'
 import { TokensPanel } from './panels/TokensPanel'
@@ -140,6 +141,7 @@ export function App({ store, ws, platform, projectName, slots = DEFAULT_SLOTS }:
   const canvas = useRef<CanvasCommands>(null)
   const registry = useMemo(() => createDefaultRegistry(platform), [platform])
   const editorState = session?.editorState
+  const frameGeneration = useProbeReadyCount(probe)
 
   useEffect(
     () =>
@@ -274,106 +276,108 @@ export function App({ store, ws, platform, projectName, slots = DEFAULT_SLOTS }:
       .map(({ id, component: Slot }) => <Slot key={id} ctx={ctx} registry={registry} platform={platform} probe={probe} />)
 
   return (
-    <div className="app" onClick={returnFocusToCanvas}>
-      <header className="top">
-        <div className="mark" title="Design Editor">
-          <Mark />
-        </div>
-        <div className="proj">
-          {projectName} {state.board && <span className="sub">/ {fileName(state.board)}</span>}
-        </div>
-        <div className="vsep" />
-        <SyncStrip step={syncStep} edits={state.records.length} />
-        <div className="spacer" />
-        <button type="button" className="ibtn" title={`Undo  ${shortcuts.undo}`} disabled={!undoState.canUndo || state.readOnly} onClick={() => ws.undo()}>
-          <ShellIcon name="undo" />
-        </button>
-        <button type="button" className="ibtn" title={`Redo  ${shortcuts.redo}`} disabled={!undoState.canRedo || state.readOnly} onClick={() => ws.redo()}>
-          <ShellIcon name="redo" />
-        </button>
-        {session && (
-          <>
-            <div className="vsep" />
-            <BoardSwitcher layout={session.layout} current={state.board} onOpen={(board) => openBoard(store, ws, board)} />
-          </>
-        )}
-        <div className="vsep" />
-        <ZoomMenu zoom={state.view.viewport.zoom} canvas={canvas} />
-        {renderSlots('top-bar')}
-        <div className="spacer" />
-        <button type="button" className="ibtn theme-ico" title="Toggle light / dark" onClick={toggleTheme}>
-          <ShellIcon name="sun" className="i sun" />
-          <ShellIcon name="moon" className="i moon" />
-        </button>
-        <PreviewSwitch on={state.interact} onToggle={() => store.setInteract(!store.getState().interact)} />
-        <PushButton pending={state.records.length} pushing={state.readOnly} />
-      </header>
-
-      <aside className="left">
-        <div className="ptabs" role="tablist" aria-label="Left panel">
-          <LeftTabButton tab="layers" current={shownTab} onPick={setLeftTab}>
-            Layers
-          </LeftTabButton>
-          {tokens.length > 0 && (
-            <LeftTabButton tab="tokens" current={shownTab} onPick={setLeftTab}>
-              Tokens
-            </LeftTabButton>
-          )}
-          <LeftTabButton tab="changes" current={shownTab} onPick={setLeftTab}>
-            Changes{state.records.length > 0 && <span className="n">{state.records.length}</span>}
-          </LeftTabButton>
-        </div>
-        <ErrorBoundary area="left panel">
-          {panelCtx && shownTab === 'layers' && <LayersPanel ctx={panelCtx} platform={platform} onEditorStateChange={changeEditorState} />}
-          {shownTab === 'tokens' && <TokensPanel tokens={tokens} />}
-          {shownTab === 'changes' && <DiffPanel records={state.records} onRevertFile={(file) => ws.send({ type: 'revertFile', file })} />}
-        </ErrorBoundary>
-      </aside>
-
-      <main className="center">
-        {state.banners.length > 0 && (
-          <div className="banners">
-            {state.banners.map((banner) => (
-              <p className="banner" role="alert" key={banner.id}>
-                <ShellIcon name="warn" />
-                {banner.message}
-              </p>
-            ))}
+    <FrameGeneration.Provider value={frameGeneration}>
+      <div className="app" onClick={returnFocusToCanvas}>
+        <header className="top">
+          <div className="mark" title="Design Editor">
+            <Mark />
           </div>
-        )}
-        <ErrorBoundary area="canvas">
-          {session && editorState && (
-            <CanvasView
-              ref={canvas}
-              store={store}
-              ws={ws}
-              layout={session.layout}
-              editorState={editorState}
-              platform={platform}
-              onProbe={setProbe}
-              onContext={setCtx}
-              onEditorStateChange={changeEditorState}
-            />
+          <div className="proj">
+            {projectName} {state.board && <span className="sub">/ {fileName(state.board)}</span>}
+          </div>
+          <div className="vsep" />
+          <SyncStrip step={syncStep} edits={state.records.length} />
+          <div className="spacer" />
+          <button type="button" className="ibtn" title={`Undo  ${shortcuts.undo}`} disabled={!undoState.canUndo || state.readOnly} onClick={() => ws.undo()}>
+            <ShellIcon name="undo" />
+          </button>
+          <button type="button" className="ibtn" title={`Redo  ${shortcuts.redo}`} disabled={!undoState.canRedo || state.readOnly} onClick={() => ws.redo()}>
+            <ShellIcon name="redo" />
+          </button>
+          {session && (
+            <>
+              <div className="vsep" />
+              <BoardSwitcher layout={session.layout} current={state.board} onOpen={(board) => openBoard(store, ws, board)} />
+            </>
           )}
-        </ErrorBoundary>
-        <ToolDock store={store} />
-        <div className="toasts">
-          {state.toasts.map((toast) => (
-            <NoticeToast key={toast.id} store={store} toast={toast} />
-          ))}
-          {saved && <SaveToast saved={saved} onUndo={undoSaved} onDiff={showDiff} />}
-        </div>
-      </main>
+          <div className="vsep" />
+          <ZoomMenu zoom={state.view.viewport.zoom} canvas={canvas} />
+          {renderSlots('top-bar')}
+          <div className="spacer" />
+          <button type="button" className="ibtn theme-ico" title="Toggle light / dark" onClick={toggleTheme}>
+            <ShellIcon name="sun" className="i sun" />
+            <ShellIcon name="moon" className="i moon" />
+          </button>
+          <PreviewSwitch on={state.interact} onToggle={() => store.setInteract(!store.getState().interact)} />
+          <PushButton pending={state.records.length} pushing={state.readOnly} />
+        </header>
 
-      {panelCtx ? (
-        <ErrorBoundary area="properties panel">
-          <PropertiesPanel ctx={panelCtx} tokens={tokens} />
-        </ErrorBoundary>
-      ) : (
-        <aside className="props" aria-label="Properties" />
-      )}
-      {renderSlots('overlay')}
-    </div>
+        <aside className="left">
+          <div className="ptabs" role="tablist" aria-label="Left panel">
+            <LeftTabButton tab="layers" current={shownTab} onPick={setLeftTab}>
+              Layers
+            </LeftTabButton>
+            {tokens.length > 0 && (
+              <LeftTabButton tab="tokens" current={shownTab} onPick={setLeftTab}>
+                Tokens
+              </LeftTabButton>
+            )}
+            <LeftTabButton tab="changes" current={shownTab} onPick={setLeftTab}>
+              Changes{state.records.length > 0 && <span className="n">{state.records.length}</span>}
+            </LeftTabButton>
+          </div>
+          <ErrorBoundary area="left panel">
+            {panelCtx && shownTab === 'layers' && <LayersPanel ctx={panelCtx} platform={platform} onEditorStateChange={changeEditorState} />}
+            {shownTab === 'tokens' && <TokensPanel tokens={tokens} />}
+            {shownTab === 'changes' && <DiffPanel records={state.records} onRevertFile={(file) => ws.send({ type: 'revertFile', file })} />}
+          </ErrorBoundary>
+        </aside>
+
+        <main className="center">
+          {state.banners.length > 0 && (
+            <div className="banners">
+              {state.banners.map((banner) => (
+                <p className="banner" role="alert" key={banner.id}>
+                  <ShellIcon name="warn" />
+                  {banner.message}
+                </p>
+              ))}
+            </div>
+          )}
+          <ErrorBoundary area="canvas">
+            {session && editorState && (
+              <CanvasView
+                ref={canvas}
+                store={store}
+                ws={ws}
+                layout={session.layout}
+                editorState={editorState}
+                platform={platform}
+                onProbe={setProbe}
+                onContext={setCtx}
+                onEditorStateChange={changeEditorState}
+              />
+            )}
+          </ErrorBoundary>
+          <ToolDock store={store} />
+          <div className="toasts">
+            {state.toasts.map((toast) => (
+              <NoticeToast key={toast.id} store={store} toast={toast} />
+            ))}
+            {saved && <SaveToast saved={saved} onUndo={undoSaved} onDiff={showDiff} />}
+          </div>
+        </main>
+
+        {panelCtx ? (
+          <ErrorBoundary area="properties panel">
+            <PropertiesPanel ctx={panelCtx} tokens={tokens} />
+          </ErrorBoundary>
+        ) : (
+          <aside className="props" aria-label="Properties" />
+        )}
+        {renderSlots('overlay')}
+      </div>
+    </FrameGeneration.Provider>
   )
 }
 

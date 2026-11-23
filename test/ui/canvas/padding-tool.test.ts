@@ -173,3 +173,26 @@ describe('a reload during a hover', () => {
     expect(await unhandledRejections(() => padding.onHover!(fake.ctx, at([0, 0])))).toEqual([])
   })
 })
+
+describe('one undo entry per padding drag', () => {
+  it('sends every side of an Alt-Shift drag under one action id without waiting for each ack', async () => {
+    const fake = context(['row'], { uniform: true })
+    fake.ctx.apply.mockImplementation(() => new Promise(() => {}))
+
+    await drag(fake, ON_TOP_BAND, [0, 8], { altKey: true, shiftKey: true })
+
+    expect(fake.writes()).toEqual(['padding-top: 32px', 'padding-right: 32px', 'padding-bottom: 32px', 'padding-left: 32px'])
+    expect(fake.ctx.beginAction).toHaveBeenCalledTimes(1)
+    expect(fake.actionIds()).toEqual(['action-1', 'action-1', 'action-1', 'action-1'])
+    expect(fake.undoEntries()).toBe(1)
+  })
+
+  it('gives two drags two action ids', async () => {
+    const fake = context(['row'])
+
+    await drag(fake, ON_TOP_BAND, [0, 8], { altKey: true })
+    await drag(fake, ON_LEFT_BAND, [5, 0])
+
+    expect(fake.actionIds()).toEqual(['action-1', 'action-1', 'action-2'])
+  })
+})

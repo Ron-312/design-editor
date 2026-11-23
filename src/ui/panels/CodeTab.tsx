@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { BoardIndex } from "../../shared/protocol";
 import type { AuthoredDeclaration, EdId } from "../../shared/types";
 import { writeClipboardText } from "../clipboard";
+import { useFrameGeneration } from "../frame-generation";
 import type { EditorContext } from "../plugin-api";
 import { codeBlocksOf, type CodeBlock } from "./code-rules";
 
@@ -27,6 +28,7 @@ function useMatchedRules(
   index: BoardIndex,
   edId: EdId,
 ): readonly boolean[] | null {
+  const frame = useFrameGeneration();
   const [matched, setMatched] = useState<readonly boolean[] | null>(null);
 
   useEffect(() => {
@@ -40,12 +42,12 @@ function useMatchedRules(
       .then((result) => {
         if (current) setMatched(result.matched);
       })
-      // A reload rejects reads in flight; the tab waits for the next selection or index.
+      // A reload rejects reads in flight; its frame's `ready` reads again.
       .catch(() => {});
     return () => {
       current = false;
     };
-  }, [ctx, index, edId]);
+  }, [ctx, index, edId, frame]);
 
   return matched;
 }

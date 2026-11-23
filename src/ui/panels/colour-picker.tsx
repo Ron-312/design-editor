@@ -132,7 +132,7 @@ function PickerDialog({ ctx, declaration, fallback, onClose }: PickerDialogProps
 
   function restoreAuthored() {
     picked.reset()
-    declaration.preview(declaration.value)
+    declaration.restore()
   }
 
   /** Previews every move and commits once on release, so a drag is one write (plan contract #6). */

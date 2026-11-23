@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BoardIndex, EditorState, HelmetRuleSource, ProbeRead, ProbeReadResult, Rect } from '../../../src/shared/protocol'
 import type { EdId, EditOp, ProjectPath, RuleId, SourceRange, StyleSource, TemplateNode } from '../../../src/shared/types'
+import { FrameGeneration } from '../../../src/ui/frame-generation'
 import { PropertiesPanel } from '../../../src/ui/panels/PropertiesPanel'
 import type { AckMessage, EditorContext, PanelSection } from '../../../src/ui/plugin-api'
 import { createEditorStore, type EditorStore } from '../../../src/ui/store'
@@ -97,6 +98,8 @@ function answer(read: ProbeRead): ProbeReadResult {
       return { kind: 'matches', matched: read.selectors.map((selector) => matchingSelectors[read.edId]?.has(selector) ?? false) }
     case 'documentHeight':
       return { kind: 'documentHeight', scrollHeight: 0 }
+    case 'rootFontSize':
+      return { kind: 'rootFontSize', fontSize: 16 }
   }
 }
 
@@ -159,10 +162,13 @@ async function settle() {
 let mounted: { root: Root; container: HTMLElement } | null = null
 
 interface Mounted {
+  readonly store: EditorStore
   readonly ctx: ReturnType<typeof contextFor>
   readonly reads: ReturnType<typeof vi.fn<(read: ProbeRead) => Promise<ProbeReadResult>>>
   readonly writeText: ReturnType<typeof vi.fn<(copied: string) => Promise<void>>>
   readonly container: HTMLElement
+  /** Renders the panel again as the probe's `ready` of a reloaded frame does. */
+  readonly frameReady: (generation: number) => Promise<void>
 }
 
 async function mountPanel(selection = 'card'): Promise<Mounted> {
@@ -187,9 +193,21 @@ async function mountPanel(selection = 'card'): Promise<Mounted> {
   document.body.append(container)
   const root = createRoot(container)
   mounted = { root, container }
-  act(() => root.render(<PropertiesPanel ctx={ctx} tokens={[]} sections={[designSection]} />))
+  const render = (generation: number) =>
+    act(() =>
+      root.render(
+        <FrameGeneration.Provider value={generation}>
+          <PropertiesPanel ctx={ctx} tokens={[]} sections={[designSection]} />
+        </FrameGeneration.Provider>,
+      ),
+    )
+  render(0)
   await settle()
-  return { ctx, reads, writeText, container }
+  const frameReady = async (generation: number) => {
+    render(generation)
+    await settle()
+  }
+  return { store, ctx, reads, writeText, container, frameReady }
 }
 
 async function click(element: Element) {
@@ -381,5 +399,45 @@ describe('Code tab', () => {
     expect(panel.textContent).toContain(otherRule)
     expect(panel.textContent).not.toContain(cardStyle)
     expect(panel.textContent).not.toContain(cardRule)
+  })
+
+  describe('after a structural edit reloads the frame', () => {
+    /** The reloaded document, where the edit made `.other` match the card too. */
+    function reloaded(read: ProbeRead): ProbeReadResult {
+      if (read.kind === 'matches' && read.edId === 'card') return { kind: 'matches', matched: read.selectors.map((selector) => selector === '.other' || matchingSelectors.card!.has(selector)) }
+      return answer(read)
+    }
+
+    /** The server sends the new index after the ack whose reload already started. */
+    async function indexArrives(store: EditorStore) {
+      const index = store.getState().index
+      if (!index) throw new Error('no index')
+      act(() => store.setIndex({ ...index, tree: structuredClone(index.tree) }))
+      await settle()
+    }
+
+    it("matches the rules again on the reloaded frame's ready, replacing what the old document answered", async () => {
+      const view = await mountPanel()
+      const panel = await openCode()
+      await indexArrives(view.store)
+      expect(panel.textContent).not.toContain(otherRule)
+
+      view.reads.mockImplementation(async (read) => reloaded(read))
+      await view.frameReady(1)
+
+      expect(panel.textContent).toContain(otherRule)
+    })
+
+    it("matches the rules again on the reloaded frame's ready when the reload rejected the new index's read", async () => {
+      const view = await mountPanel()
+      const panel = await openCode()
+      view.reads.mockImplementation(() => Promise.reject(new Error('the frame reloaded before the probe answered')))
+      await indexArrives(view.store)
+
+      view.reads.mockImplementation(async (read) => reloaded(read))
+      await view.frameReady(1)
+
+      expect(panel.textContent).toContain(otherRule)
+    })
   })
 })

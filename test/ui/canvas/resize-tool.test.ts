@@ -4,6 +4,7 @@ import type { Rect } from '../../../src/shared/protocol'
 import type { StyleSource } from '../../../src/shared/types'
 import type { CanvasTool } from '../../../src/ui/plugin-api'
 import type { ResizeHandle } from '../../../src/ui/canvas/tools/resize.tool'
+import { helmetRule, withRules } from './matched-rules'
 import { ackFor, boxOf, edId, fakeContext, inline, layer, mountViewport, node, pointerAt, rect, settle, type FakeContext, type Modifiers } from './tool-context'
 
 const VIEW = { zoom: 2, panX: 10, panY: 20 }
@@ -49,9 +50,10 @@ function sceneRects(): Record<string, Rect[]> {
 
 const BORDER_BOX = { 'box-sizing': 'border-box' }
 
-/** The artboard root's 12 px and an element's 20 px differ, so rem and em convert differently. */
+/** <html>'s 12 px, the artboard root's 30 px and an element's 20 px differ, so rem reads <html> and em the element. */
+const ROOT_FONT_SIZE = 12
 const computed = {
-  root: { 'font-size': '12px' },
+  root: { 'font-size': '30px' },
   row: { display: 'flex', 'flex-direction': 'row' },
   col: { display: 'flex', 'flex-direction': 'column' },
   box: { 'box-sizing': 'border-box' },
@@ -126,10 +128,16 @@ function at(x: number, y: number, modifiers: Modifiers = {}) {
 }
 
 async function selected(id: string, options: { readOnly?: boolean } = {}): Promise<FakeContext> {
-  const fake = fakeContext({ tree, rects, computed, styles, snap }, { selection: [id], viewport: VIEW, readOnly: options.readOnly ?? false })
+  const fake = fakeContext({ tree, rects, computed, styles, snap, rootFontSize: ROOT_FONT_SIZE }, { selection: [id], viewport: VIEW, readOnly: options.readOnly ?? false })
   resize.onHover!(fake.ctx, at(0, 0))
   await settle()
   return fake
+}
+
+/** Replaces the inline styles the index holds for `id`. */
+function restyled(fake: FakeContext, id: string, sources: readonly StyleSource[]): void {
+  const index = fake.ctx.index()
+  fake.ctx.index.mockReturnValue({ ...index, styles: { ...index.styles, [id]: sources } })
 }
 
 async function drag(fake: FakeContext, from: [number, number], by: [number, number], modifiers: Modifiers = {}): Promise<boolean> {
@@ -464,6 +472,28 @@ describe('keeping the authored unit', () => {
     expect(fake.writes()).toEqual(['width: 20.42rem', 'height: 127px'])
   })
 
+  it('keeps a rem width a stylesheet rule sets', async () => {
+    const fake = await selected('remmed')
+    restyled(fake, 'remmed', inline({ height: '120px' }))
+    withRules(fake, [helmetRule('.card', { width: '20rem' })], { '.card': ['remmed'] })
+
+    await drag(fake, [340, 720], [5, 7])
+    await settle()
+
+    expect(fake.writes()).toEqual(['width: 20.42rem', 'height: 127px'])
+    expect(fake.ctx.toast).not.toHaveBeenCalled()
+  })
+
+  it('reads the unit from the last of two inline widths, the one that renders', async () => {
+    const fake = await selected('remmed')
+    const [px, rem] = [inline({ width: '100px' })[0]!, inline({ width: '20rem', height: '120px' })[0]!]
+    restyled(fake, 'remmed', [{ ...rem, declarations: [...px.declarations, ...rem.declarations] }])
+
+    await drag(fake, [340, 720], [5, 7])
+
+    expect(fake.writes()).toEqual(['width: 20.42rem', 'height: 127px'])
+  })
+
   it('writes em with the element font size', async () => {
     const fake = await selected('emmed')
 
@@ -578,6 +608,16 @@ describe('Alt resizes an absolutely positioned element from its centre', () => {
 
   it('writes the inset the element is anchored by', async () => {
     const fake = await selected('pinned')
+
+    await drag(fake, [1100, 150], [20, 0], { altKey: true })
+
+    expect(sortedWrites(fake)).toEqual(['right: 160px', 'width: 240px'])
+  })
+
+  it('writes the inset a stylesheet rule anchors the element by', async () => {
+    const fake = await selected('pinned')
+    restyled(fake, 'pinned', inline({ position: 'absolute', top: '100px', width: '200px', height: '100px' }))
+    withRules(fake, [helmetRule('.pin', { right: '180px' })], { '.pin': ['pinned'] })
 
     await drag(fake, [1100, 150], [20, 0], { altKey: true })
 

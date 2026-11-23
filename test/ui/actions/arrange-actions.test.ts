@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /// <reference types="vite/client" />
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { ProbeRead } from '../../../src/shared/protocol'
 import type { EditOp } from '../../../src/shared/types'
 import { createDefaultRegistry, type Platform } from '../../../src/ui/actions/registry'
@@ -270,6 +270,20 @@ describe('z-order refusals and keys', () => {
     expect(editor.press(editor.keys.backward).prevented).toBe(true)
     await settle()
 
+    expect(editor.ctx.apply).not.toHaveBeenCalled()
+  })
+
+  it('drops the command quietly when a reload rejects the reads', async () => {
+    const editor = arranger(['p1'])
+    editor.failReads('computed', 'rects')
+    const unhandled = vi.fn()
+    process.on('unhandledRejection', unhandled)
+
+    editor.press(editor.keys.forward)
+    await settle()
+    process.off('unhandledRejection', unhandled)
+
+    expect(unhandled).not.toHaveBeenCalled()
     expect(editor.ctx.apply).not.toHaveBeenCalled()
   })
 

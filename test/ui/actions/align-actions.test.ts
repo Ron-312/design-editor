@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { EditOp, StyleSource } from '../../../src/shared/types'
 import { createDefaultRegistry, type ActionRegistry, type Platform } from '../../../src/ui/actions/registry'
 import type { EditorAction } from '../../../src/ui/plugin-api'
+import { helmetRule, withRules } from '../canvas/matched-rules'
 import { edId, fakeContext, inline, node, rect, settle, type FakeContext } from '../canvas/tool-context'
 
 // root > stage (relative, 400 × 300 at the board origin) > a, b, c, d (absolute); p, q (static);
@@ -218,6 +219,21 @@ describe('aligning absolutely positioned siblings to the selection bounds', () =
     for (const id of ['a', 'b', 'd']) expect(writtenProps(fake, id).filter((prop) => prop !== 'left')).toEqual([])
   })
 
+  it('writes the right offset of a box anchored by a stylesheet rule, never a left one', async () => {
+    // c moves from x 300 to 40, so the rule's right offset of 20px grows by 260.
+    const { fake, press } = editor(['a', 'c'])
+    const unpinned: Record<string, readonly StyleSource[]> = { ...styles, c: inline({ position: 'absolute' }) }
+    fake.ctx.index.mockReturnValue({ ...fake.ctx.index(), styles: unpinned })
+    withRules(fake, [helmetRule('.pinned', { right: '20px', bottom: '10px' })], { '.pinned': ['c'] })
+
+    press('a', 'KeyA', ALT)
+    await settle()
+
+    expect(declarationOps(fake).filter((op) => op.target.includes(edId('c')))).toEqual([
+      { target: [edId('c')], kind: 'setDecl', payload: { prop: 'right', value: '280px' } },
+    ])
+  })
+
   it('reads Option-A on macOS, which types å, as align left', async () => {
     const { fake, press } = editor(['a', 'b'], 'mac')
 
@@ -368,6 +384,54 @@ describe('what align refuses', () => {
     press('a', 'KeyA', ALT)
     await settle()
 
+    expect(fake.ctx.apply).not.toHaveBeenCalled()
+  })
+})
+
+describe('a command that follows before the index catches up', () => {
+  it('nudges from the aligned offset, not the one the index still holds', async () => {
+    const { fake, press } = editor(['a', 'b'])
+
+    press('a', 'KeyA', ALT)
+    await settle()
+    press('ArrowRight', 'ArrowRight')
+    await settle()
+
+    expect(finalStyle(fake, 'b')).toEqual({ ...authored.b, left: '41px' })
+  })
+})
+
+describe('where the Alt-letter commands listen', () => {
+  /** A focused element outside the canvas and the layers panel; `input` makes it a text field. */
+  function focused(input: boolean) {
+    const element = { closest: () => null, matches: (selector: string) => input && selector.includes('input'), ownerDocument: { body: null } }
+    return element as unknown as EventTarget
+  }
+
+  function pressAt(registry: ActionRegistry, fake: FakeContext, target: EventTarget) {
+    const preventDefault = vi.fn()
+    const event = { key: 'd', code: 'KeyD', repeat: false, metaKey: false, ctrlKey: false, shiftKey: false, altKey: true, target, preventDefault }
+    return { handled: registry.handleKeyDown(event as unknown as KeyboardEvent, fake.ctx), preventDefault }
+  }
+
+  it('takes Alt-D from a focused button elsewhere, so it never reaches the browser as focus the address bar', async () => {
+    const { fake, registry } = editor(['a', 'b'])
+
+    const { handled, preventDefault } = pressAt(registry, fake, focused(false))
+    await settle()
+
+    expect(handled).toBe(true)
+    expect(preventDefault).toHaveBeenCalled()
+    expect(finalStyle(fake, 'a')).toEqual({ ...authored.a, left: '160px' })
+  })
+
+  it('leaves Alt-D to a focused text field', async () => {
+    const { fake, registry } = editor(['a', 'b'])
+
+    const { handled } = pressAt(registry, fake, focused(true))
+    await settle()
+
+    expect(handled).toBe(false)
     expect(fake.ctx.apply).not.toHaveBeenCalled()
   })
 })

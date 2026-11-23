@@ -56,6 +56,8 @@ const probes = vi.hoisted(() => {
         scene.measuredAt.push(size)
         return { kind: 'documentHeight', scrollHeight: scene.contentHeight(size) }
       }
+      case 'rootFontSize':
+        return { kind: 'rootFontSize', fontSize: 16 }
     }
   }
 

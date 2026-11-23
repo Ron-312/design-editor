@@ -74,6 +74,8 @@ function answer(read: ProbeRead): ProbeReadResult {
       return { kind: 'matches', matched: read.selectors.map(() => false) }
     case 'documentHeight':
       return { kind: 'documentHeight', scrollHeight: 0 }
+    case 'rootFontSize':
+      return { kind: 'rootFontSize', fontSize: 16 }
   }
 }
 

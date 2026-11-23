@@ -219,6 +219,8 @@ export type ProbeRead =
   /** Per selector, whether any rendered instance matches it once states and pseudo-elements are stripped. */
   | { readonly kind: 'matches'; readonly edId: EdId; readonly selectors: readonly string[] }
   | { readonly kind: 'documentHeight' }
+  /** The computed font size of `<html>`, which `rem` is relative to. */
+  | { readonly kind: 'rootFontSize' }
 
 export type ProbeReadResult =
   | { readonly kind: 'rects'; readonly rects: readonly Rect[] }
@@ -228,6 +230,7 @@ export type ProbeReadResult =
   | { readonly kind: 'supports'; readonly supported: boolean }
   | { readonly kind: 'matches'; readonly matched: readonly boolean[] }
   | { readonly kind: 'documentHeight'; readonly scrollHeight: number }
+  | { readonly kind: 'rootFontSize'; readonly fontSize: number }
 
 export type EditorToProbe =
   | { readonly type: 'read'; readonly id: number; readonly reads: readonly ProbeRead[] }

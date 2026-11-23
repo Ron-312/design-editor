@@ -2,6 +2,7 @@ import type { ProbeReadResult, Rect } from '../../../shared/protocol'
 import type { EdId, EditOp, OpOf, TemplateNode } from '../../../shared/types'
 import { applyStructural } from '../../actions/layer.actions'
 import type { CanvasPointer, CanvasTool, EditorContext, Unsubscribe } from '../../plugin-api'
+import { authoredValue, readMatchedRules, writeDecl, type MatchedRules } from '../authored'
 import { screenBoxOf, type ScreenBox } from '../overlay'
 import { snapMove, type Axis, type SnapGuide, type SnapTargets } from '../snap'
 import type { Point } from '../viewport'
@@ -31,6 +32,7 @@ interface DragPlan {
   readonly edId: EdId
   readonly mode: MoveMode
   readonly computed: Computed
+  readonly rules: MatchedRules
   readonly self: Rect
   readonly containing: Rect
   readonly targets: SnapTargets
@@ -245,34 +247,6 @@ export function parentNodeOf(tree: TemplateNode, edId: EdId): TemplateNode | nul
   return null
 }
 
-// ── Authored values, ahead of the index while a write is pending ──────────────
-
-const unflushed = new Map<string, string>()
-let unflushedIndex: unknown = null
-
-function authoredValue(ctx: EditorContext, edId: EdId, prop: string): string | null {
-  const index = ctx.index()
-  if (index !== unflushedIndex) {
-    unflushed.clear()
-    unflushedIndex = index
-  }
-  const pending = unflushed.get(`${edId} ${prop}`)
-  if (pending !== undefined) return pending
-  const sources = index?.styles[edId] ?? []
-  const ordered = [...sources.filter((source) => source.target === 'inline'), ...[...sources].reverse()]
-  for (const source of ordered) {
-    const declaration = source.declarations.find((entry) => entry.prop === prop)
-    if (declaration) return declaration.value
-  }
-  return null
-}
-
-function writeDecl(ctx: EditorContext, edId: EdId, prop: string, value: string, actionId: string): void {
-  unflushed.set(`${edId} ${prop}`, value)
-  // The ws client reports a refused op with its own toast.
-  ctx.apply({ target: [edId], kind: 'setDecl', payload: { prop, value } }, actionId).catch(() => {})
-}
-
 // ── Reading the layout once per gesture ───────────────────────────────────────
 
 function pxOf(value: string | undefined): number {
@@ -303,10 +277,11 @@ async function readDragPlan(ctx: EditorContext, edId: EdId): Promise<DragPlan | 
   const index = ctx.index()
   if (!index) return null
   const parent = parentNodeOf(index.tree, edId)
-  const [self, parentStyle, rects] = await Promise.all([
+  const [self, parentStyle, rects, rules] = await Promise.all([
     ctx.read({ kind: 'computed', edId, props: SELF_PROPS }),
     parent ? ctx.read({ kind: 'computed', edId: parent.edId, props: PARENT_PROPS }) : NO_VALUES,
     ctx.read({ kind: 'snapRects', edId }),
+    readMatchedRules(ctx, edId),
   ])
   const computed = self.values
   const mode = moveModeOf({
@@ -321,6 +296,7 @@ async function readDragPlan(ctx: EditorContext, edId: EdId): Promise<DragPlan | 
     edId,
     mode,
     computed,
+    rules,
     self: rects.self,
     containing,
     targets: mode === 'offset' ? { parent: containing, siblings: [...domParent, ...rects.siblings] } : rects,
@@ -345,8 +321,22 @@ function groupOf(plans: readonly DragPlan[]): GroupPlan {
   }
 }
 
+function isWithin(tree: TemplateNode, edId: EdId, ancestors: ReadonlySet<EdId>): boolean {
+  for (let parent = parentNodeOf(tree, edId); parent; parent = parentNodeOf(tree, parent.edId)) {
+    if (ancestors.has(parent.edId)) return true
+  }
+  return false
+}
+
+/** A selected element inside another selected one already moves with it, so only the outermost are shifted. */
+function outermostOf(ctx: EditorContext, edIds: readonly EdId[]): readonly EdId[] {
+  const tree = ctx.index()?.tree
+  const selected = new Set(edIds)
+  return tree ? edIds.filter((edId) => !isWithin(tree, edId, selected)) : edIds
+}
+
 async function readSelectionPlan(ctx: EditorContext, edIds: readonly EdId[]): Promise<SelectionPlan> {
-  const plans = await Promise.all(edIds.map((edId) => readDragPlan(ctx, edId)))
+  const plans = await Promise.all(outermostOf(ctx, edIds).map((edId) => readDragPlan(ctx, edId)))
   const [only] = plans
   if (plans.length === 1) return only ? groupOf([only]) : null
   const offsets = plans.filter((plan): plan is DragPlan => plan?.mode === 'offset')
@@ -362,17 +352,18 @@ function refuseMixedMove(ctx: EditorContext): void {
 /** Writes the inset the element is anchored by, so a `right`-anchored element stays right-anchored. */
 function shiftInset(ctx: EditorContext, plan: DragPlan, axis: Axis, delta: number, actionId: string): void {
   const [start, end] = axis === 'x' ? ['left', 'right'] : ['top', 'bottom']
-  const anchoredAtEnd = authoredValue(ctx, plan.edId, start!) === null && authoredValue(ctx, plan.edId, end!) !== null
+  const authored = (prop: string) => authoredValue(ctx, plan.edId, prop, plan.rules)
+  const anchoredAtEnd = authored(start!) === null && authored(end!) !== null
   const prop = anchoredAtEnd ? end! : start!
-  const authored = authoredValue(ctx, plan.edId, prop)
-  const base = authored !== null && OFFSET_VALUE.test(authored.trim()) ? authored : (plan.computed[prop] ?? '0')
+  const value = authored(prop)
+  const base = value !== null && OFFSET_VALUE.test(value.trim()) ? value : (plan.computed[prop] ?? '0')
   const size = sizeOf(plan.containing, axis)
   writeDecl(ctx, plan.edId, prop, shiftedOffset(base, anchoredAtEnd ? -delta : delta, size), actionId)
 }
 
 function commitShift(ctx: EditorContext, plan: DragPlan, delta: Point, actionId: string): void {
   if (plan.mode === 'translate') {
-    writeDecl(ctx, plan.edId, 'transform', translatedTransform(authoredValue(ctx, plan.edId, 'transform') ?? '', delta), actionId)
+    writeDecl(ctx, plan.edId, 'transform', translatedTransform(authoredValue(ctx, plan.edId, 'transform', plan.rules) ?? '', delta), actionId)
     return
   }
   if (delta.x !== 0) shiftInset(ctx, plan, 'x', delta.x, actionId)

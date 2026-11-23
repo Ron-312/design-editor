@@ -21,6 +21,7 @@ interface PaddingDrag {
   readonly side: Side
   readonly sides: readonly Side[]
   readonly from: { readonly x: number; readonly y: number }
+  readonly actionId: string
 }
 
 let measured: PaddedBox | null = null
@@ -73,11 +74,11 @@ function paddingAt({ box, side, from }: PaddingDrag, pointer: CanvasPointer): nu
   return Math.max(0, Math.round(box.padding[side] + moved))
 }
 
-async function writePadding(ctx: EditorContext, { box, sides }: PaddingDrag, value: number): Promise<void> {
+function writePadding(ctx: EditorContext, { box, sides, actionId }: PaddingDrag, value: number): void {
   for (const side of sides) {
     if (box.padding[side] === value) continue
     // The ws client already toasted a rejection.
-    await ctx.apply({ target: [box.edId], kind: 'setDecl', payload: { prop: `padding-${side}`, value: `${value}px` } }).catch(() => {})
+    ctx.apply({ target: [box.edId], kind: 'setDecl', payload: { prop: `padding-${side}`, value: `${value}px` } }, actionId).catch(() => {})
   }
 }
 
@@ -103,7 +104,7 @@ export const tool: CanvasTool = {
     if (!box || box.edId !== editableSelection(ctx)) return false
     const side = sideAt(box, pointer)
     if (!side) return false
-    drag = { box, side, sides: sidesMoved(side, pointer), from: { x: pointer.boardX, y: pointer.boardY } }
+    drag = { box, side, sides: sidesMoved(side, pointer), from: { x: pointer.boardX, y: pointer.boardY }, actionId: ctx.beginAction() }
     return true
   },
   onPointerMove() {
@@ -114,7 +115,7 @@ export const tool: CanvasTool = {
     if (!finished) return false
     drag = null
     measured = null
-    void writePadding(ctx, finished, paddingAt(finished, pointer))
+    writePadding(ctx, finished, paddingAt(finished, pointer))
     return true
   },
   onCancel() {

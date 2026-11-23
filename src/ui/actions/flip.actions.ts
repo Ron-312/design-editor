@@ -1,6 +1,6 @@
-import type { EdId, EditOp } from '../../shared/types'
+import type { EdId } from '../../shared/types'
+import { authoredDecl, readMatchedRules, removeDecl, ruleDecl, writeDecl } from '../canvas/authored'
 import type { EditorAction, EditorContext } from '../plugin-api'
-import { authoredValue } from './align.actions'
 
 type FlipAxis = 'x' | 'y'
 
@@ -25,19 +25,22 @@ function flippedScale(authored: string | null, axis: FlipAxis): string {
   return flipped.join(' ')
 }
 
-/** Removes `scale` at `1 1`, so flipping twice restores an element that had none. */
-function scaleOp(edId: EdId, scale: string): EditOp {
-  if (scale === IDENTITY) return { target: [edId], kind: 'removeDecl', payload: { prop: 'scale' } }
-  return { target: [edId], kind: 'setDecl', payload: { prop: 'scale', value: scale } }
+/**
+ * Removes `scale` at `1 1`, so flipping twice restores an element that had none. A rule's `scale` is
+ * shared with every element the rule matches, so it is overridden inline rather than edited.
+ */
+async function flipElement(ctx: EditorContext, edId: EdId, axis: FlipAxis, actionId: string): Promise<void> {
+  const rules = await readMatchedRules(ctx, edId)
+  const authored = authoredDecl(ctx, edId, 'scale', rules)
+  const scale = flippedScale(authored?.value ?? null, axis)
+  if (scale === IDENTITY && authored?.source === 'inline' && ruleDecl(rules, 'scale') === null) return removeDecl(ctx, edId, 'scale', actionId)
+  writeDecl(ctx, edId, 'scale', scale, actionId)
 }
 
 function flip(axis: FlipAxis) {
   return (ctx: EditorContext, actionId: string) => {
-    for (const edId of selected(ctx)) {
-      const op = scaleOp(edId, flippedScale(authoredValue(ctx, edId, 'scale'), axis))
-      // The ws client reports a refused op with its own toast.
-      ctx.apply(op, actionId).catch(() => {})
-    }
+    // A reload rejects the reads; the flip is then dropped.
+    for (const edId of selected(ctx)) void flipElement(ctx, edId, axis, actionId).catch(() => {})
   }
 }
 

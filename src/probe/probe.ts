@@ -130,6 +130,8 @@ function answer(read: ProbeRead): ProbeReadResult {
       return { kind: 'matches', matched: matchedSelectors(read) }
     case 'documentHeight':
       return { kind: 'documentHeight', scrollHeight: document.documentElement.scrollHeight }
+    case 'rootFontSize':
+      return { kind: 'rootFontSize', fontSize: Number.parseFloat(getComputedStyle(document.documentElement).fontSize) || 16 }
   }
 }
 

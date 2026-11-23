@@ -26,6 +26,8 @@ vi.mock('../../../src/ui/probe-client', () => ({
           return { kind: 'matches', matched: [] }
         case 'documentHeight':
           return { kind: 'documentHeight', scrollHeight: 0 }
+        case 'rootFontSize':
+          return { kind: 'rootFontSize', fontSize: 16 }
       }
     }
     return {

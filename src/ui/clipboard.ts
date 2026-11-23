@@ -64,15 +64,22 @@ function fitsUnder(ancestors: readonly string[], elements: readonly Element[]): 
   })
 }
 
+/** Elements whose content the parser reads as text, so a paste inside them would never become layers. */
+const TEXT_CONTENT_ELEMENTS = new Set([
+  'script', 'style', 'textarea', 'title', 'noscript', 'template', 'iframe', 'xmp', 'noembed', 'noframes', 'plaintext',
+])
+
 function canHold(path: readonly TemplateNode[], html: string): boolean {
   const holder = path.at(-1)!
-  if (holder.kind !== 'element' || isVoidElement(holder.tag)) return false
+  if (holder.kind !== 'element' || isVoidElement(holder.tag) || TEXT_CONTENT_ELEMENTS.has(holder.tag)) return false
   return fitsUnder(path.map((node) => node.tag), fragmentElements(html))
 }
 
+/** After `edId`; the artboard root has no siblings, so a paste there is appended to it. */
 function after(tree: TemplateNode, edId: EdId): PasteTarget {
   const path = pathTo(tree, edId)
-  const parent = path.at(-2)!
+  const parent = path.at(-2)
+  if (!parent) return { parent: edId, before: null }
   const siblings = parent.children
   const next = siblings[siblings.findIndex((sibling) => sibling.edId === edId) + 1]
   return { parent: parent.edId, before: next?.edId ?? null }

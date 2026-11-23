@@ -124,6 +124,8 @@ function answer(computed: Computed, read: ProbeRead): ProbeReadResult {
       return { kind: 'matches', matched: read.selectors.map(() => false) }
     case 'documentHeight':
       return { kind: 'documentHeight', scrollHeight: 0 }
+    case 'rootFontSize':
+      return { kind: 'rootFontSize', fontSize: 16 }
   }
 }
 
@@ -700,6 +702,40 @@ describe('Layout section: one action per command', () => {
     expect([...first][0]).toEqual(expect.any(String))
     expect([...second][0]).toEqual(expect.any(String))
     expect([...first][0]).not.toBe([...second][0])
+  })
+
+  it('sends both writes of an alignment cell under one action id without waiting for the first ack', async () => {
+    const view = await mountPanel({ selection: ['row'] })
+    view.ctx.apply.mockImplementation(() => new Promise(() => {}))
+
+    await press(alignmentCells(view.panel)[8]!)
+
+    expect(writes(view.ctx)).toEqual([
+      { target: 'row', prop: 'justify-content', value: 'flex-end' },
+      { target: 'row', prop: 'align-items', value: 'flex-end' },
+    ])
+    const ids = actionIds(view.ctx)
+    expect(ids[0]).toEqual(expect.any(String))
+    expect(new Set(ids).size).toBe(1)
+  })
+
+  it.each(['min-width', 'max-width', 'min-height', 'max-height'])('runs a held arrow on %s under one action id', async (prop) => {
+    const view = await mountPanel({ selection: ['a'], styles: { a: inline(['width', '240px'], [prop, '100px']) } })
+    const input = inputOf(view.panel, prop)
+    const keyDown = (repeat: boolean) => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', repeat, bubbles: true, cancelable: true }))
+
+    act(() => {
+      input.focus()
+      keyDown(false)
+    })
+    act(() => keyDown(true))
+    act(() => keyDown(true))
+    act(() => input.dispatchEvent(new KeyboardEvent('keyup', { key: 'ArrowUp', bubbles: true, cancelable: true })))
+    await settle()
+
+    expect(writesOf(view.ctx, prop).map((write) => write.value)).toEqual(['101px', '102px', '103px'])
+    expect(view.ctx.beginAction).toHaveBeenCalledTimes(1)
+    expect(actionIds(view.ctx)).toEqual(['action-1', 'action-1', 'action-1'])
   })
 
   it('sends ignore auto layout and its parent fix as one action', async () => {

@@ -104,7 +104,15 @@ async function arrange(ctx: EditorContext, direction: Direction): Promise<void> 
 }
 
 function arrangeAction(id: string, label: string, keys: Pick<EditorAction, 'kbd' | 'kbdByPlatform'>, direction: Direction): EditorAction {
-  return { id, label, ...keys, run: (ctx) => void arrange(ctx, direction), when: whileOneEditable, disabledReason: ARRANGE_NEEDS }
+  return {
+    id,
+    label,
+    ...keys,
+    // A reload rejects the reads; the command is then dropped.
+    run: (ctx) => void arrange(ctx, direction).catch(() => {}),
+    when: whileOneEditable,
+    disabledReason: ARRANGE_NEEDS,
+  }
 }
 
 // Cmd-Shift-] / [ is the browser's tab switch on macOS, so the macOS front and back keys take Option instead.

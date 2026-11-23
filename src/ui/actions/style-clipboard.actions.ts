@@ -18,17 +18,15 @@ function copyStyle(ctx: EditorContext): void {
   copied.set(ctx, authoredStyleOf(ctx, selected(ctx)[0]!))
 }
 
-async function pasteStyle(ctx: EditorContext, declarations: readonly AuthoredDeclaration[]): Promise<void> {
+async function pasteStyle(ctx: EditorContext, declarations: readonly AuthoredDeclaration[], actionId: string): Promise<void> {
   const target = selected(ctx)
-  const applied: string[] = []
-  for (const { prop, value, important } of declarations) {
-    try {
-      await ctx.apply({ target, kind: 'setDecl', payload: { prop, value, ...(important ? { important } : {}) } })
-      applied.push(prop)
-    } catch {
-      // The ws client already toasted the rejection.
-    }
-  }
+  const results = await Promise.allSettled(
+    declarations.map(({ prop, value, important }) =>
+      ctx.apply({ target, kind: 'setDecl', payload: { prop, value, ...(important ? { important } : {}) } }, actionId),
+    ),
+  )
+  // The ws client already toasted each rejection.
+  const applied = declarations.filter((_, at) => results[at]!.status === 'fulfilled').map(({ prop }) => prop)
   if (applied.length > 0) ctx.toast({ message: `Pasted style: ${applied.join(', ')}`, tone: 'info' })
 }
 
@@ -40,7 +38,7 @@ export const actions: EditorAction[] = [
     id: 'style.paste',
     label: 'Paste style',
     kbd: 'Mod+Alt+V',
-    run: (ctx) => void pasteStyle(ctx, copied.get(ctx) ?? []),
+    run: (ctx, actionId) => void pasteStyle(ctx, copied.get(ctx) ?? [], actionId),
     when: (ctx) => !ctx.readOnly() && hasSelection(ctx) && copied.has(ctx),
   },
 ]

@@ -3,12 +3,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createActionRegistry, type ActionModule, type ActionRegistry } from '../../../src/ui/actions/registry'
 import { edId, fakeContext, inline, mountViewport, node, rect, settle, type FakeContext } from '../canvas/tool-context'
 
-// root > card and card2 (absolute, left/top), plain (static), row (flex) > a
-const tree = node('root', [node('card'), node('card2'), node('plain'), node('row', [node('a')])])
+// root > card (> pip) and card2 (absolute, left/top), plain (static), row (flex) > a
+const tree = node('root', [node('card', [node('pip')]), node('card2'), node('plain'), node('row', [node('a')])])
 
 const rects = {
   root: [rect(0, 0, 1280, 900)],
   card: [rect(100, 50, 200, 100)],
+  pip: [rect(110, 60, 20, 20)],
   card2: [rect(350, 200, 100, 50)],
   plain: [rect(900, 600, 100, 100)],
   row: [rect(0, 290, 400, 70)],
@@ -22,6 +23,7 @@ const computed = {
   row: { display: 'flex', 'flex-direction': 'row' },
   card: { position: 'absolute', transform: 'none', left: '100px', top: '50px', right: '980px', bottom: '750px' },
   card2: { position: 'absolute', transform: 'none', left: '350px', top: '200px', right: '830px', bottom: '650px' },
+  pip: { position: 'absolute', transform: 'none', left: '10px', top: '10px', right: '170px', bottom: '70px' },
   plain: IN_FLOW,
   a: IN_FLOW,
 }
@@ -29,6 +31,7 @@ const computed = {
 const styles = {
   card: inline({ left: '100px', top: '50px' }),
   card2: inline({ left: '350px', top: '200px' }),
+  pip: inline({ left: '10px', top: '10px' }),
 }
 
 let registry: ActionRegistry
@@ -107,6 +110,15 @@ describe('nudging the selection with the arrow keys', () => {
     )
     expect(fake.actionIds()).toEqual([expect.any(String), expect.any(String)])
     expect(fake.undoEntries()).toBe(1)
+  })
+
+  it('leaves a selected element inside another selected one to move with it, rather than moving it twice', async () => {
+    await selected(['card', 'pip'])
+
+    keydown('ArrowRight')
+    await settle()
+
+    expect(fake.writes()).toEqual(['left: 101px'])
   })
 
   it('makes a held arrow key one undo entry from keydown to keyup, and the next press another', async () => {

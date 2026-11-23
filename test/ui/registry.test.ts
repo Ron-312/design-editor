@@ -644,12 +644,13 @@ describe('the canvas actions', () => {
   })
 })
 
-/** A chord as a comparable string: modifiers sorted, the key lower-cased; `Mod++` is Mod and the + key. */
-function chordOf(kbd: string): string {
+/** A chord as a comparable string: Mod as the platform's own key, modifiers sorted, the key lower-cased; `Mod++` is Mod and the + key. */
+function chordOf(kbd: string, platform: Platform): string {
   const plusKey = kbd.endsWith('++') || kbd === '+'
   const parts = (plusKey ? kbd.slice(0, -1) : kbd).split('+').filter((part) => part !== '')
   const key = plusKey ? '+' : parts.pop()!.toLowerCase()
-  return [...parts.sort(), key === ' ' ? 'space' : key].join('+')
+  const modifiers = parts.map((part) => (part === 'Mod' ? (platform === 'mac' ? 'Meta' : 'Ctrl') : part))
+  return [...new Set(modifiers)].sort().concat(key === ' ' ? 'space' : key).join('+')
 }
 
 function scopesOf(entry: EditorAction): readonly Scope[] {
@@ -667,10 +668,11 @@ interface Binding {
   readonly scopes: readonly Scope[]
 }
 
-function bindingsOf(registry: ActionRegistry): Binding[] {
+function bindingsOf(registry: ActionRegistry, platform: Platform): Binding[] {
   return registry.all().flatMap((entry) => {
-    const aliases = entry.kbd === undefined ? [] : typeof entry.kbd === 'string' ? [entry.kbd] : entry.kbd
-    return aliases.map((kbd) => ({ id: entry.id, chord: chordOf(kbd), scopes: scopesOf(entry) }))
+    const kbd = entry.kbdByPlatform?.[platform] ?? entry.kbd
+    const aliases = kbd === undefined ? [] : typeof kbd === 'string' ? [kbd] : kbd
+    return aliases.map((alias) => ({ id: entry.id, chord: chordOf(alias, platform), scopes: scopesOf(entry) }))
   })
 }
 
@@ -682,17 +684,27 @@ const RESERVED_HELD_KEYS: readonly Binding[] = [
 
 describe('shortcut conflicts', () => {
   it('binds the canvas navigation keys as canvas-scoped actions', () => {
-    const canvasChords = bindingsOf(createDefaultRegistry('mac'))
+    const canvasChords = bindingsOf(createDefaultRegistry('mac'), 'mac')
       .filter((binding) => binding.scopes.length === 1 && binding.scopes[0] === 'canvas')
       .map((binding) => binding.chord)
 
     for (const kbd of ['V', 'H', 'Enter', 'Shift+Enter', 'Tab', 'Shift+Tab', 'Escape', 'Shift+1', 'Shift+2']) {
-      expect(canvasChords).toContain(chordOf(kbd))
+      expect(canvasChords).toContain(chordOf(kbd, 'mac'))
     }
   })
 
+  it.each<[Platform, string, string]>([
+    ['mac', 'arrange.bringToFront', 'Alt+Meta+]'],
+    ['windows', 'arrange.bringToFront', 'Ctrl+Shift+]'],
+    ['windows', 'arrange.sendToBack', 'Ctrl+Shift+['],
+  ])('checks the keys the %s registry binds, %s on %s among them', (platform, id, chord) => {
+    const bindings = bindingsOf(createDefaultRegistry(platform), platform)
+
+    expect(bindings.filter((binding) => binding.id === id).map((binding) => binding.chord)).toEqual([chord])
+  })
+
   it.each<Platform>(['mac', 'windows'])('binds no chord twice where the scopes overlap, nor a reserved held key (%s)', (platform) => {
-    const bindings = [...RESERVED_HELD_KEYS, ...bindingsOf(createDefaultRegistry(platform))]
+    const bindings = [...RESERVED_HELD_KEYS, ...bindingsOf(createDefaultRegistry(platform), platform)]
 
     const conflicts = bindings.flatMap((a, i) =>
       bindings.slice(i + 1).flatMap((b) => (a.id !== b.id && a.chord === b.chord && overlap(a.scopes, b.scopes) ? [`${a.id} / ${b.id}: ${a.chord}`] : [])),

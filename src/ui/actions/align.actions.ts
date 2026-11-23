@@ -1,6 +1,7 @@
 import type { Rect } from '../../shared/protocol'
 import type { EdId } from '../../shared/types'
 import { alignDeltas, axisOf, distributeDeltas, type AlignEdge } from '../canvas/align'
+import { authoredValue, readMatchedRules, writeDecl, type MatchedRules } from '../canvas/authored'
 import type { Axis } from '../canvas/snap'
 import { parentNodeOf, shiftedOffset } from '../canvas/tools/move.tool'
 import type { Point } from '../canvas/viewport'
@@ -13,6 +14,7 @@ interface PlacedBox {
   readonly edId: EdId
   readonly rect: Rect
   readonly computed: Computed
+  readonly rules: MatchedRules
 }
 
 const ALIGN_REFUSAL = 'Align needs absolutely positioned elements, or a single flex child aligned across its row or column'
@@ -39,25 +41,13 @@ function selected(ctx: EditorContext): readonly EdId[] {
 const whileEditable = (ctx: EditorContext) => !ctx.readOnly() && selected(ctx).length > 0
 const whileThreeEditable = (ctx: EditorContext) => !ctx.readOnly() && selected(ctx).length >= 3
 
-/** The value the element's own declarations give `prop`: inline first, then the later rule. */
-export function authoredValue(ctx: EditorContext, edId: EdId, prop: string): string | null {
-  const sources = ctx.index()?.styles[edId] ?? []
-  const ordered = [...sources.filter((source) => source.target === 'inline'), ...[...sources].reverse()]
-  for (const source of ordered) {
-    const declaration = source.declarations.findLast((entry) => entry.prop === prop)
-    if (declaration) return declaration.value
-  }
-  return null
-}
-
-function writeDecl(ctx: EditorContext, edId: EdId, prop: string, value: string, actionId: string): void {
-  // The ws client reports a refused op with its own toast.
-  ctx.apply({ target: [edId], kind: 'setDecl', payload: { prop, value } }, actionId).catch(() => {})
-}
-
 async function readBox(ctx: EditorContext, edId: EdId): Promise<PlacedBox | null> {
-  const [{ rects }, { values }] = await Promise.all([ctx.read({ kind: 'rects', edId }), ctx.read({ kind: 'computed', edId, props: BOX_PROPS })])
-  return rects[0] ? { edId, rect: rects[0], computed: values } : null
+  const [{ rects }, { values }, rules] = await Promise.all([
+    ctx.read({ kind: 'rects', edId }),
+    ctx.read({ kind: 'computed', edId, props: BOX_PROPS }),
+    readMatchedRules(ctx, edId),
+  ])
+  return rects[0] ? { edId, rect: rects[0], computed: values, rules } : null
 }
 
 function isAbsolute(box: PlacedBox | null): box is PlacedBox {
@@ -77,10 +67,11 @@ function containingSizeOf(box: PlacedBox, axis: Axis): number {
 /** Shifts the inset the box is anchored by, so a `right`-anchored box stays right-anchored. */
 function shiftInset(ctx: EditorContext, box: PlacedBox, axis: Axis, delta: number, actionId: string): void {
   const [start, end] = INSETS[axis]
-  const anchoredAtEnd = authoredValue(ctx, box.edId, start) === null && authoredValue(ctx, box.edId, end) !== null
+  const authored = (prop: string) => authoredValue(ctx, box.edId, prop, box.rules)
+  const anchoredAtEnd = authored(start) === null && authored(end) !== null
   const prop = anchoredAtEnd ? end : start
-  const authored = authoredValue(ctx, box.edId, prop)
-  const base = authored !== null && PLAIN_OFFSET.test(authored.trim()) ? authored : (box.computed[prop] ?? '0')
+  const value = authored(prop)
+  const base = value !== null && PLAIN_OFFSET.test(value.trim()) ? value : (box.computed[prop] ?? '0')
   writeDecl(ctx, box.edId, prop, shiftedOffset(base, anchoredAtEnd ? -delta : delta, containingSizeOf(box, axis)), actionId)
 }
 
@@ -132,7 +123,6 @@ function alignAction(edge: AlignEdge, label: string, key: string): EditorAction 
     id: `align.${edge}`,
     label,
     kbd: `Alt+${key}`,
-    scope: ['canvas', 'layers'],
     disabledReason: ALIGN_REFUSAL,
     // A reload rejects the reads; the command is then dropped.
     run: (ctx, actionId) => void align(ctx, edge, actionId).catch(() => {}),
@@ -145,7 +135,6 @@ function distributeAction(axis: Axis, label: string, key: string): EditorAction 
     id: `align.distribute-${axis}`,
     label,
     kbd: `Alt+Shift+${key}`,
-    scope: ['canvas', 'layers'],
     disabledReason: DISTRIBUTE_REFUSAL,
     run: (ctx, actionId) => void distribute(ctx, axis, actionId).catch(() => {}),
     when: whileThreeEditable,

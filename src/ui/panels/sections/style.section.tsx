@@ -264,7 +264,8 @@ function layerColour(list: Declaration, layers: readonly ShadowLayer[], at: numb
     warning: null,
     write: (colour, actionId) => list.write(withColour(colour), actionId),
     remove: () => list.write(withColour(null)),
-    preview: (colour) => list.preview(colour === null ? list.value : withColour(colour)),
+    preview: (colour) => list.preview(withColour(colour)),
+    restore: () => list.restore(),
   }
 }
 
@@ -383,8 +384,9 @@ function ShadowList() {
       </div>
       {layers ? (
         <ul className="rows">
-          {layers.map((layer, at) => (
-            <ShadowRow key={`${at}:${formatShadows([layer])}`} list={declaration} layers={layers} at={at} onWrite={writeLayers} />
+          {/* Keyed by place: the index update for a committed edit would otherwise remount the row and drop typed text. */}
+          {layers.map((_, at) => (
+            <ShadowRow key={at} list={declaration} layers={layers} at={at} onWrite={writeLayers} />
           ))}
         </ul>
       ) : (

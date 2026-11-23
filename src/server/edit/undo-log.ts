@@ -52,14 +52,11 @@ function folded(entry: UndoEntry, later: UndoEntry): UndoEntry {
   }
 }
 
-function withoutFile(stack: readonly UndoEntry[], file: ProjectPath): UndoEntry[] {
-  return stack
-    .map((entry) => ({
-      ...entry,
-      snapshots: entry.snapshots.filter((snapshot) => snapshot.file !== file),
-      records: entry.records.filter((record) => !record.files.includes(file)),
-    }))
-    .filter((entry) => entry.snapshots.length > 0)
+function withoutFile(entry: UndoEntry, file: ProjectPath): UndoEntry | null {
+  if (!snapshotOf(entry, file)) return entry
+  const snapshots = entry.snapshots.filter((snapshot) => snapshot.file !== file)
+  if (snapshots.length === 0) return null
+  return { ...entry, snapshots, records: entry.records.filter((record) => !record.files.includes(file)) }
 }
 
 /** File pre-image snapshots, never inverse ops: undo writes the stored text and id map back. */
@@ -112,14 +109,16 @@ export class UndoLog {
   outsideChange(file: ProjectPath, diskHash: string): void {
     const expected = [latestHashOf(this.undoStack, file), latestHashOf(this.redoStack, file)]
     if (expected.every((hash) => hash === undefined || hash === diskHash)) return
-    this.undoStack = withoutFile(this.undoStack, file)
-    this.redoStack = withoutFile(this.redoStack, file)
+    this.dropFile(file)
   }
 
   /** The file is gone, so no entry may write it back. */
   dropFile(file: ProjectPath): void {
-    this.undoStack = withoutFile(this.undoStack, file)
-    this.redoStack = withoutFile(this.redoStack, file)
+    // The open entry may be rebuilt without the file; folding follows it to its new object.
+    const undone = this.undoStack.map((entry) => [entry, withoutFile(entry, file)] as const)
+    this.openEntry = undone.find(([entry]) => entry === this.openEntry)?.[1] ?? null
+    this.undoStack = undone.flatMap(([, kept]) => (kept ? [kept] : []))
+    this.redoStack = this.redoStack.flatMap((entry) => withoutFile(entry, file) ?? [])
   }
 
   state(): UndoState {

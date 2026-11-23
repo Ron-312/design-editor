@@ -14,6 +14,7 @@ import { expandableWithin, isExpandable } from '../actions/layers-panel.actions'
 import type { Platform } from '../actions/registry'
 import type { EditorState } from '../../shared/protocol'
 import type { EdId, EditOp, TemplateNode } from '../../shared/types'
+import { useFrameGeneration } from '../frame-generation'
 import type { EditorContext } from '../plugin-api'
 import { Icon } from './fields'
 import { LAYOUT_PROPS, LayerTypeIcon, layerTypeOf, layoutOf, type LayerType, type Layout } from './layer-icons'
@@ -154,6 +155,7 @@ function renameOp(edId: EdId, name: string): EditOp {
 
 /** The live page decides flex and grid, so the panel reads each element's computed display. */
 function useLiveLayouts(ctx: EditorContext, tree: TemplateNode | undefined): ReadonlyMap<EdId, Layout | null> {
+  const frame = useFrameGeneration()
   const [layouts, setLayouts] = useState<ReadonlyMap<EdId, Layout | null>>(new Map())
   useEffect(() => {
     if (!tree) return
@@ -164,16 +166,17 @@ function useLiveLayouts(ctx: EditorContext, tree: TemplateNode | undefined): Rea
       .then((entries) => {
         if (current) setLayouts(new Map(entries))
       })
-      // A reload rejects reads in flight; the reload's new index reads again.
+      // A reload rejects reads in flight; its frame's `ready` reads again.
       .catch(() => {})
     return () => {
       current = false
     }
-  }, [ctx, tree])
+  }, [ctx, tree, frame])
   return layouts
 }
 
 function useUnrendered(ctx: EditorContext, tree: TemplateNode | undefined): ReadonlySet<EdId> {
+  const frame = useFrameGeneration()
   const [unrendered, setUnrendered] = useState<ReadonlySet<EdId>>(new Set())
   useEffect(() => {
     if (!tree) return
@@ -183,12 +186,12 @@ function useUnrendered(ctx: EditorContext, tree: TemplateNode | undefined): Read
       .then((nodes) => {
         if (current) setUnrendered(new Set(nodes.filter((node) => node.rects.length === 0).map((node) => node.edId)))
       })
-      // A reload rejects reads in flight; the reload's new index reads again.
+      // A reload rejects reads in flight; its frame's `ready` reads again.
       .catch(() => {})
     return () => {
       current = false
     }
-  }, [ctx, tree])
+  }, [ctx, tree, frame])
   return unrendered
 }
 

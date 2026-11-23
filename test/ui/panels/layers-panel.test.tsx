@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BoardIndex, EditorState, ProbeRead, ProbeReadResult, Rect } from '../../../src/shared/protocol'
 import type { EdId, EditOp, ProjectPath, TemplateNode } from '../../../src/shared/types'
 import { createDefaultRegistry } from '../../../src/ui/actions/registry'
+import { FrameGeneration } from '../../../src/ui/frame-generation'
 import { LayersPanel } from '../../../src/ui/panels/LayersPanel'
 import type { AckMessage, EditorContext } from '../../../src/ui/plugin-api'
 import { createEditorStore, type EditorStore } from '../../../src/ui/store'
@@ -80,6 +81,8 @@ function answer(read: ProbeRead): ProbeReadResult {
       return { kind: 'matches', matched: read.selectors.map(() => false) }
     case 'documentHeight':
       return { kind: 'documentHeight', scrollHeight: 0 }
+    case 'rootFontSize':
+      return { kind: 'rootFontSize', fontSize: 16 }
   }
 }
 
@@ -140,6 +143,8 @@ interface Mounted {
   readonly ctx: ReturnType<typeof contextFor>
   readonly onEditorStateChange: ReturnType<typeof vi.fn<(state: EditorState) => void>>
   readonly container: HTMLElement
+  /** Renders the panel again as the probe's `ready` of a reloaded frame does. */
+  readonly frameReady: (generation: number) => Promise<void>
 }
 
 async function mountPanel(editorState: EditorState = editorStateWith(), readError: Error | null = null): Promise<Mounted> {
@@ -154,9 +159,21 @@ async function mountPanel(editorState: EditorState = editorStateWith(), readErro
   document.body.append(container)
   const root = createRoot(container)
   mounted = { root, container }
-  act(() => root.render(<LayersPanel ctx={ctx} platform="mac" onEditorStateChange={onEditorStateChange} />))
+  const render = (generation: number) =>
+    act(() =>
+      root.render(
+        <FrameGeneration.Provider value={generation}>
+          <LayersPanel ctx={ctx} platform="mac" onEditorStateChange={onEditorStateChange} />
+        </FrameGeneration.Provider>,
+      ),
+    )
+  render(0)
   await settle()
-  return { store, ctx, onEditorStateChange, container }
+  const frameReady = async (generation: number) => {
+    render(generation)
+    await settle()
+  }
+  return { store, ctx, onEditorStateChange, container, frameReady }
 }
 
 function rowElements(): HTMLElement[] {
@@ -335,6 +352,66 @@ describe('the tree is the template tree', () => {
     } finally {
       process.off('unhandledRejection', onUnhandled)
     }
+  })
+})
+
+describe('reads after a frame reload', () => {
+  type Reads = (read: ProbeRead) => ProbeReadResult
+
+  function typeOf(id: string): string | null {
+    return row(id).querySelector('[data-layer-type]')?.getAttribute('data-layer-type') ?? null
+  }
+
+  function dimmed(): (string | undefined)[] {
+    return rowElements()
+      .filter((element) => element.hasAttribute('data-dimmed'))
+      .map((element) => element.dataset.layerId)
+  }
+
+  /** A document unlike the one `answer` stands for: header is no flex row and hero is not rendered. */
+  function otherDocument(read: ProbeRead): ProbeReadResult {
+    if (read.kind === 'computed' && read.edId === 'header') return { kind: 'computed', values: computedValues(edId('banner'), read.props) }
+    if (read.kind === 'rects' && read.edId === 'hero') return { kind: 'rects', rects: [] }
+    return answer(read)
+  }
+
+  function readsFrom(ctx: Mounted['ctx'], reads: Reads | Error) {
+    ctx.read = <R extends ProbeRead>(read: R) =>
+      reads instanceof Error ? Promise.reject(reads) : Promise.resolve(reads(read) as Extract<ProbeReadResult, { kind: R['kind'] }>)
+  }
+
+  /** The server sends the new index after the ack whose reload already started. */
+  async function indexArrives(store: EditorStore) {
+    const index = store.getState().index
+    if (!index) throw new Error('no index')
+    act(() => store.setIndex({ ...index, tree: structuredClone(index.tree) }))
+    await settle()
+  }
+
+  it("reads the layouts and rendered layers again on the reloaded frame's ready, replacing what the old document answered", async () => {
+    const { store, ctx, frameReady } = await mountPanel()
+    readsFrom(ctx, otherDocument)
+    await indexArrives(store)
+    expect(typeOf('header')).not.toBe('flex-row')
+    expect(dimmed()).toContain('hero')
+
+    readsFrom(ctx, answer)
+    await frameReady(1)
+
+    expect(typeOf('header')).toBe('flex-row')
+    expect(dimmed()).not.toContain('hero')
+  })
+
+  it("reads again on the reloaded frame's ready when the reload rejected the new index's reads", async () => {
+    const { store, ctx, frameReady } = await mountPanel()
+    readsFrom(ctx, new Error('the frame reloaded before the probe answered'))
+    await indexArrives(store)
+
+    readsFrom(ctx, otherDocument)
+    await frameReady(1)
+
+    expect(typeOf('header')).not.toBe('flex-row')
+    expect(dimmed()).toContain('hero')
   })
 })
 

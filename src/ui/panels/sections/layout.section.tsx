@@ -184,7 +184,7 @@ function AlignContentField() {
   )
 }
 
-function AutoLayoutSection({ selection }: PanelSectionProps) {
+function AutoLayoutSection({ ctx, selection }: PanelSectionProps) {
   const computed = useComputedStyle(selection.edIds[0]!, CONTAINER_PROPS)
   const display = useDeclaration('display')
   const direction = useDeclaration('flex-direction')
@@ -213,8 +213,9 @@ function AutoLayoutSection({ selection }: PanelSectionProps) {
 
   function pickCell(cell: number) {
     const picked = cellAlignment(flow, cell)
-    justify.write(picked.justifyContent)
-    align.write(picked.alignItems)
+    const actionId = ctx.beginAction()
+    justify.write(picked.justifyContent, actionId)
+    align.write(picked.alignItems, actionId)
   }
 
   /** Removing an authored wrap restores the bytes; a wrap from elsewhere is overridden. */
@@ -367,8 +368,8 @@ function ContentBoxMaxWarning({ children }: { readonly children: ReactNode }) {
   const state = usePanelState()
   const scoped = useMemo<PanelState>(() => {
     const { ctx } = state
-    const apply = async (op: EditOp) => {
-      const ack = await ctx.apply(op)
+    const apply = async (op: EditOp, actionId?: string) => {
+      const ack = await ctx.apply(op, actionId)
       void warnIfContentBox(ctx, op).catch(() => {})
       return ack
     }

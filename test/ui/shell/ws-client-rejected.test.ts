@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ClientMessage, ServerMessage } from '../../../src/shared/protocol'
-import type { EdId, EditOp } from '../../../src/shared/types'
+import type { EdId, EditOp, EditRecord, ProjectPath } from '../../../src/shared/types'
 import { createEditorStore, type EditorStore } from '../../../src/ui/store'
 import { connectWsClient, type WsClient } from '../../../src/ui/ws-client'
 
@@ -94,6 +94,74 @@ describe('a refused action', () => {
 
     await Promise.all([expect(first).rejects.toThrow('first'), expect(second).rejects.toThrow('second')])
     expect(store.getState().toasts.map((toast) => toast.message)).toEqual(['first', 'second'])
+  })
+})
+
+describe('an action refused while another of its ops was pending', () => {
+  it('toasts and reloads again for a later refusal once that op was acked', async () => {
+    const left = setDeclIn('held-1', 'left', '1px')
+    const top = setDeclIn('held-1', 'top', '2px')
+    const refused = client.sendOp(left, { ['e1' as EdId]: '1px' })
+    const acked = client.sendOp(top, { ['e1' as EdId]: '2px' })
+    const [refusedId, ackedId] = sentOpIds()
+    socket.receive({ type: 'rejected', opId: refusedId!, reason: 'refused A' })
+    socket.receive(ackOf(ackedId!, recordOf('top', null, '2px'), '2px'))
+    await Promise.all([expect(refused).rejects.toThrow('refused A'), acked])
+
+    const later = client.sendOp(setDeclIn('held-1', 'left', '3px'), { ['e1' as EdId]: '3px' })
+    socket.receive({ type: 'rejected', opId: sentOpId(), reason: 'refused C' })
+
+    await expect(later).rejects.toThrow('refused C')
+    expect(store.getState().toasts.map((toast) => toast.message)).toEqual(['refused A', 'refused C'])
+    expect(reloadFrame).toHaveBeenCalledTimes(2)
+  })
+})
+
+function recordOf(prop: string, before: string | null, after: string): EditRecord {
+  return { target: ['e1' as EdId], kind: 'setDecl', prop, before, after, scope: { kind: 'element' }, files: ['project/home.dc.html' as ProjectPath] }
+}
+
+function ackOf(opId: string, record: EditRecord, value: string): ServerMessage {
+  return { type: 'ack', opId, record, mintedIds: [], locations: {}, resolved: { ['e1' as EdId]: value }, reload: false, warnings: [] }
+}
+
+describe('an op acked in an earlier write than a newer op of its action on the same property', () => {
+  const first = recordOf('width', '100px', '120px')
+  const second = recordOf('width', '120px', '140px')
+
+  it('keeps its record when the newer op is refused', async () => {
+    const written = client.sendOp(setDeclIn('drag-1', 'width', '120px'), { ['e1' as EdId]: '120px' })
+    const refused = client.sendOp(setDeclIn('drag-1', 'width', '140px'), { ['e1' as EdId]: '140px' })
+    const [writtenId, refusedId] = sentOpIds()
+
+    socket.receive(ackOf(writtenId!, first, '120px'))
+    socket.receive({ type: 'rejected', opId: refusedId!, reason: 'refused' })
+
+    await Promise.all([written, expect(refused).rejects.toThrow('refused')])
+    expect(store.getState().records).toEqual([first])
+  })
+
+  it('records both writes when the newer op lands in its own write', async () => {
+    const written = client.sendOp(setDeclIn('drag-1', 'width', '120px'), { ['e1' as EdId]: '120px' })
+    const newer = client.sendOp(setDeclIn('drag-1', 'width', '140px'), { ['e1' as EdId]: '140px' })
+    const [writtenId, newerId] = sentOpIds()
+
+    socket.receive(ackOf(writtenId!, first, '120px'))
+    socket.receive(ackOf(newerId!, second, '140px'))
+
+    await Promise.all([written, newer])
+    expect(store.getState().records).toEqual([first, second])
+    expect(store.getState().toasts).toEqual([])
+  })
+
+  it('records a write once when the newer op was folded into it', async () => {
+    const acks = ['120px', '140px'].map((value) => client.sendOp(setDeclIn('drag-1', 'width', value), { ['e1' as EdId]: value }))
+    const folded = recordOf('width', '100px', '140px')
+
+    for (const opId of sentOpIds()) socket.receive(ackOf(opId, folded, '140px'))
+
+    await Promise.all(acks)
+    expect(store.getState().records).toEqual([folded])
   })
 })
 

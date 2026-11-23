@@ -31,6 +31,7 @@ describe('parseProbeToEditor', () => {
         { kind: 'matches', matched: [true, false] },
         { kind: 'matches', matched: [] },
         { kind: 'documentHeight', scrollHeight: 1460.5 },
+        { kind: 'rootFontSize', fontSize: 12 },
       ],
     },
   ])('accepts a well-formed $type message as is', (message) => {
@@ -61,6 +62,7 @@ describe('parseProbeToEditor', () => {
     ['matches with no list', readResult({ kind: 'matches' })],
     ['a document height that is a string', readResult({ kind: 'documentHeight', scrollHeight: '900' })],
     ['a document height that is not finite', readResult({ kind: 'documentHeight', scrollHeight: Infinity })],
+    ['a root font size that is a string', readResult({ kind: 'rootFontSize', fontSize: '16px' })],
     ['a document height with no value', readResult({ kind: 'documentHeight' })],
   ])('rejects %s', (_case, payload) => {
     expect(parseProbeToEditor(payload)).toBeNull()

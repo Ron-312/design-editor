@@ -35,6 +35,8 @@ const probes = vi.hoisted(() => {
         return { kind: 'matches', matched: read.selectors.map(() => false) }
       case 'documentHeight':
         return { kind: 'documentHeight', scrollHeight: 0 }
+      case 'rootFontSize':
+        return { kind: 'rootFontSize', fontSize: 16 }
     }
   }
 
@@ -666,6 +668,18 @@ describe('banners', () => {
     await settle()
 
     expect(text(container)).toContain('offline: Fraunces not loaded, layout may differ; sizes tuned now may be off')
+  })
+
+  it("has the layers panel read the artboard again on the probe's ready, since a reload's new index can reach the old document", async () => {
+    await openHome()
+    const probe = probes.created.at(-1)
+    if (!probe) throw new Error('the canvas created no probe client')
+    const read = vi.spyOn(probe, 'read')
+
+    act(() => probe.emit({ type: 'ready', scrollX: 0, scrollY: 0 }))
+    await settle()
+
+    expect(read.mock.calls.map(([call]) => call)).toContainEqual(expect.objectContaining({ kind: 'computed', edId: homeIndex.tree.edId }))
   })
 })
 

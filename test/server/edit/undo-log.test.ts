@@ -381,6 +381,32 @@ describe('UndoLog.record folding', () => {
     expect(undo.popUndo()!.records).toEqual([homeLeft, cardWidth])
     expect(undo.popUndo()!.records).toEqual([homeTop])
   })
+
+  const cardOnly: UndoEntry = { records: [cardWidth], snapshots: [snapshot(CARD, 'card before', FIRST_OFFSETS, 'card-1')], styleOnly: true }
+
+  it.each([
+    ['an outside change drops', (undo: UndoLog) => undo.outsideChange(CARD, 'outside-hash')],
+    ['a dropped file removes', (undo: UndoLog) => undo.dropFile(CARD)],
+  ])('still folds the open action after %s another file', (_, dropCard) => {
+    const undo = new UndoLog()
+    undo.record(cardOnly)
+    undo.record(first('a'))
+    dropCard(undo)
+    undo.record({ ...later('a'), records: [homeLeft], snapshots: [snapshot(HOME, 'home after first', LATER_OFFSETS, 'home-2')] })
+
+    expect(undo.popUndo()!.records).toEqual([homeTop, homeLeft])
+    expect(undo.peekUndo()).toBeNull()
+  })
+
+  it('still folds the open action after a file it also wrote is dropped', () => {
+    const undo = new UndoLog()
+    undo.record(later('a'))
+    undo.dropFile(CARD)
+    undo.record(first('a'))
+
+    expect(undo.popUndo()!.records).toEqual([homeLeft, homeTop])
+    expect(undo.peekUndo()).toBeNull()
+  })
 })
 
 describe('undo', () => {

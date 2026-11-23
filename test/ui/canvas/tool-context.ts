@@ -30,6 +30,8 @@ export interface Scene {
   readonly styles?: Record<string, readonly StyleSource[]>
   readonly snap?: Record<string, { readonly parent: Rect | null; readonly siblings: readonly Rect[] }>
   readonly hit?: (x: number, y: number) => string | null
+  /** The `<html>` font size, which `rem` is relative to; 16 px when unset. */
+  readonly rootFontSize?: number
 }
 
 export interface ContextOptions {
@@ -61,6 +63,8 @@ function answer(scene: Scene, read: ProbeRead): ProbeReadResult {
       return { kind: 'matches', matched: read.selectors.map(() => false) }
     case 'documentHeight':
       return { kind: 'documentHeight', scrollHeight: 0 }
+    case 'rootFontSize':
+      return { kind: 'rootFontSize', fontSize: scene.rootFontSize ?? 16 }
   }
 }
 

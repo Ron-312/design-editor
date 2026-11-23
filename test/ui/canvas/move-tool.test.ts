@@ -17,13 +17,14 @@ import {
   type FakeContext,
   type Modifiers,
 } from './tool-context'
+import { helmetRule, withRules } from './matched-rules'
 
 const VIEW = { zoom: 2, panX: 10, panY: 20 }
 
-// root > card and card2 (absolute, left/top), badge (absolute, right/top %), rotated and bare (transformed),
+// root > card (> pip, absolute) and card2 (absolute, left/top), badge (absolute, right/top %), rotated and bare (transformed),
 // row (flex) > a, b, cond (<sc-if>), unrendered, c; col (flex column) > d, e; plain (static, no transform)
 const tree = node('root', [
-  node('card'),
+  node('card', [node('pip')]),
   node('card2'),
   node('badge'),
   node('rotated'),
@@ -36,6 +37,7 @@ const tree = node('root', [
 const rects = {
   root: [rect(0, 0, 1280, 900)],
   card: [rect(100, 50, 200, 100)],
+  pip: [rect(110, 60, 20, 20)],
   card2: [rect(350, 200, 100, 50)],
   badge: [rect(1000, 90, 100, 60)],
   rotated: [rect(400, 600, 100, 100)],
@@ -59,6 +61,7 @@ const computed = {
   col: { display: 'flex', 'flex-direction': 'column' },
   card: { position: 'absolute', transform: 'none', left: '100px', top: '50px', right: '980px', bottom: '750px' },
   card2: { position: 'absolute', transform: 'none', left: '350px', top: '200px', right: '830px', bottom: '650px' },
+  pip: { position: 'absolute', transform: 'none', left: '10px', top: '10px', right: '170px', bottom: '70px' },
   badge: { position: 'absolute', transform: 'none', left: '1000px', top: '90px', right: '180px', bottom: '750px' },
   rotated: { position: 'static', transform: MATRIX },
   bare: { position: 'static', transform: MATRIX },
@@ -73,6 +76,7 @@ const computed = {
 const defaultStyles: Record<string, readonly StyleSource[]> = {
   card: inline({ left: '100px', top: '50px' }),
   card2: inline({ left: '350px', top: '200px' }),
+  pip: inline({ left: '10px', top: '10px' }),
   badge: inline({ right: '20px', top: '10%' }),
   rotated: inline({ transform: 'translate(4px, 6px) rotate(-2deg)' }),
 }
@@ -547,6 +551,23 @@ describe('moving several absolute elements together', () => {
         { target: [edId('card2')], kind: 'setDecl', payload: { prop: 'top', value: '215px' } },
       ]),
     )
+  })
+
+  it('leaves a selected element inside another selected one to move with it, rather than moving it twice', async () => {
+    const fake = await selectedAll(['card', 'pip'])
+
+    await drag(fake, [150, 100], [160, 100])
+
+    expect(fake.writes()).toEqual(['left: 110px'])
+  })
+
+  it('moves the right offset a stylesheet rule anchors, building on the rule value', async () => {
+    const fake = await selected('card', { styles: {} })
+    withRules(fake, [helmetRule('.card', { right: '20px' })], { '.card': ['card'] })
+
+    await drag(fake, [150, 100], [160, 100])
+
+    expect(fake.writes()).toEqual(['right: 10px'])
   })
 
   it('sends every element’s writes under the one action begun at press, so they are one undo entry', async () => {

@@ -1,5 +1,5 @@
 import { WS_PATH, WS_TOKEN_PARAM, type ClientMessage, type ResolvedValues, type ServerMessage } from '../shared/protocol'
-import { supersedeKeyOf, type EdId, type EditOp } from '../shared/types'
+import { supersedeKeyOf, type EdId, type EditOp, type EditRecord } from '../shared/types'
 import type { AckMessage, Unsubscribe } from './plugin-api'
 import type { EditorStore } from './store'
 
@@ -27,12 +27,18 @@ interface PendingOp {
   readonly previewed: ResolvedValues
   readonly resolve: (ack: AckMessage) => void
   readonly reject: (error: Error) => void
+  /** Records acked for older ops of its burst, held until this op settles. */
+  carried: readonly EditRecord[]
 }
 
 const PUSH_IN_PROGRESS = 'Push in progress'
 
 function previewMatchesDisk(previewed: ResolvedValues, resolved: ResolvedValues): boolean {
   return Object.entries(previewed).every(([edId, value]) => resolved[edId as EdId] === value)
+}
+
+function sameRecord(a: EditRecord, b: EditRecord): boolean {
+  return JSON.stringify(a) === JSON.stringify(b)
 }
 
 /** An op without an actionId is an action of its own. */
@@ -60,18 +66,34 @@ export function connectWsClient({ host, token, store, reloadFrame }: WsClientOpt
     return [...pending].some(([opId, other]) => actionOf(opId, other.op) === action)
   }
 
-  /** The Writer acks a burst's superseded ops with the final record, so only the newest op is checked and recorded. */
-  function isSuperseded(op: EditOp): boolean {
+  /** The newest pending op of the same action that sets the same thing; only that op is checked against its preview. */
+  function supersederOf(op: EditOp): PendingOp | undefined {
     const key = supersedeKeyOf(op)
-    if (op.actionId === undefined || key === null) return false
-    return [...pending.values()].some((other) => other.op.actionId === op.actionId && supersedeKeyOf(other.op) === key)
+    if (op.actionId === undefined || key === null) return undefined
+    return [...pending.values()].findLast((other) => other.op.actionId === op.actionId && supersedeKeyOf(other.op) === key)
   }
 
+  function forgetRefusalOnceSettled(opId: string, op: EditOp): void {
+    const action = actionOf(opId, op)
+    if (!hasPendingIn(action)) refusedActions.delete(action)
+  }
+
+  /**
+   * The Writer acks a burst's superseded ops with the final record, but an older op written in an earlier flush
+   * has a record of its own: it is carried to the newest op and recorded once that settles, unless it is the same.
+   */
   function settleAck(ack: AckMessage): void {
     const op = pending.get(ack.opId)
     if (!op) return
     pending.delete(ack.opId)
-    if (isSuperseded(op.op)) return op.resolve(ack)
+    forgetRefusalOnceSettled(ack.opId, op.op)
+    const superseder = supersederOf(op.op)
+    if (superseder) {
+      const carried = [...superseder.carried, ...op.carried, ack.record]
+      superseder.carried = carried.filter((record, at) => at === 0 || !sameRecord(record, carried[at - 1]!))
+      return op.resolve(ack)
+    }
+    for (const record of op.carried) if (!sameRecord(record, ack.record)) store.addRecord(record)
     store.addRecord(ack.record)
     if (ack.reload) {
       reloadFrame()
@@ -87,6 +109,7 @@ export function connectWsClient({ host, token, store, reloadFrame }: WsClientOpt
     const op = pending.get(opId)
     if (!op) return
     pending.delete(opId)
+    for (const record of op.carried) store.addRecord(record)
     const action = actionOf(opId, op.op)
     const refused = refusedActions.get(action)
     if (!refused) store.toast({ message: reason, tone: 'error' })
@@ -134,7 +157,7 @@ export function connectWsClient({ host, token, store, reloadFrame }: WsClientOpt
     sendOp(op, previewed) {
       if (pushing()) return Promise.reject(new Error(`${PUSH_IN_PROGRESS}: the edit was not applied`))
       const opId = `op-${nextOpId++}`
-      const ack = new Promise<AckMessage>((resolve, reject) => pending.set(opId, { op, previewed, resolve, reject }))
+      const ack = new Promise<AckMessage>((resolve, reject) => pending.set(opId, { op, previewed, resolve, reject, carried: [] }))
       send({ type: 'op', opId, op })
       return ack
     },

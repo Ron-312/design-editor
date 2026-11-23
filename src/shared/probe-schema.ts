@@ -49,6 +49,8 @@ function isReadResult(value: unknown): value is ProbeReadResult {
       return isArrayOf(value.matched, isBoolean)
     case 'documentHeight':
       return isNumber(value.scrollHeight)
+    case 'rootFontSize':
+      return isNumber(value.fontSize)
     default:
       return false
   }

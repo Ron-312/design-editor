@@ -97,6 +97,8 @@ function answer(read: ProbeRead): ProbeReadResult {
       return { kind: 'matches', matched: read.selectors.map(() => false) }
     case 'documentHeight':
       return { kind: 'documentHeight', scrollHeight: 0 }
+    case 'rootFontSize':
+      return { kind: 'rootFontSize', fontSize: 16 }
   }
 }
 
@@ -514,6 +516,48 @@ describe('paste', () => {
     await settle()
 
     expectOneInsert(editor, 'main', 'mark', BRIEF)
+  })
+
+  it('appends to the selected artboard root when the root holds the last copy', async () => {
+    const editor = fakeEditor([])
+    const page = mount(editor)
+
+    const { data } = copyLayer(editor, page.viewport, 'brief')
+    editor.selectOnly('root')
+    fire('paste', page.viewport, data)
+    await settle()
+
+    expectOneInsert(editor, 'root', null, data.getData(PRIVATE_TYPE))
+  })
+
+  it('appends to the selected artboard root even when it cannot hold the fragment, for the server to judge', async () => {
+    const editor = fakeEditor(['root'])
+    const page = mount(editor)
+
+    pasteOf('<td>x</td>', page.viewport)
+    await settle()
+
+    expectOneInsert(editor, 'root', null, '<td>x</td>')
+  })
+
+  it.each(['style', 'script', 'textarea', 'title'])('inserts after a selected <%s>, whose content is not markup', async (tag) => {
+    const element = `<${tag}>x</${tag}>`
+    const text = SOURCE.replace('</x-dc>', `  ${element}\n  ${EMPTY.replace('empty', 'tail')}\n</x-dc>`)
+    const editor = fakeEditor([])
+    editor.reindex({
+      ...boardIndex(),
+      tree: node('root', 'x-dc', [node('main', 'main', MAIN_CHILDREN), node('raw', tag), node('tail', 'div')]),
+      text,
+      locations: { ...locationsIn(text), raw: locationIn(text, element, element), tail: locationIn(text, '<div class="tail">', '</div>') } as BoardIndex['locations'],
+    })
+    const page = mount(editor)
+    await settle()
+
+    editor.selectOnly('raw')
+    pasteOf('fetch(1)', page.viewport)
+    await settle()
+
+    expectOneInsert(editor, 'root', 'tail', 'fetch(1)')
   })
 
   it('selects the pasted top-level elements, not their descendants', async () => {

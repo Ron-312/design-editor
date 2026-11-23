@@ -183,6 +183,15 @@ function isAllowedElement(element: Element): boolean {
   return element.namespaceURI === spec.NS.HTML && HTML_ELEMENTS.has(element.tagName)
 }
 
+/**
+ * The parent must be one the allow-list would let a paste write, or a custom element: under a `<script>`, `<style>` or
+ * another element whose content the parser reads as text, the fragment holds no elements for the checks to refuse.
+ */
+function requireAllowedParent(parent: Element): void {
+  const custom = parent.namespaceURI === spec.NS.HTML && parent.tagName.includes('-')
+  if (!custom && !isAllowedElement(parent)) refuse(`nothing can be pasted inside a <${parent.tagName}>`)
+}
+
 function requireAllowed(elements: readonly Element[]): void {
   for (const element of elements) {
     if (DATA_BOUND_TAGS.has(element.tagName)) refuse(DATA_BOUND)
@@ -218,6 +227,7 @@ function requireEveryTagKept(html: string, root: ParentNode): void {
 
 /** Unwraps, renames ids and checks pasted HTML against the allow-list; refuses anything not on it. */
 export function pastedFragment(html: string, context: Element, eol: Eol, mintPrefix: () => string): PastedFragment {
+  requireAllowedParent(context)
   const unwrapped = unwrapPackaging(html).replace(/\r\n?|\n/g, eol)
   if (unwrapped === '') refuse('there is nothing to paste')
   if (hasHole(unwrapped)) refuse(DATA_BOUND)

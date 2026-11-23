@@ -170,6 +170,8 @@ export interface Declaration {
   readonly remove: () => void
   /** Shows `value` in the canvas and writes nothing; null shows the property removed. */
   readonly preview: (value: string | null) => void
+  /** Ends a preview: each target shows its own authored value again. */
+  readonly restore: () => void
 }
 
 function sharedDeclaration(state: PanelState, prop: string) {
@@ -216,6 +218,16 @@ export function useDeclaration(prop: string): Declaration {
           ? { target: state.edIds, kind: 'removeDecl', payload: { prop, ...rule } }
           : { target: state.edIds, kind: 'setDecl', payload: { prop, value, ...rule } },
       )
+    },
+    restore() {
+      if (locked) return
+      // A preview lands in the inline style whatever the write target, so each target gets its inline value back.
+      for (const edId of state.edIds) {
+        const value = declarationIn(state.styles[edId], 'inline', prop)?.value ?? null
+        state.ctx.preview(
+          value === null ? { target: [edId], kind: 'removeDecl', payload: { prop } } : { target: [edId], kind: 'setDecl', payload: { prop, value } },
+        )
+      }
     },
   }
 }

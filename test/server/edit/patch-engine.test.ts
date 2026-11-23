@@ -682,6 +682,94 @@ describe('several declaration ops on one inline style in one flush', () => {
   })
 })
 
+describe('removeAttr and coalesced declaration lists in CRLF and BOM files', () => {
+  const MULTI_LINE = [
+    '<helmet><style>',
+    '.box {',
+    '  width: 1px;',
+    '  height: 2px;',
+    '  color: red;',
+    '}',
+    '</style></helmet>',
+    '<div class="box" style="width: 10px;',
+    '  height: 20px;',
+    '  color: red">x</div>',
+  ].join('\n')
+
+  interface Ending {
+    readonly eol: string
+    readonly bom: boolean
+  }
+
+  /** Opens `body` in a file with `ending`; `expected` is the LF body after the edit, compared in the same ending. */
+  function edited({ eol, bom }: Ending, body: string, ops: (indexed: IndexedFile) => EditOp[], expected: string) {
+    const withEol = (lf: string) => lf.replace(/\n/g, eol)
+    const { indexed, engine, text } = open(`${bom ? '\uFEFF' : ''}${withEol(canvas(body))}`)
+    const outcome = applied(engine.apply(indexed, ops(indexed)))
+    expect(outcome.text).toBe(replaceOnce(text, withEol(body), withEol(expected)))
+  }
+
+  const ENDINGS: readonly (readonly [string, Ending])[] = [
+    ['CRLF', { eol: '\r\n', bom: false }],
+    ['BOM', { eol: '\n', bom: true }],
+  ]
+
+  it.each(ENDINGS)('removeAttr deletes the attribute with the whitespace before it (%s)', (_case, ending) => {
+    edited(ending, '<p class="a" title="Note">x</p>', (indexed) => [removeAttr(findId(indexed, /^<p/), 'title')], '<p class="a">x</p>')
+  })
+
+  it.each(ENDINGS)('removeAttr takes the line break before the attribute with it (%s)', (_case, ending) => {
+    edited(ending, '<p class="a"\n   title="Note">x</p>', (indexed) => [removeAttr(findId(indexed, /^<p/), 'title')], '<p class="a">x</p>')
+  })
+
+  it.each(ENDINGS)('removes two of three inline declarations in one splice (%s)', (_case, ending) => {
+    const three = '<div style="width: 10px; height: 20px; color: red">x</div>'
+    const div = (indexed: IndexedFile) => findId(indexed, /^<div/)
+    edited(ending, three, (indexed) => [removeDecl(div(indexed), 'height'), removeDecl(div(indexed), 'color')], '<div style="width: 10px">x</div>')
+  })
+
+  it.each(ENDINGS)('removes and appends declarations across lines of a rule and an inline style (%s)', (_case, ending) => {
+    edited(
+      ending,
+      MULTI_LINE,
+      (indexed) => {
+        const div = findId(indexed, /^<div/)
+        const rule = indexed.findRule('.box', 0)!.id
+        return [
+          removeRuleDecl(div, rule, 'height'),
+          removeRuleDecl(div, rule, 'color'),
+          setRuleDecl(div, rule, 'opacity', '0.5'),
+          removeDecl(div, 'height'),
+          setDecl(div, 'opacity', '0.5'),
+        ]
+      },
+      MULTI_LINE.replace('  height: 2px;\n  color: red;\n', '  opacity: 0.5;\n').replace(
+        'width: 10px;\n  height: 20px;\n  color: red"',
+        'width: 10px;\n  color: red;\n  opacity: 0.5"',
+      ),
+    )
+  })
+
+  it.each(ENDINGS)('replaces every declaration of a multi-line rule with two new ones (%s)', (_case, ending) => {
+    edited(
+      ending,
+      MULTI_LINE,
+      (indexed) => {
+        const div = findId(indexed, /^<div/)
+        const rule = indexed.findRule('.box', 0)!.id
+        return [
+          removeRuleDecl(div, rule, 'width'),
+          removeRuleDecl(div, rule, 'height'),
+          removeRuleDecl(div, rule, 'color'),
+          setRuleDecl(div, rule, 'flex-grow', '1'),
+          setRuleDecl(div, rule, 'align-self', 'stretch'),
+        ]
+      },
+      MULTI_LINE.replace('  width: 1px;\n  height: 2px;\n  color: red;\n', '  flex-grow: 1;\n  align-self: stretch;\n'),
+    )
+  })
+})
+
 describe('several declaration ops on one rule in one flush', () => {
   it('removes the last two of three declarations of a rule and keeps its trailing semicolon', () => {
     const { indexed, engine, text } = openHome()

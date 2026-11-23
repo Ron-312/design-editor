@@ -48,6 +48,8 @@ function answer(computed: Readonly<Record<string, string>>, read: ProbeRead): Pr
       return { kind: 'matches', matched: read.selectors.map(() => false) }
     case 'documentHeight':
       return { kind: 'documentHeight', scrollHeight: 0 }
+    case 'rootFontSize':
+      return { kind: 'rootFontSize', fontSize: 16 }
   }
 }
 

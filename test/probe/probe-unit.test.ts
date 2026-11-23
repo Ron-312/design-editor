@@ -461,6 +461,22 @@ describe('document height', () => {
   })
 })
 
+describe('root font size', () => {
+  afterEach(() => {
+    document.documentElement.style.removeProperty('font-size')
+  })
+
+  it('answers the font size of <html>, which rem is relative to', async () => {
+    document.documentElement.style.fontSize = '12px'
+    const editor = await connect()
+
+    editor.send({ type: 'read', id: 6, reads: [{ kind: 'rootFontSize' }] })
+    runFrame()
+
+    expect(ofType(editor, 'readResult')).toEqual([{ type: 'readResult', id: 6, results: [{ kind: 'rootFontSize', fontSize: 12 }] }])
+  })
+})
+
 describe('editor styles', () => {
   const OUTLINE = '[data-ed-id] { color: rgb(1, 2, 3) }'
   const PAGE_STYLE = 'h1 { margin: 0 }'

