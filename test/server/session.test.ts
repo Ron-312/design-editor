@@ -765,7 +765,7 @@ describe('design tokens', () => {
 })
 
 describe('editor state and revert through the session', () => {
-  it('persists saveEditorState to .editor/state.json without touching source, and hides hidden ids in served bytes', async () => {
+  it('persists saveEditorState to .editor/state.json by element path without touching source, and hides hidden ids in served bytes', async () => {
     const { root, editor, client, home, h1 } = await sessionOn()
     const state: EditorState = {
       hidden: [h1],
@@ -778,12 +778,43 @@ describe('editor state and revert through the session', () => {
 
     const stateFile = path.join(root, '.editor', 'state.json')
     await until(() => existsSync(stateFile) && JSON.parse(readFileSync(stateFile, 'utf8')).hidden?.length === 1)
-    expect(JSON.parse(readFileSync(stateFile, 'utf8'))).toEqual(state)
+    const stored = JSON.parse(readFileSync(stateFile, 'utf8')) as { hidden: string[]; collapsed: string[]; boards: Record<string, { zoom: number; selection: string[] }> }
+    expect(stored.collapsed).toEqual([`${HOME}#`])
+    expect(stored.hidden).toEqual([expect.stringMatching(new RegExp(`^${HOME}#\\d+(/\\d+)+$`))])
+    expect(stored.boards[HOME]).toEqual({ zoom: 1.5, panX: 40, panY: -12, selection: stored.hidden })
+    expect(JSON.stringify(stored)).not.toContain(`"${h1}"`)
     expect(diskBytes(root, HOME).equals(HOME_BYTES)).toBe(true)
     expect(await git(root, 'status', '--porcelain')).toBe('')
     expect((await (await connect(editor)).waitFor('hello')).editorState).toEqual(state)
     const served = await get(editor.projectPort, home.frameSrc)
     expect(served.body).toMatch(new RegExp(`\\[data-ed-id="${h1}"\\][^{]*\\{display:\\s*none`))
+  })
+
+  it('brings hide, collapse, zoom and selection back onto the same elements after a restart, whose ids differ', async () => {
+    const { root, editor, client, home, h1 } = await sessionOn()
+    const stateFile = path.join(root, '.editor', 'state.json')
+    client.send({
+      type: 'saveEditorState',
+      state: { hidden: [h1], locked: [h1], collapsed: [home.tree.edId], boards: { [HOME]: { zoom: 2, panX: 5, panY: 6, selection: [h1] } } },
+    })
+    await until(() => existsSync(stateFile))
+    await editor.close()
+    const withMeta = replaceOnce(HOME_TEXT, '<head>', '<head>\n  <meta name="edited-while-closed" content="1">')
+    writeOutside(root, HOME, withMeta)
+
+    const restarted = await launch(root)
+    const next = await connect(restarted)
+    const hello = await next.waitFor('hello')
+    const nextHome = await openBoard(next, HOME)
+    const nextH1 = idOf(nextHome, withMeta, /^<h1\b/)
+
+    expect(nextH1).not.toBe(h1)
+    expect(hello.editorState).toEqual({
+      hidden: [nextH1],
+      locked: [nextH1],
+      collapsed: [nextHome.tree.edId],
+      boards: { [HOME]: { zoom: 2, panX: 5, panY: 6, selection: [nextH1] } },
+    })
   })
 
   it('drops malformed messages and a malformed editor state, and keeps serving the client', async () => {

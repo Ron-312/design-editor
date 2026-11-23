@@ -61,6 +61,13 @@ export interface EditorState {
   readonly boards: Readonly<Record<ProjectPath, { readonly zoom: number; readonly panX: number; readonly panY: number; readonly selection: readonly EdId[] }>>
 }
 
+/** An outside edit re-ids the nodes it replaced; editor-only state follows them to the node now at each element path. */
+export function withReplacedIds(state: EditorState, replaced: Readonly<Record<EdId, EdId>>): EditorState {
+  const follow = (edIds: readonly EdId[]) => edIds.map((edId) => replaced[edId] ?? edId)
+  const boards = Object.entries(state.boards).map(([board, view]) => [board, { ...view, selection: follow(view.selection) }])
+  return { hidden: follow(state.hidden), locked: follow(state.locked), collapsed: follow(state.collapsed), boards: Object.fromEntries(boards) }
+}
+
 // ── HTTP API on the editor port (token-guarded) ───────────────────────────────
 
 export const HTTP_ROUTES = {

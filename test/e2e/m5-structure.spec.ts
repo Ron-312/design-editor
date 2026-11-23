@@ -18,6 +18,8 @@ test.use({ viewport: EDITOR_VIEWPORT })
 
 const BRIEF = '<div class="col" style="width: 240px; padding: 16px">Brief</div>'
 const SKETCHES = '<div class="col" style="width: 360px; padding: 16px">Sketches</div>'
+/** state.json keys layers by element path, `<board>#<child index>/…`, never by the session's ids. */
+const TITLE_PATH = /^project\/home\.dc\.html#\d+(\/\d+)+$/
 const FINAL = '<div class="col" style="width: 480px; padding: 16px; transform: rotate(-2deg)">Final boards</div>'
 
 function homeText(project: E2eProject): string {
@@ -271,15 +273,15 @@ test.describe('M5: structure and multi-edit', () => {
     await selectRow(page, title)
     await page.keyboard.press(`${MOD}+Shift+KeyH`)
     await expect(row).toHaveAttribute('data-hidden', '')
-    await expect.poll(() => editorState(project)?.hidden).toContain(title)
+    await expect.poll(() => editorState(project)?.hidden).toEqual([expect.stringMatching(TITLE_PATH)])
 
     await page.keyboard.press(`${MOD}+Shift+KeyL`)
     await expect(row.getByRole('button', { name: 'Unlock' })).toBeVisible()
-    await expect.poll(() => editorState(project)?.locked).toContain(title)
+    await expect.poll(() => editorState(project)?.locked).toEqual([expect.stringMatching(TITLE_PATH)])
 
     await page.keyboard.press(`${MOD}+Shift+KeyH`)
     await expect(row).not.toHaveAttribute('data-hidden', '')
-    await expect.poll(() => editorState(project)?.hidden).not.toContain(title)
+    await expect.poll(() => editorState(project)?.hidden).toEqual([])
 
     expect(project.diff()).toBe('')
     expect(project.status()).toBe('')

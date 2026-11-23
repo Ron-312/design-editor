@@ -1,11 +1,12 @@
 import type WebSocket from 'ws'
 import { acquirePushLock, isPushLockLive, releasePushLock, renewPushLock } from '../core/push-lock'
 import { findStoredPath } from '../shared/paths'
-import type { BoardIndex, ClientMessage, DesignToken, EditorState, ServerMessage } from '../shared/protocol'
+import { withReplacedIds, type BoardIndex, type ClientMessage, type DesignToken, type EditorState, type ServerMessage } from '../shared/protocol'
 import { LEASE, type PushLock } from '../shared/sync'
 import type { CanvasLayout, EdId, EditOp, ProjectPath, StyleSource } from '../shared/types'
 import { parseClientMessage } from './client-message'
 import { UndoLog } from './edit/undo-log'
+import { ElementPaths, type StoredEditorState } from './editor-state'
 import { contentHash, Writer } from './edit/writer'
 import { loadTokens, readCanvasLayout, readEditorState, syncedText, writeEditorState } from './editor-services'
 import { encodeSource } from './source/bytes'
@@ -49,19 +50,23 @@ export class EditSession {
   private frameBase = ''
   private recheck: ReturnType<typeof setTimeout> | undefined
   private tokens: readonly DesignToken[] = []
+  private state: EditorState = { hidden: [], locked: [], collapsed: [], boards: {} }
+  private persisted = ''
 
   private constructor(
     private readonly root: string,
     private layout: CanvasLayout,
-    private state: EditorState,
   ) {
     this.writer = new Writer({ root, index: this.index, undo: this.undoLog, send: (message) => this.relay(message) })
   }
 
   /** Every board is opened up front, so the served ids and the Writer's ids are one set from the first request. */
   static async open(root: string): Promise<EditSession> {
-    const session = new EditSession(root, await readCanvasLayout(root), await readEditorState(root))
+    const session = new EditSession(root, await readCanvasLayout(root))
     for (const board of session.layout.order) await session.writer.open(board)
+    const stored = await readEditorState(root)
+    session.persisted = JSON.stringify(stored)
+    session.state = session.elementPaths().toIds(stored)
     session.tokens = await loadTokens(root)
     if (await isPushLockLive(root)) session.watchForeignLock()
     return session
@@ -176,7 +181,20 @@ export class EditSession {
 
   private async saveEditorState(state: EditorState): Promise<void> {
     this.state = state
-    await writeEditorState(this.root, state)
+    await this.persistEditorState()
+  }
+
+  /** Written by element path; a restructuring flush moves paths under the same ids, so it is written again then. */
+  private async persistEditorState(): Promise<void> {
+    const stored: StoredEditorState = this.elementPaths().toStored(this.state)
+    const text = JSON.stringify(stored)
+    if (text === this.persisted) return
+    this.persisted = text
+    await writeEditorState(this.root, stored)
+  }
+
+  private elementPaths(): ElementPaths {
+    return new ElementPaths(this.layout.order.map((board) => [board, this.writer.indexed(board)?.tree] as const))
   }
 
   /** Written as a redo of the synced bytes, so it lands as one undoable entry through the Writer's own write path. */
@@ -205,10 +223,12 @@ export class EditSession {
 
   /** Every flush, undo, redo and reconcile ends with an undoState; viewed boards whose index changed are re-sent then. */
   private relay(message: ServerMessage): void {
+    if (message.type === 'outsideChange') this.state = withReplacedIds(this.state, message.replacedIds)
     this.broadcast(message)
     if (message.type !== 'undoState') return
     this.resendChangedIndexes()
     inBackground(this.refreshTokens())
+    inBackground(this.persistEditorState())
     this.recheckBoardsSoon()
   }
 

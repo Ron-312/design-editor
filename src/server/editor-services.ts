@@ -3,9 +3,10 @@ import path from 'node:path'
 import { atomicWrite } from '../core/atomic-write'
 import { gitOutput } from '../core/git'
 import { toNativePath } from '../shared/paths'
-import { EDITOR_FILES, type DesignToken, type EditorState } from '../shared/protocol'
+import { EDITOR_FILES, type DesignToken } from '../shared/protocol'
 import { CANVAS_JSON } from '../shared/sync'
 import type { Board, CanvasLayout, ProjectPath } from '../shared/types'
+import { EMPTY_STORED_STATE, type StoredEditorState } from './editor-state'
 import { readSource } from './source/bytes'
 import { SourceIndex } from './source/source-index'
 
@@ -20,7 +21,6 @@ const DESIGN_SYSTEMS_FOLDER = 'ds'
 const TOKENS_FILE = 'tokens.json'
 const DOCUMENT_SUFFIX = '.dc.html'
 const ROOT_SELECTOR = ':root'
-const EMPTY_STATE: EditorState = { hidden: [], locked: [], collapsed: [], boards: {} }
 
 function isMissing(error: unknown): boolean {
   return (error as NodeJS.ErrnoException).code === 'ENOENT'
@@ -99,13 +99,19 @@ function stateFileOf(root: string): string {
   return path.join(root, ...EDITOR_FILES.state.split('/'))
 }
 
-export async function readEditorState(root: string): Promise<EditorState> {
+/** A state.json that does not parse is editor-only convenience lost, never a reason to refuse to open. */
+export async function readEditorState(root: string): Promise<StoredEditorState> {
   const text = await readIfPresent(stateFileOf(root))
-  return text === null ? EMPTY_STATE : (JSON.parse(text) as EditorState)
+  if (text === null) return EMPTY_STORED_STATE
+  try {
+    return { ...EMPTY_STORED_STATE, ...(JSON.parse(text) as Partial<StoredEditorState>) }
+  } catch {
+    return EMPTY_STORED_STATE
+  }
 }
 
 /** Hide, lock, layer collapse and zoom live in `.editor/`, which `.git/info/exclude` keeps out of git. */
-export async function writeEditorState(root: string, state: EditorState): Promise<void> {
+export async function writeEditorState(root: string, state: StoredEditorState): Promise<void> {
   const file = stateFileOf(root)
   await mkdir(path.dirname(file), { recursive: true })
   await atomicWrite(file, Buffer.from(`${JSON.stringify(state, null, 2)}\n`))

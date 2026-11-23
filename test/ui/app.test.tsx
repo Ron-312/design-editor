@@ -391,6 +391,21 @@ describe('editor shell', () => {
     expect(container.querySelectorAll('[data-board-switcher] [data-board]')).toHaveLength(1)
   })
 
+  it('opens a board at the zoom, pan and selection saved for it, and saves them again once the view settles', async () => {
+    const shell = await mountShell()
+    const saved: EditorState = { ...emptyEditorState, boards: { [home]: { zoom: 2, panX: 30, panY: -40, selection: [edId('title')] } } }
+    await receive(shell.socket, { type: 'hello', layout, editorState: saved, readOnly: false })
+    await receive(shell.socket, { type: 'index', index: homeIndex })
+
+    expect(shell.store.getState().view.viewport).toEqual({ zoom: 2, panX: 30, panY: -40 })
+    expect(shell.store.getState().view.selection).toEqual([edId('title')])
+
+    act(() => shell.store.setViewport({ zoom: 0.5, panX: 1, panY: 2 }))
+    await act(() => new Promise((resolve) => setTimeout(resolve, 600)))
+
+    expect(sentOfType(shell.socket, 'saveEditorState').at(-1)?.state.boards[home]).toEqual({ zoom: 0.5, panX: 1, panY: 2, selection: [edId('title')] })
+  })
+
   it('saves a layer hidden in the layers panel through saveEditorState', async () => {
     const { container, socket } = await openHome()
     const headerRow = container.querySelector('[role="treeitem"][data-layer-id="header"]')!

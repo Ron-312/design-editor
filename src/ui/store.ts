@@ -1,4 +1,4 @@
-import type { BoardIndex } from '../shared/protocol'
+import type { BoardIndex, EditorState } from '../shared/protocol'
 import type { EdId, EditRecord, ProjectPath, TemplateNode } from '../shared/types'
 import type { Toast, Viewport } from './plugin-api'
 
@@ -101,6 +101,12 @@ export function createEditorStore() {
       listeners.add(listener)
       return () => {
         listeners.delete(listener)
+      }
+    },
+    /** Zoom, pan and selection saved in `.editor/state.json`, for each board not yet viewed this session. */
+    restoreBoardViews(boards: EditorState['boards']) {
+      for (const [board, { zoom, panX, panY, selection }] of Object.entries(boards) as [ProjectPath, EditorState['boards'][ProjectPath]][]) {
+        if (!views.has(board)) views.set(board, { selection, viewport: { zoom, panX, panY }, scroll: { x: 0, y: 0 } })
       }
     },
     setBoard(board: ProjectPath) {

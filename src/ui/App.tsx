@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
-import type { EditorState, ServerMessage, UndoState } from '../shared/protocol'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { withReplacedIds, type EditorState, type ServerMessage, type UndoState } from '../shared/protocol'
 import type { CanvasLayout, EditRecord, ProjectPath } from '../shared/types'
 import { createDefaultRegistry, type Platform } from './actions/registry'
 import { canvasContext, CanvasView } from './canvas/CanvasView'
@@ -35,6 +35,7 @@ type RestoredMessage = Extract<ServerMessage, { type: 'restored' }>
 
 const NO_UNDO: UndoState = { canUndo: false, canRedo: false, undoLabel: null, redoLabel: null }
 const TOAST_MS = 6000
+const VIEW_SAVE_MS = 400
 const OFFLINE_BANNER = 'offline'
 
 const SHORTCUTS: Readonly<Record<Platform, { readonly undo: string; readonly redo: string }>> = {
@@ -150,7 +151,13 @@ export function App({ store, ws, platform, projectName }: AppProps) {
         switch (message.type) {
           case 'hello':
             store.setReadOnly(message.readOnly)
+            store.restoreBoardViews(message.editorState.boards)
+            boardViews.current = message.editorState.boards
             setSession({ layout: message.layout, editorState: message.editorState })
+            break
+          case 'outsideChange':
+            setSession((current) => current && { ...current, editorState: withReplacedIds(current.editorState, message.replacedIds) })
+            if (message.pendingOps) askAboutPendingEdits(store, ws, message.file)
             break
           case 'layout':
             setSession((current) => current && { ...current, layout: message.layout })
@@ -166,9 +173,6 @@ export function App({ store, ws, platform, projectName }: AppProps) {
             break
           case 'writeFailed':
             store.toast({ message: message.reason === 'locked' ? `File locked by another program: ${message.message}` : message.message, tone: 'error' })
-            break
-          case 'outsideChange':
-            if (message.pendingOps) askAboutPendingEdits(store, ws, message.file)
             break
           case 'pushStale':
             staleToast.current = askToUnlockStalePush(store, ws, message.heldForMs)
@@ -204,10 +208,44 @@ export function App({ store, ws, platform, projectName }: AppProps) {
     return () => document.removeEventListener('keydown', onKeyDown)
   }, [registry, ctx])
 
-  function changeEditorState(next: EditorState): void {
-    setSession((current) => current && { ...current, editorState: next })
-    ws.send({ type: 'saveEditorState', state: next })
-  }
+  /** The saved board views change on every zoom, so they live here and not in the state the panels re-render on. */
+  const boardViews = useRef<EditorState['boards']>({})
+  const latestEditorState = useRef(editorState)
+  useEffect(() => {
+    latestEditorState.current = editorState
+  }, [editorState])
+
+  const changeEditorState = useCallback(
+    (next: EditorState) => {
+      setSession((current) => current && { ...current, editorState: next })
+      ws.send({ type: 'saveEditorState', state: { ...next, boards: boardViews.current } })
+    },
+    [ws],
+  )
+
+  // Zoom, pan and selection per board are editor-only state too; they are saved once the view settles.
+  const hasSession = session !== null
+  useEffect(() => {
+    if (!hasSession) return
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const saveSettledView = () => {
+      const state = latestEditorState.current
+      const { board, view } = store.getState()
+      if (!state || !board) return
+      const settled = { ...view.viewport, selection: view.selection }
+      if (JSON.stringify(boardViews.current[board]) === JSON.stringify(settled)) return
+      boardViews.current = { ...boardViews.current, [board]: settled }
+      ws.send({ type: 'saveEditorState', state: { ...state, boards: boardViews.current } })
+    }
+    const stop = store.subscribe(() => {
+      clearTimeout(timer)
+      timer = setTimeout(saveSettledView, VIEW_SAVE_MS)
+    })
+    return () => {
+      stop()
+      clearTimeout(timer)
+    }
+  }, [store, ws, hasSession])
 
   function undoSaved(): void {
     setSaved(null)
