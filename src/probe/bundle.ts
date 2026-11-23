@@ -1,5 +1,5 @@
 import { fileURLToPath } from 'node:url'
-import { build, type Rollup } from 'vite'
+import type { build, Rollup } from 'vite'
 
 const PROBE_ENTRY = fileURLToPath(new URL('./probe.ts', import.meta.url))
 
@@ -12,6 +12,8 @@ function soleChunk(output: Awaited<ReturnType<typeof build>>): Rollup.OutputChun
 
 /** The probe as one classic-script IIFE, inlined by the serving transform as the first script in `<head>`. */
 export async function buildProbeBundle(): Promise<string> {
+  // Loaded here, not at the top: the desktop app bundles this module but ships without vite.
+  const { build } = await import('vite')
   const output = await build({
     configFile: false,
     logLevel: 'silent',
