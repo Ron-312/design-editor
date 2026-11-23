@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc data-props='{"$preview":{"w":1280,"h":900},"name":"Ron","issue":14}'>
+  <helmet>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap">
+    <link rel="stylesheet" href="/_blob/b1a2c3d4e5f60718293a4b5c6d7e8f90">
+    <style>
+      body { margin: 0; font-family: Inter, sans-serif; background: #fff7ed; }
+      .page { position: relative; min-height: 900px; padding: 48px; }
+      @media (max-width: 720px) {
+        .page { padding: 24px; }
+      }
+    </style>
+  </helmet>
+  <main class="page" style="color: #1c1917">
+    <header class="hero" style="background-color: {{ accent }}; color: #fff7ed; padding: 24px 32px; border-radius: 12px">
+      <h1 style="margin: 0; font-size: 48px">Studio Weekly</h1>
+      <p aria-label="Issue {{ issue }} of the weekly">Hello {{ name }}, here is what moved this week.</p>
+      <img src="/_blob/0f1e2d3c4b5a69788796a5b4c3d2e1f0" alt="Studio mark" style="position: absolute; top: 24px; right: 32px; width: 64px">
+    </header>
+    <p class="lede">Made with <strong>care</strong> and <em>coffee</em> in the studio.</p>
+    <section class="row" style="display: flex; gap: 16px; margin-top: 24px">
+      <div class="col" style="width: 240px; padding: 16px">Brief</div>
+      <div class="col" style="width: 360px; padding: 16px">Sketches</div>
+      <div class="col" style="width: 480px; padding: 16px; transform: rotate(-2deg)">Final boards</div>
+    </section>
+    <ul class="list" style="padding: 0; list-style: none">
+      <sc-for list="{{ items }}" as="item">
+        <li class="item" style="padding: 8px 0; border-bottom: 1px solid #e7e5e4">{{ item.label }}</li>
+      </sc-for>
+    </ul>
+    <sc-if when="{{ showDraftBanner }}">
+      <div class="banner" style="background-color: #fde68a; padding: 8px">Draft, not for sharing</div>
+    </sc-if>
+    <dc-import src="./card.dc.html"></dc-import>
+  </main>
+  <script data-dc-script>
+    class Component extends DCLogic {
+      renderVals() {
+        return {
+          name: this.props.name ?? 'friend',
+          issue: this.props.issue ?? 1,
+          accent: '#c2410c',
+          showDraftBanner: false,
+          items: [
+            { label: 'Kickoff with the harbour team' },
+            { label: 'Moodboard review' },
+            { label: 'Type pairing locked' },
+          ],
+        }
+      }
+    }
+  </script>
+</x-dc>
+</body>
+</html>

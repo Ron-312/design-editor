@@ -1,0 +1,11 @@
+{
+  "boards": {
+    "home.dc.html": { "x": 0, "y": 0, "w": 1280, "h": 900 },
+    "card.dc.html": { "x": 1360, "y": 0, "w": 360, "h": 220 }
+  },
+  "order": ["home.dc.html", "card.dc.html"],
+  "pages": ["home.dc.html"],
+  "designSystems": {
+    "core": "ds/core/tokens.json"
+  }
+}
