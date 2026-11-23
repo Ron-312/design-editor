@@ -23,6 +23,8 @@ export interface EditorArgs {
 export interface StartOptions extends EditorArgs {
   /** Defaults to the UI source in dev and the built bundle otherwise. */
   readonly uiDir?: string
+  /** The probe bundle built ahead of time, as the packaged app ships it; built with Vite on first use otherwise. */
+  readonly probeScript?: string
 }
 
 export interface Editor {
@@ -90,8 +92,8 @@ async function writeServerJson(root: string, info: ServerInfo & { readonly proje
   await chmod(file, OWNER_ONLY).catch(() => undefined)
 }
 
-async function prepare(root: string): Promise<{ probeScript: string; session: EditSession }> {
-  const [, probeScript] = await Promise.all([ensureSupportedGit(), loadProbeBundle()])
+async function prepare(root: string, prebuiltProbe: string | undefined): Promise<{ probeScript: string; session: EditSession }> {
+  const [, probeScript] = await Promise.all([ensureSupportedGit(), prebuiltProbe ?? loadProbeBundle()])
   return { probeScript, session: await EditSession.open(root) }
 }
 
@@ -152,7 +154,7 @@ export async function startEditor(options: StartOptions): Promise<Editor> {
           editorState: () => session!.editorState,
         }),
       ),
-      prepare(root),
+      prepare(root, options.probeScript),
     ] as const)
     editorServer = fulfilled(results[0])
     projectServer = fulfilled(results[1])

@@ -14,7 +14,11 @@
     "check": "node scripts/check.mjs",
     "e2e": "node scripts/e2e.mjs",
     "edsync": "node tools/edsync.mjs",
-    "prepare": "husky"
+    "prepare": "husky",
+    "build:app": "node scripts/build-app.mjs",
+    "app": "node scripts/build-app.mjs && electron build/app",
+    "dist:mac": "node scripts/build-app.mjs && electron-builder --mac",
+    "dist:win": "node scripts/build-app.mjs && electron-builder --win"
   },
   "dependencies": {
     "@vitejs/plugin-react": "^6.3.0",
@@ -49,6 +53,9 @@
     "@types/write-file-atomic": "^4.0.3",
     "@types/ws": "^8.18.2",
     "@vitest/coverage-v8": "^5.1.1",
+    "electron": "^45.4.1",
+    "electron-builder": "^26.18.0",
+    "esbuild": "^0.28.2",
     "eslint": "^10.15.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "globals": "^17.14.0",
@@ -57,5 +64,6 @@
     "typescript": "~6.0.3",
     "typescript-eslint": "^8.73.0",
     "vitest": "^5.1.1"
-  }
+  },
+  "author": "Ron Hershkovitz"
 }

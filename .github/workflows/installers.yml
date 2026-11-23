@@ -1,0 +1,54 @@
+name: installers
+on:
+  workflow_dispatch:
+  push:
+    branches: ['**']
+    tags: ['v*']
+    paths:
+      - 'src/desktop/**'
+      - 'desktop/**'
+      - 'electron-builder.yml'
+      - 'scripts/build-app.mjs'
+      - 'scripts/smoke-app.mjs'
+      - '.github/workflows/installers.yml'
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            dist: dist:win
+            exe: release/win-unpacked/Design Editor.exe
+            files: release/*.exe
+          - os: macos-latest
+            dist: dist:mac
+            exe: release/mac-arm64/Design Editor.app/Contents/MacOS/Design Editor
+            files: release/*.dmg
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run ${{ matrix.dist }}
+      - name: Pull the sample canvas the way /design-pull does
+        shell: bash
+        run: |
+          git config --global user.email ci@example.com
+          git config --global user.name CI
+          npm run -s edsync -- ingest --slug sample --remote-dir test/fixtures/canvas
+          npm run -s edsync -- cache --slug sample --from test/fixtures/canvas/fetched --release sample
+      - name: Launch the packaged app on it
+        shell: bash
+        run: node scripts/smoke-app.mjs "${{ matrix.exe }}" "$PWD/projects/sample" app-${{ matrix.os }}.png
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer-${{ matrix.os }}
+          path: |
+            ${{ matrix.files }}
+            app-${{ matrix.os }}.png
+          retention-days: 14
