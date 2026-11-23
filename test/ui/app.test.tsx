@@ -9,9 +9,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BoardIndex, ClientMessage, EditorState, ProbeRead, ProbeReadResult, ProbeToEditor, ServerMessage } from '../../src/shared/protocol'
 import type { CanvasLayout, EdId, EditOp, EditRecord, ProjectPath, StyleSource, TemplateNode } from '../../src/shared/types'
 import * as history from '../../src/ui/actions/history.actions'
-import { createActionRegistry, createDefaultRegistry, type Platform } from '../../src/ui/actions/registry'
+import { createActionRegistry, createDefaultRegistry, type ActionRegistry, type Platform } from '../../src/ui/actions/registry'
 import { App } from '../../src/ui/App'
-import type { EditorContext } from '../../src/ui/plugin-api'
+import type { EditorContext, ShellSlot, ShellSlotProps } from '../../src/ui/plugin-api'
 import { createEditorStore, type EditorStore } from '../../src/ui/store'
 import { connectWsClient, type WsClient } from '../../src/ui/ws-client'
 
@@ -71,6 +71,21 @@ const probes = vi.hoisted(() => {
 })
 
 vi.mock('../../src/ui/probe-client', () => ({ createProbeClient: () => probes.create() }))
+
+/** Every registry the shell builds, so a test can watch what App hands it. */
+const registries = vi.hoisted((): ActionRegistry[] => [])
+
+vi.mock('../../src/ui/actions/registry', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../../src/ui/actions/registry')>()
+  return {
+    ...original,
+    createDefaultRegistry(platform: Platform) {
+      const registry = original.createDefaultRegistry(platform)
+      registries.push(registry)
+      return registry
+    },
+  }
+})
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean
@@ -166,7 +181,12 @@ async function receive(socket: FakeSocket, message: ServerMessage) {
   await settle()
 }
 
-async function mountShell(platform: Platform = 'mac'): Promise<Shell> {
+interface MountOptions {
+  readonly platform?: Platform
+  readonly slots?: readonly ShellSlot[]
+}
+
+async function mountShell({ platform = 'mac', slots = [] }: MountOptions = {}): Promise<Shell> {
   const container = document.createElement('div')
   document.body.append(container)
   const store = createEditorStore()
@@ -174,13 +194,13 @@ async function mountShell(platform: Platform = 'mac'): Promise<Shell> {
   const socket = FakeSocket.latest!
   const root = createRoot(container)
   mounted = { root, container }
-  act(() => root.render(<App store={store} ws={ws} platform={platform} projectName={PROJECT_NAME} />))
+  act(() => root.render(<App store={store} ws={ws} platform={platform} projectName={PROJECT_NAME} slots={slots} />))
   await settle()
   return { store, ws, socket, container }
 }
 
-async function openHome(options: { readOnly?: boolean; platform?: Platform } = {}): Promise<Shell> {
-  const shell = await mountShell(options.platform)
+async function openHome(options: MountOptions & { readOnly?: boolean } = {}): Promise<Shell> {
+  const shell = await mountShell(options)
   await receive(shell.socket, { type: 'hello', layout, editorState: emptyEditorState, readOnly: options.readOnly ?? false })
   await receive(shell.socket, { type: 'index', index: homeIndex })
   return shell
@@ -242,14 +262,56 @@ function currentSyncStep(container: HTMLElement): string {
   return text(syncStrip(container).querySelector('[aria-current="step"]'))
 }
 
-async function pressInCanvas(container: HTMLElement, key: string, init: KeyboardEventInit) {
-  const target = container.querySelector('[data-canvas-viewport]') ?? container
+async function press(target: Element, key: string, init: KeyboardEventInit = {}) {
   const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...init })
   act(() => {
     target.dispatchEvent(event)
   })
   await settle()
   return event
+}
+
+async function pressInCanvas(container: HTMLElement, key: string, init: KeyboardEventInit) {
+  return press(container.querySelector('[data-canvas-viewport]') ?? container, key, init)
+}
+
+function canvasViewport(container: HTMLElement): HTMLElement {
+  const viewport = container.querySelector<HTMLElement>('[data-canvas-viewport]')
+  if (!viewport) throw new Error('the shell has no canvas viewport')
+  return viewport
+}
+
+function appRegistry(): ActionRegistry {
+  const registry = registries.at(-1)
+  if (!registry) throw new Error('the shell built no action registry')
+  return registry
+}
+
+/** A slot that renders a marker and keeps the props it was given on every render. */
+function recordingSlot(id: string, place: ShellSlot['place']) {
+  const rendered: ShellSlotProps[] = []
+  const slot: ShellSlot = {
+    id,
+    place,
+    component: (props) => {
+      rendered.push(props)
+      return <span data-test-slot={id} />
+    },
+  }
+  const latest = () => {
+    const props = rendered.at(-1)
+    if (!props) throw new Error(`the shell never rendered the ${id} slot`)
+    return props
+  }
+  return { slot, latest }
+}
+
+async function waitForViewSave() {
+  await act(() => new Promise((resolve) => setTimeout(resolve, 600)))
+}
+
+function boardLabelSize(container: HTMLElement): string {
+  return text(container.querySelector('[data-board-label] .dims'))
 }
 
 function sentOfType<T extends ClientMessage['type']>(socket: FakeSocket, type: T) {
@@ -280,6 +342,7 @@ afterEach(() => {
     mounted = null
   }
   probes.created.length = 0
+  registries.length = 0
   FakeSocket.latest = null
   document.documentElement.classList.remove('light')
   vi.restoreAllMocks()
@@ -746,7 +809,7 @@ describe('history actions', () => {
   function contextWith(readOnly: boolean) {
     const undo = vi.fn()
     const redo = vi.fn()
-    const ctx = { readOnly: () => readOnly, undo, redo } as unknown as EditorContext
+    const ctx = { readOnly: () => readOnly, undo, redo, beginAction: () => 'action-1' } as unknown as EditorContext
     return { ctx, undo, redo }
   }
 
@@ -786,5 +849,273 @@ describe('history actions', () => {
     expect(registry.handleKeyDown(keydown('Z', { metaKey: true, shiftKey: true }), ctx)).toBe(false)
     expect(undo).not.toHaveBeenCalled()
     expect(redo).not.toHaveBeenCalled()
+  })
+})
+
+describe('keyboard routing', () => {
+  it('hands a keydown from a text field to the registry, which keeps Mod-Z native there', async () => {
+    const { container, socket } = await openHome()
+    const handleKeyDown = vi.spyOn(appRegistry(), 'handleKeyDown')
+    const search = container.querySelector<HTMLInputElement>('input[aria-label="Find layer"]')
+    if (!search) throw new Error('the layers panel has no search field')
+    search.focus()
+
+    const event = await press(search, 'z', { metaKey: true })
+
+    expect(handleKeyDown.mock.calls.map(([handed]) => handed)).toContain(event)
+    expect(event.defaultPrevented).toBe(false)
+    expect(sentOfType(socket, 'undo')).toHaveLength(0)
+  })
+
+  it('hands every keyup to the registry, so a held action ends with its key', async () => {
+    const { container } = await openHome()
+    const handleKeyUp = vi.spyOn(appRegistry(), 'handleKeyUp')
+    const event = new KeyboardEvent('keyup', { key: 'ArrowRight', code: 'ArrowRight', bubbles: true })
+
+    act(() => {
+      canvasViewport(container).dispatchEvent(event)
+    })
+
+    expect(handleKeyUp).toHaveBeenCalledWith(event)
+  })
+
+  it('tells the registry when the window loses focus, so no held action outlives it', async () => {
+    await openHome()
+    const handleBlur = vi.spyOn(appRegistry(), 'handleBlur')
+
+    act(() => {
+      window.dispatchEvent(new FocusEvent('blur'))
+    })
+
+    expect(handleBlur).toHaveBeenCalled()
+  })
+})
+
+describe('shell slots', () => {
+  it('renders the top-bar slots in the top bar and the overlay slots outside it', async () => {
+    const top = recordingSlot('test-top', 'top-bar')
+    const overlay = recordingSlot('test-overlay', 'overlay')
+
+    const { container } = await openHome({ slots: [top.slot, overlay.slot] })
+
+    expect(topBar(container).querySelector('[data-test-slot="test-top"]')).not.toBeNull()
+    const overlayMarker = container.querySelector('[data-test-slot="test-overlay"]')
+    expect(overlayMarker).not.toBeNull()
+    expect(overlayMarker?.closest('header')).toBeNull()
+  })
+
+  it('gives every slot the shell context, the action registry, the platform and the probe', async () => {
+    const top = recordingSlot('test-top', 'top-bar')
+
+    await openHome({ platform: 'windows', slots: [top.slot] })
+
+    const probe = probes.created.at(-1)
+    if (!probe) throw new Error('the canvas created no probe client')
+    const props = top.latest()
+    expect(props.registry).toBe(appRegistry())
+    expect(props.platform).toBe('windows')
+    expect(props.probe).toBe(probe)
+    expect(props.ctx.index()?.board).toBe(home)
+  })
+
+  it("gives the slots the canvas's own context, whose fit zooms the canvas", async () => {
+    const overlay = recordingSlot('test-overlay', 'overlay')
+    const { store } = await openHome({ slots: [overlay.slot] })
+    act(() => store.setViewport({ zoom: 0.5, panX: 0, panY: 0 }))
+    await settle()
+
+    act(() => overlay.latest().ctx.fit('100'))
+    await settle()
+
+    expect(store.getState().view.viewport.zoom).toBe(1)
+  })
+})
+
+describe('editor-only state', () => {
+  async function openWithContext(options: MountOptions & { readOnly?: boolean } = {}) {
+    const contextSlot = recordingSlot('test-context', 'overlay')
+    const shell = await openHome({ ...options, slots: [contextSlot.slot] })
+    return { ...shell, ctx: () => contextSlot.latest().ctx }
+  }
+
+  type ContextShell = Awaited<ReturnType<typeof openWithContext>>
+
+  function lastSavedEditorState(socket: FakeSocket): EditorState {
+    const saved = sentOfType(socket, 'saveEditorState').at(-1)
+    if (!saved) throw new Error('the editor state was never saved')
+    return saved.state
+  }
+
+  /** The patch a preview-width control sends for the open board: its current view, at `width` or at the authored width. */
+  function previewWidthPatch(shell: ContextShell, width: number | undefined): Partial<EditorState> {
+    const { viewport, selection } = shell.store.getState().view
+    const view = width === undefined ? { ...viewport, selection } : { ...viewport, selection, previewWidth: width }
+    return { boards: { ...shell.ctx().editorState().boards, [home]: view } }
+  }
+
+  async function setEditorState(shell: ContextShell, patch: Partial<EditorState>) {
+    act(() => shell.ctx().setEditorState(patch))
+    await settle()
+  }
+
+  it.each(['hidden', 'locked', 'collapsed'] as const)('ctx.setEditorState sets %s in the shell and saves it with saveEditorState', async (field) => {
+    const shell = await openWithContext()
+
+    await setEditorState(shell, { [field]: [edId('header')] } as Partial<EditorState>)
+
+    expect(lastSavedEditorState(shell.socket)[field]).toEqual(['header'])
+    expect(shell.ctx().editorState()[field]).toEqual(['header'])
+  })
+
+  it('hides a layer set hidden through ctx.setEditorState in the layers panel', async () => {
+    const shell = await openWithContext()
+
+    await setEditorState(shell, { hidden: [edId('header')] })
+
+    expect(shell.container.querySelector('[role="treeitem"][data-layer-id="header"]')?.hasAttribute('data-hidden')).toBe(true)
+  })
+
+  it("shows a preview width set through ctx.setEditorState, and saves it next to the board's zoom, pan and selection", async () => {
+    const shell = await openWithContext()
+
+    await setEditorState(shell, previewWidthPatch(shell, 375))
+
+    expect(boardLabelSize(shell.container)).toBe('375 preview × 900')
+    expect(lastSavedEditorState(shell.socket).boards[home]?.previewWidth).toBe(375)
+
+    act(() => shell.store.setViewport({ zoom: 0.5, panX: 1, panY: 2 }))
+    await waitForViewSave()
+
+    expect(lastSavedEditorState(shell.socket).boards[home]).toEqual({ zoom: 0.5, panX: 1, panY: 2, selection: [], previewWidth: 375 })
+  })
+
+  it('saves no preview width once the board is back at its authored width', async () => {
+    const shell = await openWithContext()
+    await setEditorState(shell, previewWidthPatch(shell, 375))
+
+    await setEditorState(shell, previewWidthPatch(shell, undefined))
+
+    expect(boardLabelSize(shell.container)).toBe('1280 × 900')
+    expect(lastSavedEditorState(shell.socket).boards[home]).not.toHaveProperty('previewWidth')
+
+    act(() => shell.store.setViewport({ zoom: 0.5, panX: 1, panY: 2 }))
+    await waitForViewSave()
+
+    expect(lastSavedEditorState(shell.socket).boards[home]).toEqual({ zoom: 0.5, panX: 1, panY: 2, selection: [] })
+    expect(lastSavedEditorState(shell.socket).boards[home]).not.toHaveProperty('previewWidth')
+  })
+
+  it("keeps a board's preview width when another board's view is saved, and gives that board none", async () => {
+    const shell = await openWithContext()
+    await setEditorState(shell, previewWidthPatch(shell, 375))
+
+    act(() => shell.store.setBoard(card))
+    await receive(shell.socket, { type: 'index', index: { ...homeIndex, board: card, frameSrc: '/project/secret/card.dc.html' } })
+    act(() => shell.store.setViewport({ zoom: 2, panX: 0, panY: 0 }))
+    await waitForViewSave()
+
+    const boards = lastSavedEditorState(shell.socket).boards
+    expect(boards[home]?.previewWidth).toBe(375)
+    expect(boards[card]).toMatchObject({ zoom: 2, panX: 0, panY: 0 })
+    expect(boards[card]).not.toHaveProperty('previewWidth')
+  })
+
+  it('restores a saved preview width with the zoom, pan and selection, and saves it with them again', async () => {
+    const shell = await mountShell()
+    const saved: EditorState = { ...emptyEditorState, boards: { [home]: { zoom: 2, panX: 30, panY: -40, selection: [edId('title')], previewWidth: 375 } } }
+    await receive(shell.socket, { type: 'hello', layout, editorState: saved, readOnly: false })
+    await receive(shell.socket, { type: 'index', index: homeIndex })
+
+    expect(shell.store.getState().view.viewport).toEqual({ zoom: 2, panX: 30, panY: -40 })
+    expect(boardLabelSize(shell.container)).toBe('375 preview × 900')
+
+    act(() => shell.store.setViewport({ zoom: 0.5, panX: 1, panY: 2 }))
+    await waitForViewSave()
+
+    expect(lastSavedEditorState(shell.socket).boards[home]).toEqual({ zoom: 0.5, panX: 1, panY: 2, selection: [edId('title')], previewWidth: 375 })
+  })
+})
+
+describe('focus after a panel click', () => {
+  const styledHeader: BoardIndex = {
+    ...homeIndex,
+    styles: {
+      ...homeIndex.styles,
+      [edId('header')]: [
+        {
+          ...inlineAt(home, 47, 'display', 'flex'),
+          declarations: [...inlineAt(home, 47, 'display', 'flex').declarations, ...inlineAt(home, 47, 'background-color', '#000000').declarations],
+        },
+      ],
+    },
+  }
+
+  async function openWithHeaderSelected() {
+    const shell = await openHome()
+    await receive(shell.socket, { type: 'index', index: styledHeader })
+    act(() => shell.store.select([edId('header')]))
+    await settle()
+    ;(document.activeElement as HTMLElement | null)?.blur()
+    return shell
+  }
+
+  function control(scope: ParentNode, selector: string): HTMLElement {
+    const found = scope.querySelector<HTMLElement>(selector)
+    if (!found) throw new Error(`no control matches ${selector}`)
+    return found
+  }
+
+  function propertiesPanel(container: HTMLElement): HTMLElement {
+    return control(container, 'aside[aria-label="Properties"]')
+  }
+
+  /** A press focuses what it lands on when that can take focus, then clicks it. */
+  async function pressPointerOn(element: HTMLElement) {
+    element.focus()
+    await click(element)
+  }
+
+  const VERTICAL = '[role="radiogroup"][aria-label="Direction"] [role="radio"][aria-label="Vertical"]'
+
+  it.each([
+    ['a button', 'button[aria-pressed][aria-label="Stretch"]'],
+    ['a segmented control', VERTICAL],
+    ['a swatch', '[data-prop="background-color"] .sw'],
+  ])('clicking %s in the properties panel hands focus back to the canvas, where Escape deselects', async (_kind, selector) => {
+    const { container, store } = await openWithHeaderSelected()
+    const clicked = control(propertiesPanel(container), selector)
+
+    await pressPointerOn(clicked)
+
+    expect(document.activeElement).toBe(canvasViewport(container))
+    await press(document.activeElement!, 'Escape')
+    expect(store.getState().view.selection).toEqual([])
+  })
+
+  it('Delete after a click on a segmented control deletes the selected layer', async () => {
+    const { container, socket } = await openWithHeaderSelected()
+
+    await pressPointerOn(control(propertiesPanel(container), VERTICAL))
+    await press(document.activeElement!, 'Delete')
+
+    expect(sentOfType(socket, 'op').map((message) => message.op.kind)).toContain('deleteNode')
+  })
+
+  it('a text input in the properties panel keeps focus when clicked', async () => {
+    const { container } = await openWithHeaderSelected()
+    const gap = control(propertiesPanel(container), 'input[aria-label="Gap"]')
+
+    await pressPointerOn(gap)
+
+    expect(document.activeElement).toBe(gap)
+  })
+
+  it('a button in the layers panel keeps focus in the layers panel', async () => {
+    const { container } = await openWithHeaderSelected()
+    const hide = buttonNamed(control(container, '[role="treeitem"][data-layer-id="header"]'), /^Hide$/)
+
+    await pressPointerOn(hide)
+
+    expect(document.activeElement?.closest('.layers')).not.toBeNull()
   })
 })

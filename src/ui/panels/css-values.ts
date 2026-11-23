@@ -26,7 +26,7 @@ export function isUnitless(prop: string): boolean {
   return UNITLESS.has(prop)
 }
 
-function formatNumber(value: number): string {
+export function formatNumber(value: number): string {
   return String(Number(value.toFixed(4)))
 }
 
@@ -126,7 +126,7 @@ function parseFunction(value: string): FunctionColour | null {
   }
 }
 
-function parseColour(value: string): Colour | null {
+export function parseColour(value: string): Colour | null {
   return parseHex(value) ?? parseFunction(value)
 }
 
@@ -139,7 +139,7 @@ function hexByte(value: number): string {
   return Math.round(value).toString(16).padStart(2, '0')
 }
 
-function hexWithAlpha(rgb: readonly number[], alpha: number): string {
+export function hexWithAlpha(rgb: readonly number[], alpha: number): string {
   return `#${rgb.map(hexByte).join('')}${alpha < 1 ? hexByte(alpha * 255) : ''}`
 }
 

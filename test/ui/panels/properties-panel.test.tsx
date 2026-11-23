@@ -125,7 +125,7 @@ function contextFor(store: EditorStore, reads: (read: ProbeRead) => Promise<Prob
     readOnly: () => store.getState().readOnly,
     select: (edIds: readonly EdId[]) => store.select(edIds),
     setViewport: (viewport) => store.setViewport(viewport),
-    apply: vi.fn(async (op: EditOp) => ackFor(op)),
+    apply: vi.fn(async (op: EditOp, _actionId?: string) => ackFor(op)),
     beginAction: vi.fn(() => `action-${++actions}`),
     preview: vi.fn(),
     setMode: (mode: 'select' | 'hand') => store.setMode(mode),
@@ -448,6 +448,73 @@ describe('number fields', () => {
     act(() => key(inputOf('font-size'), 'Enter'))
     await settle()
     expect(view.ctx.apply).not.toHaveBeenCalled()
+  })
+})
+
+describe('held arrow steps', () => {
+  function keyUp(target: Element, keyName: string) {
+    target.dispatchEvent(new KeyboardEvent('keyup', { key: keyName, bubbles: true, cancelable: true }))
+  }
+
+  function hold(input: HTMLInputElement, repeats: number) {
+    act(() => {
+      input.focus()
+      key(input, 'ArrowUp')
+    })
+    for (let at = 0; at < repeats; at++) act(() => key(input, 'ArrowUp', { repeat: true }))
+  }
+
+  const actionIds = (view: Mounted) => view.ctx.apply.mock.calls.map(([, actionId]) => actionId)
+  const writtenValues = (view: Mounted) =>
+    view.ctx.apply.mock.calls.map(([op]) => (op.kind === 'setDecl' ? op.payload.value : null))
+
+  it('runs a press and its repeats under one action id, released on keyup', async () => {
+    const view = await mountPanel()
+
+    hold(inputOf('font-size'), 2)
+    act(() => keyUp(inputOf('font-size'), 'ArrowUp'))
+    await settle()
+
+    expect(view.ctx.beginAction).toHaveBeenCalledTimes(1)
+    expect(writtenValues(view)).toEqual(['15px', '16px', '17px'])
+    expect(actionIds(view)).toEqual(['action-1', 'action-1', 'action-1'])
+  })
+
+  it('gives separate presses separate actions', async () => {
+    const view = await mountPanel()
+
+    hold(inputOf('font-size'), 0)
+    act(() => keyUp(inputOf('font-size'), 'ArrowUp'))
+    hold(inputOf('font-size'), 0)
+    act(() => keyUp(inputOf('font-size'), 'ArrowUp'))
+    await settle()
+
+    expect(actionIds(view)).toEqual(['action-1', 'action-2'])
+  })
+
+  it('starts a new action for a repeat that arrives after keyup', async () => {
+    const view = await mountPanel()
+
+    hold(inputOf('font-size'), 0)
+    act(() => keyUp(inputOf('font-size'), 'ArrowUp'))
+    act(() => key(inputOf('font-size'), 'ArrowUp', { repeat: true }))
+    await settle()
+
+    expect(actionIds(view)).toEqual(['action-1', 'action-2'])
+  })
+
+  it('releases the held action when the field loses focus', async () => {
+    const view = await mountPanel()
+
+    hold(inputOf('font-size'), 1)
+    act(() => inputOf('font-size').blur())
+    act(() => {
+      inputOf('font-size').focus()
+      key(inputOf('font-size'), 'ArrowUp', { repeat: true })
+    })
+    await settle()
+
+    expect(actionIds(view)).toEqual(['action-1', 'action-1', 'action-2'])
   })
 })
 

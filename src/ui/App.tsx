@@ -1,16 +1,18 @@
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type MouseEvent, type ReactNode } from 'react'
 import { withReplacedIds, type EditorState, type ServerMessage, type UndoState } from '../shared/protocol'
 import type { CanvasLayout, EditRecord, ProjectPath } from '../shared/types'
 import { createDefaultRegistry, type Platform } from './actions/registry'
-import { canvasContext, CanvasView, openBoard, type CanvasCommands } from './canvas/CanvasView'
+import { CanvasView, openBoard, type CanvasCommands } from './canvas/CanvasView'
 import { ToolDock } from './canvas/ToolDock'
 import { describeEdit, DiffPanel, fileName } from './DiffPanel'
 import { ErrorBoundary } from './ErrorBoundary'
 import { LayersPanel } from './panels/LayersPanel'
 import { PropertiesPanel, type Token } from './panels/PropertiesPanel'
 import { TokensPanel } from './panels/TokensPanel'
+import type { EditorContext, ShellSlot } from './plugin-api'
 import type { ProbeClient } from './probe-client'
 import { ShellIcon } from './shell-icons'
+import { defaultShellSlots } from './shell/slots'
 import type { EditorStore, ShownToast } from './store'
 import { BoardSwitcher, PreviewSwitch, PushButton, SyncStrip, ZoomMenu, type SyncStep } from './TopBar'
 import type { WsClient } from './ws-client'
@@ -20,6 +22,7 @@ export interface AppProps {
   readonly ws: WsClient
   readonly platform: Platform
   readonly projectName: string
+  readonly slots?: readonly ShellSlot[]
 }
 
 interface Session {
@@ -35,11 +38,13 @@ interface SavedEdit {
 
 type LeftTab = 'layers' | 'tokens' | 'changes'
 type RestoredMessage = Extract<ServerMessage, { type: 'restored' }>
+type SavedBoardView = EditorState['boards'][ProjectPath]
 
 const NO_UNDO: UndoState = { canUndo: false, canRedo: false, undoLabel: null, redoLabel: null }
 const TOAST_MS = 6000
 const VIEW_SAVE_MS = 400
 const OFFLINE_BANNER = 'offline'
+const DEFAULT_SLOTS = defaultShellSlots()
 
 const SHORTCUTS: Readonly<Record<Platform, { readonly undo: string; readonly redo: string }>> = {
   mac: { undo: '⌘Z', redo: '⇧⌘Z' },
@@ -70,6 +75,25 @@ function previewRestored(probe: ProbeClient, { declarations }: RestoredMessage):
 
 function isTextEntry(target: EventTarget | null): boolean {
   return target instanceof HTMLElement && (target.isContentEditable || target.matches('input, textarea, select'))
+}
+
+/** Canvas shortcuts (Delete, arrows, Escape) keep working after a click on a properties control that takes no typing. */
+function returnFocusToCanvas(event: MouseEvent<HTMLElement>): void {
+  const { target, currentTarget } = event
+  if (!(target instanceof Element) || !target.closest('aside.props')) return
+  if (isTextEntry(target) || isTextEntry(document.activeElement)) return
+  currentTarget.querySelector<HTMLElement>('[data-canvas-viewport]')?.focus()
+}
+
+function atPreviewWidth({ zoom, panX, panY, selection }: SavedBoardView, previewWidth: number | undefined): SavedBoardView {
+  const view = { zoom, panX, panY, selection }
+  return previewWidth === undefined ? view : { ...view, previewWidth }
+}
+
+/** Each saved board view carries the preview width the editor state holds for that board, and none once it is cleared. */
+function withPreviewWidths(views: EditorState['boards'], state: EditorState): EditorState['boards'] {
+  const boards = Object.keys({ ...state.boards, ...views }) as ProjectPath[]
+  return Object.fromEntries(boards.map((board) => [board, atPreviewWidth(views[board] ?? state.boards[board]!, state.boards[board]?.previewWidth)]))
 }
 
 function offlineMessage(families: readonly string[]): string {
@@ -103,7 +127,7 @@ function toggleTheme(): void {
   document.documentElement.classList.toggle('light')
 }
 
-export function App({ store, ws, platform, projectName }: AppProps) {
+export function App({ store, ws, platform, projectName, slots = DEFAULT_SLOTS }: AppProps) {
   const state = useSyncExternalStore(store.subscribe, store.getState)
   const [session, setSession] = useState<Session | null>(null)
   const [probe, setProbe] = useState<ProbeClient | null>(null)
@@ -111,14 +135,11 @@ export function App({ store, ws, platform, projectName }: AppProps) {
   const [saved, setSaved] = useState<SavedEdit | null>(null)
   const [leftTab, setLeftTab] = useState<LeftTab>('layers')
   const [tokens, setTokens] = useState<readonly Token[]>([])
+  const [ctx, setCtx] = useState<EditorContext | null>(null)
   const staleToast = useRef<string | null>(null)
   const canvas = useRef<CanvasCommands>(null)
   const registry = useMemo(() => createDefaultRegistry(platform), [platform])
   const editorState = session?.editorState
-  const ctx = useMemo(
-    () => editorState && canvasContext(store, ws, probe, editorState),
-    [store, ws, probe, editorState],
-  )
 
   useEffect(
     () =>
@@ -176,12 +197,21 @@ export function App({ store, ws, platform, projectName }: AppProps) {
 
   useEffect(() => {
     if (!ctx) return
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (!isTextEntry(event.target)) registry.handleKeyDown(event, ctx)
-    }
+    const onKeyDown = (event: KeyboardEvent) => registry.handleKeyDown(event, ctx)
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
   }, [registry, ctx])
+
+  useEffect(() => {
+    const onKeyUp = (event: KeyboardEvent) => registry.handleKeyUp(event)
+    const onBlur = () => registry.handleBlur()
+    document.addEventListener('keyup', onKeyUp)
+    window.addEventListener('blur', onBlur)
+    return () => {
+      document.removeEventListener('keyup', onKeyUp)
+      window.removeEventListener('blur', onBlur)
+    }
+  }, [registry])
 
   /** The saved board views change on every zoom, so they live here and not in the state the panels re-render on. */
   const boardViews = useRef<EditorState['boards']>({})
@@ -193,7 +223,7 @@ export function App({ store, ws, platform, projectName }: AppProps) {
   const changeEditorState = useCallback(
     (next: EditorState) => {
       setSession((current) => current && { ...current, editorState: next })
-      ws.send({ type: 'saveEditorState', state: { ...next, boards: boardViews.current } })
+      ws.send({ type: 'saveEditorState', state: { ...next, boards: withPreviewWidths(boardViews.current, next) } })
     },
     [ws],
   )
@@ -210,7 +240,7 @@ export function App({ store, ws, platform, projectName }: AppProps) {
       const settled = { ...view.viewport, selection: view.selection }
       if (JSON.stringify(boardViews.current[board]) === JSON.stringify(settled)) return
       boardViews.current = { ...boardViews.current, [board]: settled }
-      ws.send({ type: 'saveEditorState', state: { ...state, boards: boardViews.current } })
+      ws.send({ type: 'saveEditorState', state: { ...state, boards: withPreviewWidths(boardViews.current, state) } })
     }
     const stop = store.subscribe(() => {
       clearTimeout(timer)
@@ -237,9 +267,14 @@ export function App({ store, ws, platform, projectName }: AppProps) {
   const syncStep: SyncStep = state.readOnly ? 'pushing' : state.records.length > 0 ? 'edited' : 'pulled'
   const shortcuts = SHORTCUTS[platform]
   const shownTab = leftTab === 'tokens' && tokens.length === 0 ? 'layers' : leftTab
+  const renderSlots = (place: ShellSlot['place']) =>
+    ctx &&
+    slots
+      .filter((slot) => slot.place === place)
+      .map(({ id, component: Slot }) => <Slot key={id} ctx={ctx} registry={registry} platform={platform} probe={probe} />)
 
   return (
-    <div className="app">
+    <div className="app" onClick={returnFocusToCanvas}>
       <header className="top">
         <div className="mark" title="Design Editor">
           <Mark />
@@ -264,6 +299,7 @@ export function App({ store, ws, platform, projectName }: AppProps) {
         )}
         <div className="vsep" />
         <ZoomMenu zoom={state.view.viewport.zoom} canvas={canvas} />
+        {renderSlots('top-bar')}
         <div className="spacer" />
         <button type="button" className="ibtn theme-ico" title="Toggle light / dark" onClick={toggleTheme}>
           <ShellIcon name="sun" className="i sun" />
@@ -315,6 +351,8 @@ export function App({ store, ws, platform, projectName }: AppProps) {
               editorState={editorState}
               platform={platform}
               onProbe={setProbe}
+              onContext={setCtx}
+              onEditorStateChange={changeEditorState}
             />
           )}
         </ErrorBoundary>
@@ -334,6 +372,7 @@ export function App({ store, ws, platform, projectName }: AppProps) {
       ) : (
         <aside className="props" aria-label="Properties" />
       )}
+      {renderSlots('overlay')}
     </div>
   )
 }

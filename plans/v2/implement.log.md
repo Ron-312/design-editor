@@ -25,3 +25,15 @@ Records what each wave built and where it departed from the plan.
   deviated: ShellSlot and ShellSlotProps exist only as types (the registry test needs them); EditorPlugin has no shellSlots field.
   deviated: the frame's fit uses the displayed frame size (preview width times grown height), not only the effective width.
   deviated: dead keys (macOS Option+E/U/I/N) count as named keys and never fall back to the code.
+
+## Wave 4 (2026-11-23)
+- t5 C2b App shell: registry routing, focus return, shell slots, editor-state setter — App keeps the context CanvasView hands back through onContext and passes onEditorStateChange. Every keydown goes to registry.handleKeyDown, keyup to handleKeyUp and window blur to handleBlur. New optional slots prop (default defaultShellSlots, loaded from src/ui/shell/*.slot.tsx) renders top-bar slots after ZoomMenu and overlay slots at the end of .app. A click in the properties panel on a non-text control returns focus to the canvas viewport. Preview widths persist next to zoom, pan and selection through withPreviewWidths.
+  deviated: src/ui/store.ts is unchanged; the preview width is persisted in App because CanvasView reads it from editorState.boards[path].previewWidth.
+  deviated: App keeps isTextEntry, now only for the focus-return check, not for gating keydown.
+  deviated: focus return finds the panel with the selector aside.props and also checks document.activeElement.
+  deviated: top-bar slots sit right after the zoom menu, a placement the plan leaves open.
+- t14 M10 colour picker and field action ids (preview, hold-step) — New colour.ts (notation, hsva, oklch gamut mapping), hold-step.ts (useHeldStep, one action id per held key) and colour-picker.tsx (square, hue and alpha sliders, notation select, outside-sRGB badge, EyeDropper when available; drag previews, one write on release, Escape restores). Declaration gains preview and an optional actionId on write; TextInput steps through useHeldStep; ColourField renders ColourPicker.
+  deviated: a colour field bound to var(--token) still shows the token pill and no swatch button, so the picker cannot open from it.
+  deviated: choosing a notation in the menu writes nothing; it only sets the notation the next write uses.
+  deviated: the picker writes modern comma-free notation even when the authored value used legacy commas.
+  deviated: oklch is written with 4 decimals for L and C and 2 for H, and isOutsideSrgb allows 0.001 slack per channel.

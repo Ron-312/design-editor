@@ -2,7 +2,9 @@ import { createContext, useContext, useEffect, useState, type ChangeEvent, type 
 import type { BoardIndex, DesignToken } from '../../shared/protocol'
 import type { AuthoredDeclaration, EdId, EditOp, RuleId, StyleSource } from '../../shared/types'
 import type { EditorContext } from '../plugin-api'
+import { ColourPicker } from './colour-picker'
 import { colorAlpha, computedColour, inAuthoredColorFormat, shownComputed, stepNumber, withAuthoredUnit, withColorAlpha } from './css-values'
+import { useHeldStep } from './hold-step'
 
 const ICON_PATHS = {
   'chev-d': <path d="M4 6l4 4 4-4" />,
@@ -163,8 +165,11 @@ export interface Declaration {
   /** A `{{hole}}`, a read-only node or a push lock: shown, never written. */
   readonly locked: boolean
   readonly warning: string | null
-  readonly write: (value: string) => void
+  /** Ops sharing an `actionId` are one undo entry; without one the write is an action of its own. */
+  readonly write: (value: string, actionId?: string) => void
   readonly remove: () => void
+  /** Shows `value` in the canvas and writes nothing; null shows the property removed. */
+  readonly preview: (value: string | null) => void
 }
 
 function sharedDeclaration(state: PanelState, prop: string) {
@@ -181,9 +186,9 @@ export function useDeclaration(prop: string): Declaration {
   const locked = !state.editable || shared.hasHole
   const rule = state.target === 'inline' ? {} : { rule: state.target }
 
-  async function send(op: EditOp, written: string | null) {
+  async function send(op: EditOp, written: string | null, actionId?: string) {
     try {
-      await state.ctx.apply(op)
+      await state.ctx.apply(op, actionId)
     } catch {
       // The ws client already toasted the rejection and reloaded any preview.
       return
@@ -196,13 +201,21 @@ export function useDeclaration(prop: string): Declaration {
     ...shared,
     locked,
     warning,
-    write(value) {
+    write(value, actionId) {
       if (locked) return
-      void send({ target: state.edIds, kind: 'setDecl', payload: { prop, value, ...rule } }, value)
+      void send({ target: state.edIds, kind: 'setDecl', payload: { prop, value, ...rule } }, value, actionId)
     },
     remove() {
       if (locked) return
       void send({ target: state.edIds, kind: 'removeDecl', payload: { prop, ...rule } }, null)
+    },
+    preview(value) {
+      if (locked) return
+      state.ctx.preview(
+        value === null
+          ? { target: state.edIds, kind: 'removeDecl', payload: { prop, ...rule } }
+          : { target: state.edIds, kind: 'setDecl', payload: { prop, value, ...rule } },
+      )
     },
   }
 }
@@ -258,12 +271,14 @@ interface TextInputProps {
   readonly declaration: Declaration
   readonly field: FieldTextState
   readonly onCommit: (text: string) => void
-  readonly onStep?: (direction: 1 | -1, large: boolean) => void
+  readonly onStep?: (direction: 1 | -1, large: boolean, actionId: string) => void
   readonly placeholder?: string | undefined
   readonly disabled?: boolean
 }
 
 function TextInput({ label, declaration, field, onCommit, onStep, placeholder, disabled }: TextInputProps) {
+  const held = useHeldStep(usePanelState().ctx)
+
   function commit() {
     if (!field.dirty) return
     field.reset()
@@ -275,7 +290,12 @@ function TextInput({ label, declaration, field, onCommit, onStep, placeholder, d
     if (event.key === 'Escape') return field.reset()
     if (!onStep || (event.key !== 'ArrowUp' && event.key !== 'ArrowDown')) return
     event.preventDefault()
-    onStep(event.key === 'ArrowUp' ? 1 : -1, event.shiftKey)
+    onStep(event.key === 'ArrowUp' ? 1 : -1, event.shiftKey, held.actionFor(event))
+  }
+
+  function onBlur() {
+    held.release()
+    commit()
   }
 
   return (
@@ -290,7 +310,8 @@ function TextInput({ label, declaration, field, onCommit, onStep, placeholder, d
       spellCheck={false}
       onChange={(event: ChangeEvent<HTMLInputElement>) => field.type(event.target.value)}
       onKeyDown={onKeyDown}
-      onBlur={commit}
+      onKeyUp={held.keyUp}
+      onBlur={onBlur}
     />
   )
 }
@@ -384,12 +405,12 @@ export function NumberField({ prop, label, icon, bare = false }: NumberFieldProp
   const token = boundTokenName(declaration.value)
   const computed = useComputedValue(prop)
 
-  function step(direction: 1 | -1, large: boolean) {
+  function step(direction: 1 | -1, large: boolean, actionId: string) {
     const stepped = stepNumber(field.text, direction * (large ? 10 : 1))
     if (stepped === null || declaration.locked) return
     const written = withAuthoredUnit(prop, stepped, declaration.value)
     field.show(written)
-    declaration.write(written)
+    declaration.write(written, actionId)
   }
 
   return (
@@ -440,6 +461,7 @@ function parsePercent(text: string): number | null {
 }
 
 export function ColourField({ prop, label }: { readonly prop: string; readonly label: string }) {
+  const { ctx } = usePanelState()
   const declaration = useDeclaration(prop)
   const token = boundTokenName(declaration.value)
   const authored = declaration.value ?? ''
@@ -466,7 +488,7 @@ export function ColourField({ prop, label }: { readonly prop: string; readonly l
       {token ? (
         <TokenPill name={token} />
       ) : (
-        <span className="sw" title={label} style={{ background: authored || shownComputedColour?.hex || 'transparent' }} />
+        <ColourPicker ctx={ctx} label={label} declaration={declaration} fallback={shownComputedColour?.hex ?? null} />
       )}
       <TextInput
         label="Colour"
