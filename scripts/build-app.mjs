@@ -41,6 +41,12 @@ await bundle({
   logLevel: 'warning',
 })
 
+// The installed app has no node_modules, so a static import of anything but node: and electron fails at launch.
+const shipped = readFileSync(path.join(APP, 'main.mjs'), 'utf8')
+const unbundled = [...shipped.matchAll(/^import\b[^;'"]*?from\s*["']([^"']+)["']/gm)].map(([, specifier]) => specifier)
+const missing = unbundled.filter((specifier) => !specifier.startsWith('node:') && specifier !== 'electron')
+if (missing.length) throw new Error(`main.mjs imports ${missing.join(', ')} at startup, which the installed app does not ship`)
+
 writeFileSync(
   path.join(APP, 'package.json'),
   `${JSON.stringify({ name: pkg.name, productName: 'Design Editor', version: pkg.version, description: pkg.description, author: pkg.author, type: 'module', main: 'main.mjs' }, null, 2)}\n`,

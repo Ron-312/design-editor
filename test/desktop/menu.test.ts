@@ -211,10 +211,11 @@ describe('the packaged-app suite', () => {
     expect(suite).toMatch(/Menu\.getApplicationMenu\(\)/)
   })
 
-  it('runs in the installers workflow on every OS of the matrix, and a change to it triggers the workflow', () => {
+  it('runs in the installers workflow on every OS of the matrix, on a copy outside the repo, and a change to it triggers the workflow', () => {
     const step = stepRunning('scripts/electron-suite.mjs')
 
-    expect(step).toMatch(/node scripts\/electron-suite\.mjs "\$\{\{ matrix\.exe \}\}"/)
+    expect(step).toMatch(/node scripts\/electron-suite\.mjs "\$RUNNER_TEMP\/installed\/\$\{\{ matrix\.exe \}\}"/)
+    expect(workflow).toMatch(/cp -R "\$\{\{ matrix\.unpacked \}\}" "\$RUNNER_TEMP\/installed\/"/)
     expect(step).not.toMatch(/^\s+if:/m)
     expect(workflow).toMatch(/os: windows-latest/)
     expect(workflow).toMatch(/os: macos-latest/)

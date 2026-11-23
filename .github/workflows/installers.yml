@@ -5,7 +5,8 @@ on:
     branches: ['**']
     tags: ['v*']
     paths:
-      - 'src/desktop/**'
+      # The app bundles all of src/, so any source change can break the packaged app.
+      - 'src/**'
       - 'desktop/**'
       - 'electron-builder.yml'
       - 'scripts/build-app.mjs'
@@ -21,11 +22,13 @@ jobs:
         include:
           - os: windows-latest
             dist: dist:win
-            exe: release/win-unpacked/Design Editor.exe
+            unpacked: release/win-unpacked
+            exe: win-unpacked/Design Editor.exe
             files: release/*.exe
           - os: macos-latest
             dist: dist:mac
-            exe: release/mac-arm64/Design Editor.app/Contents/MacOS/Design Editor
+            unpacked: release/mac-arm64/Design Editor.app
+            exe: Design Editor.app/Contents/MacOS/Design Editor
             files: release/*.dmg
     runs-on: ${{ matrix.os }}
     steps:
@@ -43,12 +46,18 @@ jobs:
           git config --global user.name CI
           npm run -s edsync -- ingest --slug sample --remote-dir test/fixtures/canvas
           npm run -s edsync -- cache --slug sample --from test/fixtures/canvas/fetched --release sample
+      # Inside the repo, Node would find the repo's node_modules and hide a dependency the app does not ship.
+      - name: Copy the packaged app out of the repo, as an install puts it
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/installed"
+          cp -R "${{ matrix.unpacked }}" "$RUNNER_TEMP/installed/"
       - name: Launch the packaged app on it
         shell: bash
-        run: node scripts/smoke-app.mjs "${{ matrix.exe }}" "$PWD/projects/sample" app-${{ matrix.os }}.png
+        run: node scripts/smoke-app.mjs "$RUNNER_TEMP/installed/${{ matrix.exe }}" "$PWD/projects/sample" app-${{ matrix.os }}.png
       - name: Drive the packaged app through its Edit menu
         shell: bash
-        run: node scripts/electron-suite.mjs "${{ matrix.exe }}" "$PWD/projects/sample"
+        run: node scripts/electron-suite.mjs "$RUNNER_TEMP/installed/${{ matrix.exe }}" "$PWD/projects/sample"
       - uses: actions/upload-artifact@v4
         with:
           name: installer-${{ matrix.os }}
