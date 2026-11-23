@@ -1,0 +1,1528 @@
+// @vitest-environment jsdom
+/// <reference types="vite/client" />
+import { act } from 'react'
+import { createRoot, type Root } from 'react-dom/client'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { BoardIndex, ClientMessage, EditorState, ProbeRead, ProbeReadResult, ProbeToEditor, Rect } from '../../../src/shared/protocol'
+import type { Board, CanvasLayout, EdId, EditOp, ProjectPath, TemplateNode } from '../../../src/shared/types'
+import { createDefaultRegistry, type Platform } from '../../../src/ui/actions/registry'
+import { CanvasView, canvasContext, defaultCanvasTools, loadCanvasTools, openBoard, type CanvasCommands, type ToolModule } from '../../../src/ui/canvas/CanvasView'
+import type { CanvasPointer, CanvasTool, EditorContext, PointerHandler } from '../../../src/ui/plugin-api'
+import type { ProbeClient } from '../../../src/ui/probe-client'
+import { createEditorStore, type EditorStore } from '../../../src/ui/store'
+import type { WsClient } from '../../../src/ui/ws-client'
+
+/** Stands in for the probe inside the frame: answers reads from the rendered scene below. */
+const probes = vi.hoisted(() => {
+  type Listener = (message: ProbeToEditor) => void
+  type FrameSize = { readonly width: number; readonly height: number }
+  const scene = {
+    rendered: [] as Array<readonly [string, Rect]>,
+    computed: {} as Record<string, Readonly<Record<string, string>>>,
+    /** The document's scrollHeight for the frame's size at the time of the read. */
+    contentHeight: (() => 0) as (frame: FrameSize) => number,
+    /** The frame's size at each documentHeight read. */
+    measuredAt: [] as FrameSize[],
+  }
+  const sizeOfFrame = (frame: HTMLIFrameElement): FrameSize => ({
+    width: Number.parseFloat(frame.style.width || frame.getAttribute('width') || 'NaN'),
+    height: Number.parseFloat(frame.style.height || frame.getAttribute('height') || 'NaN'),
+  })
+  const contains = (rect: Rect, x: number, y: number) =>
+    x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height
+
+  function answer(read: ProbeRead, frame: HTMLIFrameElement): ProbeReadResult {
+    switch (read.kind) {
+      case 'hitTest': {
+        const deepest = scene.rendered.filter(([, rect]) => contains(rect, read.x, read.y)).at(-1)
+        return { kind: 'hitTest', edId: (deepest?.[0] ?? null) as EdId | null }
+      }
+      case 'rects':
+        return { kind: 'rects', rects: scene.rendered.filter(([id]) => id === read.edId).map(([, rect]) => rect) }
+      case 'snapRects': {
+        const self = scene.rendered.find(([id]) => id === read.edId)?.[1] ?? { x: 0, y: 0, width: 0, height: 0 }
+        return { kind: 'snapRects', self, parent: null, siblings: [] }
+      }
+      case 'computed': {
+        const values = scene.computed[read.edId] ?? {}
+        return { kind: 'computed', values: Object.fromEntries(read.props.flatMap((prop) => (prop in values ? [[prop, values[prop]!]] : []))) }
+      }
+      case 'supports':
+        return { kind: 'supports', supported: true }
+      case 'matches':
+        return { kind: 'matches', matched: read.selectors.map(() => false) }
+      case 'documentHeight': {
+        const size = sizeOfFrame(frame)
+        scene.measuredAt.push(size)
+        return { kind: 'documentHeight', scrollHeight: scene.contentHeight(size) }
+      }
+      case 'rootFontSize':
+        return { kind: 'rootFontSize', fontSize: 16 }
+    }
+  }
+
+  function createFakeProbe(frame: HTMLIFrameElement) {
+    const listeners = new Set<Listener>()
+    let sessions = 0
+    return {
+      frame,
+      read: vi.fn(async (read: ProbeRead) => answer(read, frame)),
+      onMessage(listener: Listener) {
+        listeners.add(listener)
+        return () => {
+          listeners.delete(listener)
+        }
+      },
+      previewDecl: vi.fn(),
+      scrollTo: vi.fn<(x: number, y: number) => void>(),
+      beginTextEdit: vi.fn<(edId: EdId) => string>(() => `text-${++sessions}`),
+      endTextEdit: vi.fn(),
+      dispose: vi.fn(),
+      emit(message: ProbeToEditor) {
+        for (const listener of listeners) listener(message)
+      },
+    }
+  }
+
+  const created: Array<ReturnType<typeof createFakeProbe>> = []
+  return {
+    scene,
+    created,
+    create(frame: HTMLIFrameElement) {
+      const probe = createFakeProbe(frame)
+      created.push(probe)
+      return probe
+    },
+  }
+})
+
+vi.mock('../../../src/ui/probe-client', () => ({ createProbeClient: (frame: HTMLIFrameElement) => probes.create(frame) }))
+
+declare global {
+  var IS_REACT_ACT_ENVIRONMENT: boolean
+}
+
+const edId = (id: string) => id as EdId
+const ids = (...names: string[]) => names.map(edId)
+const home = 'project/home.dc.html' as ProjectPath
+const card = 'project/card.dc.html' as ProjectPath
+
+const boards: Board[] = [
+  { path: home, w: 1280, h: 900, page: true },
+  { path: card, w: 360, h: 220, page: false },
+]
+const layout: CanvasLayout = { boards, order: [home, card], pages: [home] }
+const VIEWPORT_SIZE = { width: 800, height: 600 }
+const RULER = 20
+
+function node(id: string, children: TemplateNode[] = [], extra: Partial<TemplateNode> = {}): TemplateNode {
+  return { edId: edId(id), kind: 'element', tag: 'div', name: id, children, ...extra }
+}
+
+// root > card > (title, button > label); list > item (<sc-for>, text is {{ item.label }});
+// lede is <p> with <strong> and <em> inside; aside.
+const homeTree = node(
+  'root',
+  [
+    node('card', [node('title', [], { tag: 'h1' }), node('button', [node('label', [], { tag: 'span' })], { tag: 'button' })]),
+    node('list', [node('item', [], { tag: 'li', readOnly: 'hole' })], { tag: 'ul' }),
+    node('lede', [node('strong', [], { tag: 'strong' }), node('em', [], { tag: 'em' })], { tag: 'p' }),
+    node('aside'),
+  ],
+  { readOnly: 'artboard-root' },
+)
+
+const cardTree = node('cardRoot', [node('cardTitle', [], { tag: 'h2' })], { readOnly: 'artboard-root' })
+
+/** Outermost first, so the last entry containing a point is the deepest hit. */
+const homeScene: Array<readonly [string, Rect]> = [
+  ['root', { x: 0, y: 0, width: 1280, height: 900 }],
+  ['card', { x: 40, y: 40, width: 600, height: 300 }],
+  ['title', { x: 60, y: 60, width: 400, height: 60 }],
+  ['button', { x: 60, y: 200, width: 200, height: 60 }],
+  ['label', { x: 80, y: 210, width: 100, height: 40 }],
+  ['list', { x: 40, y: 400, width: 600, height: 180 }],
+  ['item', { x: 40, y: 400, width: 600, height: 60 }],
+  ['item', { x: 40, y: 460, width: 600, height: 60 }],
+  ['item', { x: 40, y: 520, width: 600, height: 60 }],
+  ['lede', { x: 700, y: 40, width: 400, height: 40 }],
+  ['strong', { x: 800, y: 40, width: 60, height: 40 }],
+  ['em', { x: 900, y: 40, width: 60, height: 40 }],
+  ['aside', { x: 700, y: 200, width: 300, height: 400 }],
+]
+
+const at = {
+  label: { x: 100, y: 230 },
+  title: { x: 100, y: 80 },
+  secondItem: { x: 100, y: 490 },
+  ledeText: { x: 720, y: 60 },
+  aside: { x: 800, y: 300 },
+}
+
+function indexFor(board: ProjectPath, tree: TemplateNode): BoardIndex {
+  return { board, frameSrc: `/project/secret/${board}`, tree, text: '', locations: {}, styles: {}, rules: [] }
+}
+
+function editorStateWith(locked: readonly EdId[] = [], previewWidth?: number): EditorState {
+  const boards = previewWidth === undefined ? {} : { [home]: { zoom: 1, panX: 0, panY: 0, selection: [], previewWidth } }
+  return { hidden: [], locked, collapsed: [], boards }
+}
+
+function fakeWs() {
+  return {
+    sendOp: vi.fn(),
+    undo: vi.fn(),
+    redo: vi.fn(),
+    send: vi.fn<(message: ClientMessage) => void>(),
+    onMessage: vi.fn(() => () => {}),
+    close: vi.fn(),
+  }
+}
+
+function sizedRect(element: Element): DOMRect {
+  const sized = element.matches('[data-canvas-viewport], [data-canvas-shield]')
+  return new DOMRect(0, 0, sized ? VIEWPORT_SIZE.width : 0, sized ? VIEWPORT_SIZE.height : 0)
+}
+
+class FakeResizeObserver {
+  constructor(private readonly callback: ResizeObserverCallback) {}
+  observe(target: Element) {
+    const contentRect = sizedRect(target)
+    this.callback([{ target, contentRect } as unknown as ResizeObserverEntry], this as unknown as ResizeObserver)
+  }
+  unobserve() {}
+  disconnect() {}
+}
+
+async function settle() {
+  for (let i = 0; i < 5; i++) await act(() => new Promise((resolve) => setTimeout(resolve, 20)))
+}
+
+interface Mounted {
+  readonly store: EditorStore
+  readonly ws: ReturnType<typeof fakeWs>
+  readonly container: HTMLElement
+  /** The editor context the canvas last handed the shell. */
+  readonly context: () => EditorContext
+  readonly editorStateChanges: ReturnType<typeof vi.fn<(next: EditorState) => void>>
+  readonly setPreviewWidth: (width: number | undefined) => Promise<void>
+}
+
+let mounted: { root: Root; container: HTMLElement; stopShortcuts: () => void } | null = null
+
+interface MountOptions {
+  readonly layout?: CanvasLayout
+  readonly locked?: readonly EdId[]
+  readonly previewWidth?: number
+  readonly platform?: Platform
+  readonly tools?: readonly CanvasTool[]
+  readonly store?: EditorStore
+  readonly commands?: { current: CanvasCommands | null }
+  /** Sends keydowns to the default action registry with the canvas's context, as the app does. */
+  readonly shortcuts?: boolean
+}
+
+/** The app's document keydown listener, reduced to the registry call. */
+function listenForShortcuts(platform: Platform, context: () => EditorContext | null): () => void {
+  const registry = createDefaultRegistry(platform)
+  const onKeyDown = (event: KeyboardEvent) => {
+    const ctx = context()
+    if (ctx) registry.handleKeyDown(event, ctx)
+  }
+  document.addEventListener('keydown', onKeyDown)
+  return () => document.removeEventListener('keydown', onKeyDown)
+}
+
+function mount(options: MountOptions = {}): Mounted {
+  const container = document.createElement('div')
+  document.body.append(container)
+  const store = options.store ?? createEditorStore()
+  const ws = fakeWs()
+  const root = createRoot(container)
+  const platform = options.platform ?? 'mac'
+  const editorStateChanges = vi.fn<(next: EditorState) => void>()
+  let latest: EditorContext | null = null
+  const stopShortcuts = options.shortcuts === false ? () => {} : listenForShortcuts(platform, () => latest)
+  mounted = { root, container, stopShortcuts }
+
+  function render(previewWidth: number | undefined) {
+    root.render(
+      <CanvasView
+        {...(options.commands ? { ref: options.commands } : {})}
+        store={store}
+        ws={ws as unknown as WsClient}
+        layout={options.layout ?? layout}
+        editorState={editorStateWith(options.locked, previewWidth)}
+        platform={platform}
+        onContext={(ctx: EditorContext) => {
+          latest = ctx
+        }}
+        onEditorStateChange={editorStateChanges}
+        {...(options.tools ? { tools: options.tools } : {})}
+      />,
+    )
+  }
+
+  act(() => render(options.previewWidth))
+  return {
+    store,
+    ws,
+    container,
+    context() {
+      if (!latest) throw new Error('the canvas handed the shell no editor context')
+      return latest
+    },
+    editorStateChanges,
+    async setPreviewWidth(width) {
+      act(() => render(width))
+      await settle()
+    },
+  }
+}
+
+function latestProbe() {
+  const probe = probes.created.at(-1)
+  if (!probe) throw new Error('the canvas created no probe client')
+  return probe
+}
+
+function frameOf(container: HTMLElement): HTMLIFrameElement {
+  const frames = container.querySelectorAll('iframe')
+  expect(frames).toHaveLength(1)
+  return frames[0]!
+}
+
+async function loadFrame(container: HTMLElement, scroll = { x: 0, y: 0 }) {
+  await act(async () => {
+    frameOf(container).dispatchEvent(new Event('load'))
+    latestProbe().emit({ type: 'ready', scrollX: scroll.x, scrollY: scroll.y })
+  })
+  await settle()
+}
+
+async function openHome(options: MountOptions = {}): Promise<Mounted> {
+  const view = mount(options)
+  act(() => view.store.setIndex(indexFor(home, homeTree)))
+  await settle()
+  await loadFrame(view.container)
+  return view
+}
+
+async function setViewport(store: EditorStore, zoom: number, panX: number, panY: number) {
+  act(() => store.setViewport({ zoom, panX, panY }))
+  await settle()
+}
+
+function shieldOf(container: HTMLElement): HTMLElement {
+  const shield = container.querySelector<HTMLElement>('[data-canvas-shield]')
+  if (!shield) throw new Error('no event shield')
+  return shield
+}
+
+function toScreen(store: EditorStore, point: { x: number; y: number }) {
+  const { zoom, panX, panY } = store.getState().view.viewport
+  return { x: panX + point.x * zoom, y: panY + point.y * zoom }
+}
+
+type Modifiers = Partial<Pick<MouseEvent, 'metaKey' | 'ctrlKey' | 'shiftKey' | 'altKey'>>
+
+function dispatchPointer(target: Element, type: string, screen: { x: number; y: number }, init: PointerEventInit = {}) {
+  target.dispatchEvent(
+    new PointerEvent(type, {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      clientX: screen.x,
+      clientY: screen.y,
+      pointerId: 1,
+      pointerType: 'mouse',
+      isPrimary: true,
+      button: 0,
+      buttons: type === 'pointerup' ? 0 : 1,
+      ...init,
+    }),
+  )
+}
+
+function dispatchMouse(target: Element, type: string, screen: { x: number; y: number }, init: MouseEventInit = {}) {
+  target.dispatchEvent(
+    new MouseEvent(type, { bubbles: true, cancelable: true, clientX: screen.x, clientY: screen.y, button: 0, ...init }),
+  )
+}
+
+async function clickAt(view: Mounted, board: { x: number; y: number }, modifiers: Modifiers = {}, detail = 1) {
+  const shield = shieldOf(view.container)
+  const screen = toScreen(view.store, board)
+  act(() => {
+    dispatchPointer(shield, 'pointerdown', screen, modifiers)
+    dispatchMouse(shield, 'mousedown', screen, { ...modifiers, detail })
+    dispatchPointer(shield, 'pointerup', screen, modifiers)
+    dispatchMouse(shield, 'mouseup', screen, { ...modifiers, detail })
+    dispatchMouse(shield, 'click', screen, { ...modifiers, detail })
+  })
+  await settle()
+}
+
+async function doubleClickAt(view: Mounted, board: { x: number; y: number }) {
+  await clickAt(view, board, {}, 1)
+  await clickAt(view, board, {}, 2)
+  act(() => dispatchMouse(shieldOf(view.container), 'dblclick', toScreen(view.store, board), { detail: 2 }))
+  await settle()
+}
+
+async function hoverAt(view: Mounted, board: { x: number; y: number }) {
+  act(() => dispatchPointer(shieldOf(view.container), 'pointermove', toScreen(view.store, board), { buttons: 0 }))
+  await settle()
+}
+
+function keyTarget(container: HTMLElement): Element {
+  const focusable = [container.querySelector<HTMLElement>('[data-canvas-viewport]'), shieldOf(container)]
+  focusable.find((element) => element && element.tabIndex >= 0)?.focus()
+  const active = document.activeElement
+  return active && container.contains(active) ? active : shieldOf(container)
+}
+
+function press(container: HTMLElement, type: 'keydown' | 'keyup', key: string, init: KeyboardEventInit = {}): KeyboardEvent {
+  const event = new KeyboardEvent(type, { key, bubbles: true, cancelable: true, ...init })
+  act(() => {
+    keyTarget(container).dispatchEvent(event)
+  })
+  return event
+}
+
+async function pressKey(container: HTMLElement, key: string, init: KeyboardEventInit = {}): Promise<KeyboardEvent> {
+  const event = press(container, 'keydown', key, init)
+  press(container, 'keyup', key, init)
+  await settle()
+  return event
+}
+
+interface Box {
+  readonly left: number
+  readonly top: number
+  readonly width: number
+  readonly height: number
+}
+
+function boxOf(element: HTMLElement): Box {
+  const px = (value: string) => Number.parseFloat(value)
+  return { left: px(element.style.left), top: px(element.style.top), width: px(element.style.width), height: px(element.style.height) }
+}
+
+function outlines(container: HTMLElement, kind: 'hover' | 'selection'): Box[] {
+  return [...container.querySelectorAll<HTMLElement>(`[data-outline="${kind}"]`)].map(boxOf)
+}
+
+function screenBox(store: EditorStore, rect: Rect): Box {
+  const { zoom, panX, panY } = store.getState().view.viewport
+  return { left: panX + rect.x * zoom, top: panY + rect.y * zoom, width: rect.width * zoom, height: rect.height * zoom }
+}
+
+function sceneRects(id: string): Rect[] {
+  return homeScene.filter(([sceneId]) => sceneId === id).map(([, rect]) => rect)
+}
+
+function expectBoxes(actual: Box[], expected: Box[]) {
+  expect(actual).toHaveLength(expected.length)
+  const byTop = (a: Box, b: Box) => a.top - b.top || a.left - b.left
+  const sortedActual = [...actual].sort(byTop)
+  ;[...expected].sort(byTop).forEach((box, i) => {
+    const shown = sortedActual[i]!
+    expect(shown.left).toBeCloseTo(box.left)
+    expect(shown.top).toBeCloseTo(box.top)
+    expect(shown.width).toBeCloseTo(box.width)
+    expect(shown.height).toBeCloseTo(box.height)
+  })
+}
+
+function frameSize(frame: HTMLIFrameElement) {
+  const size = (style: string, attribute: string | null) => Number.parseFloat(style || attribute || 'NaN')
+  return { width: size(frame.style.width, frame.getAttribute('width')), height: size(frame.style.height, frame.getAttribute('height')) }
+}
+
+function boardTransform(container: HTMLElement) {
+  const board = container.querySelector<HTMLElement>('[data-canvas-board]')
+  if (!board) throw new Error('no transformed board wrapper')
+  const transform = board.style.transform
+  const translate = /translate(?:3d)?\(\s*(-?[\d.]+)px,\s*(-?[\d.]+)px/.exec(transform)
+  const scale = /scale\(\s*([\d.]+)/.exec(transform)
+  return { panX: Number(translate?.[1]), panY: Number(translate?.[2]), zoom: Number(scale?.[1]) }
+}
+
+function notices(store: EditorStore): string[] {
+  const { toasts, banners } = store.getState()
+  return [...toasts, ...banners].map((notice) => notice.message)
+}
+
+beforeEach(() => {
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true
+  probes.scene.rendered = [...homeScene]
+  probes.scene.computed = {}
+  vi.stubGlobal('ResizeObserver', FakeResizeObserver)
+  vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+    return sizedRect(this)
+  })
+  for (const [prop, dimension] of [
+    ['clientWidth', 'width'],
+    ['clientHeight', 'height'],
+    ['offsetWidth', 'width'],
+    ['offsetHeight', 'height'],
+  ] as const) {
+    vi.spyOn(HTMLElement.prototype, prop, 'get').mockImplementation(function (this: HTMLElement) {
+      return sizedRect(this)[dimension]
+    })
+  }
+  for (const method of ['setPointerCapture', 'releasePointerCapture'] as const) {
+    if (!(method in Element.prototype)) Object.defineProperty(Element.prototype, method, { configurable: true, value: () => {} })
+  }
+  if (!('hasPointerCapture' in Element.prototype)) {
+    Object.defineProperty(Element.prototype, 'hasPointerCapture', { configurable: true, value: () => false })
+  }
+})
+
+afterEach(() => {
+  if (mounted) {
+    const { root, container, stopShortcuts } = mounted
+    stopShortcuts()
+    act(() => root.unmount())
+    container.remove()
+    mounted = null
+  }
+  probes.created.length = 0
+  probes.scene.contentHeight = () => 0
+  probes.scene.measuredAt.length = 0
+  vi.restoreAllMocks()
+  vi.unstubAllGlobals()
+})
+
+describe('one artboard at a time', () => {
+  it('opens the first board in order and mounts it in one sandboxed frame at its canvas.json size', async () => {
+    const view = mount()
+
+    expect(view.ws.send).toHaveBeenCalledWith({ type: 'open', board: home })
+    expect(view.store.getState().board).toBe(home)
+
+    act(() => view.store.setIndex(indexFor(home, homeTree)))
+    await settle()
+
+    const frame = frameOf(view.container)
+    expect(frame.getAttribute('src')).toBe(`/project/secret/${home}`)
+    expect(frame.getAttribute('sandbox')).toBe('allow-scripts')
+    expect(frameSize(frame)).toEqual({ width: 1280, height: 900 })
+  })
+
+  it('opens the first board in canvas.json order', async () => {
+    const view = mount({ layout: { boards, order: [card, home], pages: [home] } })
+
+    expect(view.ws.send).toHaveBeenCalledWith({ type: 'open', board: card })
+  })
+
+  it('fits a board seen for the first time into the view, clear of the rulers and with room for its label', async () => {
+    const view = await openHome()
+
+    const { zoom, panX, panY } = view.store.getState().view.viewport
+    expect(zoom).toBeLessThan(600 / 900)
+    expect(panX).toBeGreaterThanOrEqual(RULER + 16)
+    expect(panY).toBeGreaterThanOrEqual(RULER + 24)
+    expect(panX + 1280 * zoom).toBeLessThanOrEqual(VIEWPORT_SIZE.width - 16)
+    expect(panY + 900 * zoom).toBeLessThanOrEqual(VIEWPORT_SIZE.height - 16)
+  })
+
+  it('labels the board with its name and size above its top-left corner', async () => {
+    const view = await openHome()
+
+    const label = view.container.querySelector<HTMLElement>('[data-board-label]')
+    const { panX, panY } = view.store.getState().view.viewport
+    expect(label?.textContent).toBe('home.dc.html1280 × 900')
+    expect(Number.parseFloat(label!.style.left)).toBeCloseTo(panX)
+    expect(Number.parseFloat(label!.style.top)).toBeLessThan(panY)
+  })
+
+  it('keeps the saved view of a board instead of fitting it', async () => {
+    const store = createEditorStore()
+    store.restoreBoardViews({ [home]: { zoom: 2, panX: 15, panY: 25, selection: [] } })
+
+    mount({ store })
+
+    expect(store.getState().view.viewport).toEqual({ zoom: 2, panX: 15, panY: 25 })
+  })
+
+  it('switches boards, swapping the one frame, and keeps selection and zoom per board', async () => {
+    const view = await openHome()
+    await clickAt(view, at.label)
+    await setViewport(view.store, 2, 15, 25)
+
+    act(() => openBoard(view.store, view.ws as unknown as WsClient, card))
+    await settle()
+
+    expect(view.ws.send).toHaveBeenCalledWith({ type: 'open', board: card })
+    expect(view.store.getState().board).toBe(card)
+    expect(view.store.getState().view.selection).toEqual([])
+
+    act(() => view.store.setIndex(indexFor(card, cardTree)))
+    await settle()
+
+    const cardFrame = frameOf(view.container)
+    expect(cardFrame.getAttribute('src')).toBe(`/project/secret/${card}`)
+    expect(frameSize(cardFrame)).toEqual({ width: 360, height: 220 })
+
+    act(() => openBoard(view.store, view.ws as unknown as WsClient, home))
+    await settle()
+
+    expect(view.store.getState().view.selection).toEqual(ids('card'))
+    expect(view.store.getState().view.viewport).toEqual({ zoom: 2, panX: 15, panY: 25 })
+    expect(boardTransform(view.container)).toEqual({ zoom: 2, panX: 15, panY: 25 })
+    expect(frameOf(view.container).getAttribute('src')).toBe(`/project/secret/${home}`)
+  })
+})
+
+describe('zoom and pan', () => {
+  it('applies the viewport as a transform on the board', async () => {
+    const view = await openHome()
+
+    await setViewport(view.store, 0.5, 100, 40)
+
+    expect(boardTransform(view.container)).toEqual({ zoom: 0.5, panX: 100, panY: 40 })
+  })
+
+  it.each([
+    ['Cmd-wheel on macOS', 'mac', { metaKey: true }],
+    ['a trackpad pinch on macOS', 'mac', { ctrlKey: true }],
+    ['Ctrl-wheel on Windows', 'windows', { ctrlKey: true }],
+  ] as const)('zooms in at the cursor on %s', async (_name, platform, modifiers) => {
+    const view = await openHome({ platform })
+    await setViewport(view.store, 1, 30, 20)
+    const cursor = { x: 300, y: 200 }
+    const before = view.store.getState().view.viewport
+    const boardPoint = { x: (cursor.x - before.panX) / before.zoom, y: (cursor.y - before.panY) / before.zoom }
+
+    const wheel = new WheelEvent('wheel', {
+      bubbles: true,
+      cancelable: true,
+      clientX: cursor.x,
+      clientY: cursor.y,
+      deltaY: -100,
+      ...modifiers,
+    })
+    act(() => {
+      shieldOf(view.container).dispatchEvent(wheel)
+    })
+    await settle()
+
+    const after = view.store.getState().view.viewport
+    expect(wheel.defaultPrevented).toBe(true)
+    expect(after.zoom).toBeGreaterThan(before.zoom)
+    expect((cursor.x - after.panX) / after.zoom).toBeCloseTo(boardPoint.x)
+    expect((cursor.y - after.panY) / after.zoom).toBeCloseTo(boardPoint.y)
+  })
+
+  it('pans with Space-drag and selects nothing', async () => {
+    const view = await openHome()
+    await setViewport(view.store, 1, 0, 0)
+    const shield = shieldOf(view.container)
+
+    press(view.container, 'keydown', ' ', { code: 'Space' })
+    act(() => {
+      dispatchPointer(shield, 'pointerdown', { x: 100, y: 100 })
+      dispatchPointer(shield, 'pointermove', { x: 130, y: 120 })
+      dispatchPointer(shield, 'pointermove', { x: 160, y: 130 })
+      dispatchPointer(shield, 'pointerup', { x: 160, y: 130 })
+      dispatchMouse(shield, 'click', { x: 160, y: 130 })
+    })
+    press(view.container, 'keyup', ' ', { code: 'Space' })
+    await settle()
+
+    expect(view.store.getState().view.viewport).toEqual({ zoom: 1, panX: 60, panY: 30 })
+    expect(view.store.getState().view.selection).toEqual([])
+  })
+
+  it('fits the artboard with Shift-1, as it was fitted on open', async () => {
+    const view = await openHome()
+    const fitted = view.store.getState().view.viewport
+    await setViewport(view.store, 3, -500, -500)
+
+    await pressKey(view.container, '!', { code: 'Digit1', shiftKey: true })
+
+    const { zoom } = view.store.getState().view.viewport
+    expect(zoom).toBeLessThanOrEqual(600 / 900)
+    expect(zoom).toBeGreaterThan(0.5)
+    expect(view.store.getState().view.viewport).toEqual(fitted)
+  })
+
+  it('zooms to a picked level around the centre of the view for the zoom menu', async () => {
+    const commands: { current: CanvasCommands | null } = { current: null }
+    const view = mount({ commands })
+    act(() => view.store.setIndex(indexFor(home, homeTree)))
+    await settle()
+    await setViewport(view.store, 1, 0, 0)
+
+    act(() => commands.current!.zoomTo(2))
+
+    expect(view.store.getState().view.viewport).toEqual({ zoom: 2, panX: -VIEWPORT_SIZE.width / 2, panY: -VIEWPORT_SIZE.height / 2 })
+  })
+
+  it('pans with a plain drag while the hand tool is on, and selects nothing', async () => {
+    const view = await openHome()
+    await setViewport(view.store, 1, 0, 0)
+    const shield = shieldOf(view.container)
+
+    await pressKey(view.container, 'h', { code: 'KeyH' })
+    expect(view.store.getState().mode).toBe('hand')
+    act(() => {
+      dispatchPointer(shield, 'pointerdown', { x: 100, y: 100 })
+      dispatchPointer(shield, 'pointermove', { x: 140, y: 110 })
+      dispatchPointer(shield, 'pointerup', { x: 140, y: 110 })
+    })
+    await settle()
+
+    expect(view.store.getState().view.viewport).toEqual({ zoom: 1, panX: 40, panY: 10 })
+    expect(view.store.getState().view.selection).toEqual([])
+    expect(shield.style.cursor).toBe('grab')
+
+    await pressKey(view.container, 'v', { code: 'KeyV' })
+    expect(view.store.getState().mode).toBe('select')
+  })
+
+  it('zooms to the selection with Shift-2', async () => {
+    const view = await openHome()
+    await setViewport(view.store, 1, 0, 0)
+    await clickAt(view, at.title, { metaKey: true })
+
+    await pressKey(view.container, '@', { code: 'Digit2', shiftKey: true })
+
+    const { zoom, panX, panY } = view.store.getState().view.viewport
+    expect(zoom).toBeLessThanOrEqual(800 / 400)
+    expect(zoom).toBeGreaterThan(1.6)
+    expect(panX + (60 + 400 / 2) * zoom).toBeCloseTo(VIEWPORT_SIZE.width / 2)
+    expect(panY + (60 + 60 / 2) * zoom).toBeCloseTo(VIEWPORT_SIZE.height / 2)
+  })
+})
+
+describe('event shield and Interact', () => {
+  it('covers the design with a shield that takes pointer events', async () => {
+    const view = await openHome()
+
+    expect(shieldOf(view.container).style.pointerEvents).not.toBe('none')
+    expect(view.store.getState().interact).toBe(false)
+  })
+
+  it('interact mode, which the Preview switch turns on, lets pointer events through to the design', async () => {
+    const view = await openHome()
+
+    act(() => view.store.setInteract(true))
+    await settle()
+
+    expect(shieldOf(view.container).style.pointerEvents).toBe('none')
+
+    act(() => view.store.setInteract(false))
+    await settle()
+
+    expect(shieldOf(view.container).style.pointerEvents).not.toBe('none')
+  })
+
+  it('holding I passes pointer events through and pauses hover and selection until released', async () => {
+    const view = await openHome()
+    await hoverAt(view, at.aside)
+    expect(outlines(view.container, 'hover')).toHaveLength(1)
+
+    press(view.container, 'keydown', 'i', { code: 'KeyI' })
+    await settle()
+
+    expect(view.store.getState().interact).toBe(true)
+    expect(shieldOf(view.container).style.pointerEvents).toBe('none')
+    expect(outlines(view.container, 'hover')).toEqual([])
+    await hoverAt(view, at.label)
+    await clickAt(view, at.label)
+    expect(view.store.getState().hover).toBeNull()
+    expect(view.store.getState().view.selection).toEqual([])
+
+    press(view.container, 'keyup', 'i', { code: 'KeyI' })
+    await settle()
+    await clickAt(view, at.label)
+
+    expect(view.store.getState().interact).toBe(false)
+    expect(view.store.getState().view.selection).toEqual(ids('card'))
+  })
+})
+
+describe('restore after a reload', () => {
+  it('restores selection, scroll and zoom by edId', async () => {
+    const view = await openHome()
+    await clickAt(view, at.title, { metaKey: true })
+    await setViewport(view.store, 1.5, 30, 40)
+    act(() => latestProbe().emit({ type: 'scrolled', scrollX: 0, scrollY: 300 }))
+    await settle()
+    expect(view.store.getState().view.scroll).toEqual({ x: 0, y: 300 })
+    latestProbe().scrollTo.mockClear()
+
+    await loadFrame(view.container)
+
+    expect(latestProbe().scrollTo).toHaveBeenCalledWith(0, 300)
+    expect(view.store.getState().view.selection).toEqual(ids('title'))
+    expect(view.store.getState().view.viewport).toEqual({ zoom: 1.5, panX: 30, panY: 40 })
+    expect(outlines(view.container, 'selection')).toHaveLength(1)
+    expect(notices(view.store)).not.toContainEqual(expect.stringMatching(/page reset to its first state/i))
+  })
+
+  it("shows 'page reset to its first state' when a restored edId is no longer rendered", async () => {
+    const view = await openHome()
+    await clickAt(view, at.title, { metaKey: true })
+
+    probes.scene.rendered = homeScene.filter(([id]) => id !== 'title')
+    await loadFrame(view.container)
+
+    expect(notices(view.store)).toContainEqual(expect.stringMatching(/page reset to its first state/i))
+  })
+})
+
+describe('hover and selection outlines', () => {
+  it('hovers the element a click would select, from the same hit-test', async () => {
+    const view = await openHome()
+    await setViewport(view.store, 0.5, 100, 50)
+
+    await hoverAt(view, at.label)
+
+    expect(view.store.getState().hover).toBe(edId('card'))
+    expectBoxes(outlines(view.container, 'hover'), sceneRects('card').map((rect) => screenBox(view.store, rect)))
+
+    await clickAt(view, at.label)
+
+    expect(view.store.getState().view.selection).toEqual(ids('card'))
+    expectBoxes(outlines(view.container, 'selection'), sceneRects('card').map((rect) => screenBox(view.store, rect)))
+  })
+
+  it('outlines every rendered repeat of an <sc-for> element', async () => {
+    const view = await openHome()
+    await setViewport(view.store, 0.5, 100, 50)
+    const repeats = sceneRects('item').map((rect) => screenBox(view.store, rect))
+
+    await clickAt(view, at.secondItem, { metaKey: true })
+
+    expect(view.store.getState().view.selection).toEqual(ids('item'))
+    expectBoxes(outlines(view.container, 'selection'), repeats)
+
+    await hoverAt(view, { x: 100, y: 420 })
+
+    expect(view.store.getState().hover).toBe(edId('item'))
+    expectBoxes(outlines(view.container, 'hover'), repeats)
+  })
+
+  it('skips locked layers in the hit-test', async () => {
+    const view = await openHome({ locked: ids('aside', 'title') })
+
+    await hoverAt(view, at.aside)
+    expect(outlines(view.container, 'hover')).toEqual([])
+
+    await clickAt(view, at.aside)
+    expect(view.store.getState().view.selection).toEqual([])
+
+    await clickAt(view, at.title, { metaKey: true })
+    expect(view.store.getState().view.selection).toEqual(ids('card'))
+  })
+})
+
+describe('selection rules on the canvas', () => {
+  it('click selects the top-level element, double-click goes one level deeper', async () => {
+    const view = await openHome()
+
+    await clickAt(view, at.label)
+    expect(view.store.getState().view.selection).toEqual(ids('card'))
+
+    await doubleClickAt(view, at.label)
+    expect(view.store.getState().view.selection).toEqual(ids('button'))
+  })
+
+  it('Cmd-click selects the deepest element on macOS', async () => {
+    const view = await openHome({ platform: 'mac' })
+
+    await clickAt(view, at.label, { metaKey: true })
+
+    expect(view.store.getState().view.selection).toEqual(ids('label'))
+  })
+
+  it('Ctrl-click selects the deepest element on Windows', async () => {
+    const view = await openHome({ platform: 'windows' })
+
+    await clickAt(view, at.label, { ctrlKey: true })
+
+    expect(view.store.getState().view.selection).toEqual(ids('label'))
+  })
+
+  it('Shift-click adds and removes', async () => {
+    const view = await openHome()
+
+    await clickAt(view, at.label)
+    await clickAt(view, at.aside, { shiftKey: true })
+    expect(view.store.getState().view.selection).toEqual(ids('card', 'aside'))
+
+    await clickAt(view, at.title, { shiftKey: true })
+    expect(view.store.getState().view.selection).toEqual(ids('aside'))
+  })
+
+  it('Enter goes one level deeper and Shift-Enter selects the parent', async () => {
+    const view = await openHome()
+    await clickAt(view, at.label)
+
+    await pressKey(view.container, 'Enter')
+    expect(view.store.getState().view.selection).toEqual(ids('title'))
+
+    await pressKey(view.container, 'Enter', { shiftKey: true })
+    expect(view.store.getState().view.selection).toEqual(ids('card'))
+  })
+
+  it('Tab and Shift-Tab move between siblings and never leave the canvas', async () => {
+    const view = await openHome()
+    await clickAt(view, at.title, { metaKey: true })
+
+    const tab = await pressKey(view.container, 'Tab', { code: 'Tab' })
+    expect(view.store.getState().view.selection).toEqual(ids('button'))
+    expect(tab.defaultPrevented).toBe(true)
+
+    const wrapping = await pressKey(view.container, 'Tab', { code: 'Tab' })
+    expect(view.store.getState().view.selection).toEqual(ids('title'))
+    expect(wrapping.defaultPrevented).toBe(true)
+
+    const back = await pressKey(view.container, 'Tab', { code: 'Tab', shiftKey: true })
+    expect(view.store.getState().view.selection).toEqual(ids('button'))
+    expect(back.defaultPrevented).toBe(true)
+  })
+
+  it('Tab with nothing selected selects the first top-level element and stays on the canvas', async () => {
+    const view = await openHome()
+
+    const tab = await pressKey(view.container, 'Tab', { code: 'Tab' })
+
+    expect(view.store.getState().view.selection).toEqual(ids('card'))
+    expect(tab.defaultPrevented).toBe(true)
+  })
+})
+
+describe('text editing entry', () => {
+  it('starts the in-place text edit through the probe on a double-click on a text element', async () => {
+    const view = await openHome()
+    await clickAt(view, at.title, { metaKey: true })
+
+    await doubleClickAt(view, at.title)
+
+    expect(latestProbe().beginTextEdit).toHaveBeenCalledWith(edId('title'))
+  })
+
+  it("shows 'edit in source' for an element with inline children", async () => {
+    const view = await openHome()
+    await clickAt(view, at.ledeText)
+    expect(view.store.getState().view.selection).toEqual(ids('lede'))
+
+    await doubleClickAt(view, at.ledeText)
+
+    expect(latestProbe().beginTextEdit).not.toHaveBeenCalled()
+    const shown = notices(view.store)
+    expect(shown).toContainEqual(expect.stringMatching(/edit in source/i))
+    expect(shown).not.toContainEqual(expect.stringMatching(/live value/i))
+  })
+
+  it("shows 'contains a live value; edit in source or Tweaks' for text with a {{hole}}", async () => {
+    const view = await openHome()
+    await clickAt(view, at.secondItem, { metaKey: true })
+
+    await doubleClickAt(view, at.secondItem)
+
+    expect(latestProbe().beginTextEdit).not.toHaveBeenCalled()
+    expect(notices(view.store)).toContainEqual(expect.stringMatching(/contains a live value; edit in source or Tweaks/i))
+  })
+})
+
+describe('rulers', () => {
+  it("highlight the selection's range on both rulers", async () => {
+    const view = await openHome()
+    await setViewport(view.store, 0.5, 100, 50)
+
+    await clickAt(view, at.secondItem, { metaKey: true })
+
+    const xRange = view.container.querySelector<HTMLElement>('[data-ruler="x"] [data-ruler-range]')
+    const yRange = view.container.querySelector<HTMLElement>('[data-ruler="y"] [data-ruler-range]')
+    if (!xRange || !yRange) throw new Error('the rulers show no selection range')
+    expect(boxOf(xRange).left).toBeCloseTo(100 + 40 * 0.5)
+    expect(boxOf(xRange).width).toBeCloseTo(600 * 0.5)
+    expect(boxOf(yRange).top).toBeCloseTo(50 + 400 * 0.5)
+    expect(boxOf(yRange).height).toBeCloseTo(180 * 0.5)
+  })
+
+  it('number the ticks in board units, and name the selected edges in place of the numbers beside them', async () => {
+    const view = await openHome()
+    await setViewport(view.store, 0.5, 100, 50)
+
+    await clickAt(view, at.secondItem, { metaKey: true })
+
+    const numbers = (axis: string) =>
+      [...view.container.querySelectorAll(`[data-ruler="${axis}"] span:not(.edge)`)].map((span) => span.textContent)
+    const edges = (axis: string) => [...view.container.querySelectorAll(`[data-ruler="${axis}"] .edge`)].map((span) => span.textContent)
+    expect(numbers('x').slice(0, 3)).toEqual(['-200', '-100', '200'])
+    expect(edges('x')).toEqual(['40', '640'])
+    expect(edges('y')).toEqual(['400', '580'])
+  })
+
+  it('show no range while nothing is selected', async () => {
+    const view = await openHome()
+
+    expect(view.container.querySelector('[data-ruler="x"]')).not.toBeNull()
+    expect(view.container.querySelector('[data-ruler="y"]')).not.toBeNull()
+    expect(view.container.querySelector('[data-ruler-range]')).toBeNull()
+  })
+})
+
+describe('canvas tools', () => {
+  function tool(id: string, priority: number, claims: boolean) {
+    const onPointerDown = vi.fn<PointerHandler>(() => claims)
+    const entry: CanvasTool = { id, priority, onPointerDown }
+    return { entry, onPointerDown }
+  }
+
+  it('orders the tools from every module by descending priority', () => {
+    const low = tool('low', 1, false)
+    const high = tool('high', 10, false)
+    const modules: Record<string, ToolModule> = { './low.tool.ts': { tool: low.entry }, './high.tool.ts': { tool: high.entry } }
+
+    expect(loadCanvasTools(modules).map((entry: CanvasTool) => entry.id)).toEqual(['high', 'low'])
+  })
+
+  it('loads the tools from ./tools/*.tool.ts, and there may be none', () => {
+    const files = import.meta.glob<ToolModule>('../../../src/ui/canvas/tools/*.tool.ts', { eager: true })
+    const exportedIds = Object.values(files).map((file) => file.tool.id)
+
+    expect(defaultCanvasTools().map((entry: CanvasTool) => entry.id).sort()).toEqual(exportedIds.sort())
+  })
+
+  it('works with no tools: a click still selects', async () => {
+    const view = await openHome({ tools: [] })
+
+    await clickAt(view, at.aside)
+
+    expect(view.store.getState().view.selection).toEqual(ids('aside'))
+  })
+
+  it('lets a tool claim a gesture before selection runs, highest priority first', async () => {
+    const claiming = tool('claiming', 10, true)
+    const lower = tool('lower', 1, false)
+    const view = await openHome({ tools: [lower.entry, claiming.entry] })
+    await setViewport(view.store, 2, 10, 20)
+
+    await clickAt(view, at.label)
+
+    expect(claiming.onPointerDown).toHaveBeenCalled()
+    expect(lower.onPointerDown).not.toHaveBeenCalled()
+    expect(view.store.getState().view.selection).toEqual([])
+    const [ctx, pointer] = claiming.onPointerDown.mock.calls[0]! as [EditorContext, CanvasPointer]
+    expect(pointer).toMatchObject({ x: 10 + at.label.x * 2, y: 20 + at.label.y * 2, boardX: at.label.x, boardY: at.label.y })
+    expect(ctx.viewport()).toEqual({ zoom: 2, panX: 10, panY: 20 })
+  })
+
+  it('selects on a press a tool claimed but released without using it, as a click', async () => {
+    const onPointerUp = vi.fn<PointerHandler>(() => false)
+    const pressOnly: CanvasTool = { id: 'press-only', priority: 5, onPointerDown: () => true, onPointerUp }
+    const view = await openHome({ tools: [pressOnly] })
+
+    await clickAt(view, at.label)
+
+    expect(onPointerUp).toHaveBeenCalled()
+    expect(view.store.getState().view.selection).toEqual(ids('card'))
+  })
+
+  it('falls through to selection when no tool claims the gesture', async () => {
+    const declining = tool('declining', 5, false)
+    const view = await openHome({ tools: [declining.entry] })
+
+    await clickAt(view, at.label)
+
+    expect(declining.onPointerDown).toHaveBeenCalled()
+    expect(view.store.getState().view.selection).toEqual(ids('card'))
+  })
+})
+
+describe('the editor context the canvas hands its tools', () => {
+  function fakeProbe() {
+    return { read: vi.fn(async () => ({ kind: 'rects', rects: [] })), previewDecl: vi.fn() }
+  }
+
+  function contextWith(probe: ReturnType<typeof fakeProbe> | null) {
+    const store = createEditorStore()
+    const ws = fakeWs()
+    ws.sendOp.mockResolvedValue('acked')
+    const state = editorStateWith(ids('aside'))
+    const ctx = canvasContext(store, ws as unknown as WsClient, probe as unknown as ProbeClient | null, state)
+    return { store, ws, ctx, state }
+  }
+
+  it('previews a declaration in the frame and sends it with the value it previewed for each target', async () => {
+    const probe = fakeProbe()
+    const { ws, ctx } = contextWith(probe)
+    const op: EditOp = { target: ids('title', 'aside'), kind: 'setDecl', payload: { prop: 'width', value: '120px' } }
+
+    await expect(ctx.apply(op)).resolves.toBe('acked')
+
+    expect(probe.previewDecl).toHaveBeenCalledWith(ids('title', 'aside'), 'width', '120px')
+    expect(ws.sendOp).toHaveBeenCalledWith({ ...op, actionId: expect.any(String) }, { title: '120px', aside: '120px' })
+  })
+
+  it('previews a removed declaration as gone and sends no previewed values', async () => {
+    const probe = fakeProbe()
+    const { ws, ctx } = contextWith(probe)
+    const op: EditOp = { target: ids('title'), kind: 'removeDecl', payload: { prop: 'width' } }
+
+    await ctx.apply(op)
+
+    expect(probe.previewDecl).toHaveBeenCalledWith(ids('title'), 'width', null)
+    expect(ws.sendOp).toHaveBeenCalledWith({ ...op, actionId: expect.any(String) }, {})
+  })
+
+  it('previews nothing for a structural op', async () => {
+    const probe = fakeProbe()
+    const { ws, ctx } = contextWith(probe)
+    const op: EditOp = { target: ids('title'), kind: 'moveNode', payload: { parent: edId('card'), before: null } }
+
+    await ctx.apply(op)
+
+    expect(probe.previewDecl).not.toHaveBeenCalled()
+    expect(ws.sendOp).toHaveBeenCalledWith({ ...op, actionId: expect.any(String) }, {})
+  })
+
+  it('still sends a declaration with no frame loaded', async () => {
+    const { ws, ctx } = contextWith(null)
+    const op: EditOp = { target: ids('title'), kind: 'setDecl', payload: { prop: 'width', value: '120px' } }
+
+    await ctx.apply(op)
+
+    expect(ws.sendOp).toHaveBeenCalledWith({ ...op, actionId: expect.any(String) }, { title: '120px' })
+  })
+
+  it('sends each single-shot op as an action of its own', async () => {
+    const { ws, ctx } = contextWith(fakeProbe())
+    const op: EditOp = { target: ids('title'), kind: 'setDecl', payload: { prop: 'width', value: '120px' } }
+
+    await ctx.apply(op)
+    await ctx.apply(op)
+
+    const [first, second] = ws.sendOp.mock.calls.map(([sent]) => (sent as EditOp).actionId)
+    expect(first).toEqual(expect.any(String))
+    expect(second).toEqual(expect.any(String))
+    expect(first).not.toBe(second)
+  })
+
+  it('sends every op of one action under the id beginAction gave it', async () => {
+    const { ws, ctx } = contextWith(fakeProbe())
+    const left: EditOp = { target: ids('aside'), kind: 'setDecl', payload: { prop: 'left', value: '10px' } }
+    const top: EditOp = { target: ids('aside'), kind: 'setDecl', payload: { prop: 'top', value: '20px' } }
+
+    const drag = ctx.beginAction()
+    const next = ctx.beginAction()
+    await ctx.apply(left, drag)
+    await ctx.apply(top, drag)
+
+    expect(drag).toEqual(expect.any(String))
+    expect(next).not.toBe(drag)
+    expect(ws.sendOp).toHaveBeenNthCalledWith(1, { ...left, actionId: drag }, { aside: '10px' })
+    expect(ws.sendOp).toHaveBeenNthCalledWith(2, { ...top, actionId: drag }, { aside: '20px' })
+  })
+
+  it('previews a declaration in the frame and writes nothing', () => {
+    const probe = fakeProbe()
+    const { ws, ctx } = contextWith(probe)
+
+    ctx.preview({ target: ids('title'), kind: 'setDecl', payload: { prop: 'color', value: 'red' } })
+    ctx.preview({ target: ids('title'), kind: 'removeDecl', payload: { prop: 'color' } })
+
+    expect(probe.previewDecl).toHaveBeenNthCalledWith(1, ids('title'), 'color', 'red')
+    expect(probe.previewDecl).toHaveBeenNthCalledWith(2, ids('title'), 'color', null)
+    expect(ws.sendOp).not.toHaveBeenCalled()
+  })
+
+  it('switches between the select and hand tools', () => {
+    const { store, ctx } = contextWith(null)
+
+    ctx.setMode('hand')
+    expect(store.getState().mode).toBe('hand')
+
+    ctx.setMode('select')
+    expect(store.getState().mode).toBe('select')
+  })
+
+  it('rejects reads with no frame loaded, and passes them to the probe once one is', async () => {
+    await expect(contextWith(null).ctx.read({ kind: 'rects', edId: edId('title') })).rejects.toThrow('No artboard is loaded')
+
+    const probe = fakeProbe()
+    await contextWith(probe).ctx.read({ kind: 'rects', edId: edId('title') })
+    expect(probe.read).toHaveBeenCalledWith({ kind: 'rects', edId: edId('title') })
+  })
+
+  it('reads and changes the store, and forwards undo and redo to the server', () => {
+    const { store, ws, ctx, state } = contextWith(null)
+    store.setBoard(home)
+
+    ctx.select(ids('title'))
+    ctx.setViewport({ zoom: 3, panX: 1, panY: 2 })
+    ctx.toast({ message: 'Hello', tone: 'info' })
+    ctx.undo()
+    ctx.redo()
+
+    expect(ctx.selection()).toEqual({ board: home, edIds: ids('title') })
+    expect(ctx.viewport()).toEqual({ zoom: 3, panX: 1, panY: 2 })
+    expect(notices(store)).toContain('Hello')
+    expect(ctx.editorState()).toBe(state)
+    expect(ctx.records()).toBe(store.getState().records)
+    expect(ws.undo).toHaveBeenCalledTimes(1)
+    expect(ws.redo).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('the view setters on the context the canvas hands the shell', () => {
+  it('merges an editor-state patch into the editor state and hands it to the shell', async () => {
+    const view = await openHome({ locked: ids('aside') })
+
+    act(() => view.context().setEditorState({ collapsed: ids('card') }))
+
+    expect(view.editorStateChanges).toHaveBeenCalledExactlyOnceWith({ hidden: [], locked: ids('aside'), collapsed: ids('card'), boards: {} })
+  })
+
+  it('zooms to 100% around the centre of the view', async () => {
+    const view = await openHome()
+    await setViewport(view.store, 0.5, 0, 0)
+
+    act(() => view.context().fit('100'))
+
+    expect(view.store.getState().view.viewport).toEqual({ zoom: 1, panX: -VIEWPORT_SIZE.width / 2, panY: -VIEWPORT_SIZE.height / 2 })
+  })
+
+  it('fits the board as it was fitted on open, and the selection', async () => {
+    const view = await openHome()
+    const fitted = view.store.getState().view.viewport
+    await setViewport(view.store, 3, -500, -500)
+
+    act(() => view.context().fit('board'))
+    expect(view.store.getState().view.viewport).toEqual(fitted)
+
+    await clickAt(view, at.title, { metaKey: true })
+    act(() => view.context().fit('selection'))
+    await settle()
+
+    const { zoom, panX } = view.store.getState().view.viewport
+    expect(zoom).toBeGreaterThan(1.6)
+    expect(panX + (60 + 400 / 2) * zoom).toBeCloseTo(VIEWPORT_SIZE.width / 2)
+  })
+})
+
+describe('keys the canvas keeps for itself', () => {
+  it('leaves every pressed shortcut to the action registry', async () => {
+    const view = await openHome({ shortcuts: false })
+    await clickAt(view, at.label)
+    const viewport = view.store.getState().view.viewport
+
+    const pressed = [
+      await pressKey(view.container, 'Enter', { code: 'Enter' }),
+      await pressKey(view.container, 'Tab', { code: 'Tab' }),
+      await pressKey(view.container, 'Escape', { code: 'Escape' }),
+      await pressKey(view.container, 'h', { code: 'KeyH' }),
+      await pressKey(view.container, '!', { code: 'Digit1', shiftKey: true }),
+    ]
+
+    expect(pressed.map((event) => event.defaultPrevented)).toEqual([false, false, false, false, false])
+    expect(view.store.getState().view.selection).toEqual(ids('card'))
+    expect(view.store.getState().mode).toBe('select')
+    expect(view.store.getState().view.viewport).toEqual(viewport)
+  })
+
+  it('still holds Space to pan and I to interact with no registry', async () => {
+    const view = await openHome({ shortcuts: false })
+
+    const space = press(view.container, 'keydown', ' ', { code: 'Space' })
+    press(view.container, 'keyup', ' ', { code: 'Space' })
+    press(view.container, 'keydown', 'i', { code: 'KeyI' })
+    await settle()
+
+    expect(space.defaultPrevented).toBe(true)
+    expect(view.store.getState().interact).toBe(true)
+  })
+})
+
+describe('keys and pointer leaving the canvas', () => {
+  it('Escape clears the selection', async () => {
+    const view = await openHome()
+    await clickAt(view, at.aside)
+
+    const escape = await pressKey(view.container, 'Escape')
+
+    expect(view.store.getState().view.selection).toEqual([])
+    expect(escape.defaultPrevented).toBe(true)
+  })
+
+  it('clears the hover outline when the pointer leaves the canvas', async () => {
+    const view = await openHome()
+    await hoverAt(view, at.aside)
+    expect(view.store.getState().hover).toBe(edId('aside'))
+
+    act(() => {
+      shieldOf(view.container).dispatchEvent(new PointerEvent('pointerout', { bubbles: true, relatedTarget: document.body }))
+    })
+    await settle()
+
+    expect(view.store.getState().hover).toBeNull()
+    expect(outlines(view.container, 'hover')).toEqual([])
+  })
+})
+
+describe('reads a reload rejects', () => {
+  it('keeps the outlines it had and shows no reset notice', async () => {
+    const view = await openHome()
+    await clickAt(view, at.title, { metaKey: true })
+    latestProbe().read.mockRejectedValue(new Error('reloaded'))
+
+    act(() => latestProbe().emit({ type: 'scrolled', scrollX: 0, scrollY: 10 }))
+    await settle()
+    act(() => latestProbe().emit({ type: 'ready', scrollX: 0, scrollY: 0 }))
+    await settle()
+
+    expect(outlines(view.container, 'selection')).toHaveLength(1)
+    expect(notices(view.store)).not.toContainEqual(expect.stringMatching(/page reset/i))
+  })
+
+  it('leaves hover and selection as they were when the hit-test is rejected', async () => {
+    const view = await openHome()
+    latestProbe().read.mockRejectedValue(new Error('reloaded'))
+
+    await hoverAt(view, at.aside)
+    await clickAt(view, at.aside)
+    await doubleClickAt(view, at.aside)
+
+    expect(view.store.getState().hover).toBeNull()
+    expect(view.store.getState().view.selection).toEqual([])
+  })
+
+  it('leaves the selection as it was when the hit-test behind a turned-down press is rejected', async () => {
+    const pressOnly: CanvasTool = { id: 'press-only', priority: 5, onPointerDown: () => true, onPointerUp: () => false }
+    const view = await openHome({ tools: [pressOnly] })
+    latestProbe().read.mockRejectedValue(new Error('reloaded'))
+
+    await clickAt(view, at.aside)
+
+    expect(view.store.getState().view.selection).toEqual([])
+  })
+})
+
+describe('in-place text edits', () => {
+  it("says 'page redrew, edit cancelled' when a redraw ends the edit, and nothing on Escape", async () => {
+    const view = await openHome()
+
+    act(() => latestProbe().emit({ type: 'textCancelled', session: 'text-1', reason: 'escape' }))
+    expect(notices(view.store)).toEqual([])
+
+    act(() => latestProbe().emit({ type: 'textCancelled', session: 'text-1', reason: 'redrawn' }))
+    expect(notices(view.store)).toContainEqual(expect.stringMatching(/page redrew, edit cancelled/i))
+  })
+
+  it('sends the committed text as a setText op', async () => {
+    const view = await openHome()
+    view.ws.sendOp.mockResolvedValue({})
+
+    act(() => latestProbe().emit({ type: 'textCommit', session: 'text-1', edId: edId('title'), text: 'Hello' }))
+    await settle()
+
+    expect(view.ws.sendOp).toHaveBeenCalledWith(expect.objectContaining({ target: ids('title'), kind: 'setText', payload: { text: 'Hello' } }), {})
+  })
+
+  it('leaves a refused text commit to the ws client toast', async () => {
+    const view = await openHome()
+    view.ws.sendOp.mockRejectedValue(new Error('refused'))
+
+    act(() => latestProbe().emit({ type: 'textCommit', session: 'text-1', edId: edId('title'), text: 'Hello' }))
+    await settle()
+
+    expect(view.ws.sendOp).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('dragging with the built-in move tool', () => {
+  const asideCenter = { x: 850, y: 400 }
+  const dropped = { x: 890, y: 430 }
+
+  async function asideSelected(): Promise<Mounted> {
+    probes.scene.computed = { root: { display: 'block' }, aside: { position: 'absolute', transform: 'none', left: '700px', top: '200px' } }
+    const view = await openHome()
+    await setViewport(view.store, 1, 0, 0)
+    view.ws.sendOp.mockResolvedValue({ warnings: [] })
+    await clickAt(view, at.aside)
+    expect(view.store.getState().view.selection).toEqual(ids('aside'))
+    return view
+  }
+
+  async function startDrag(view: Mounted) {
+    const shield = shieldOf(view.container)
+    act(() => dispatchPointer(shield, 'pointerdown', toScreen(view.store, asideCenter)))
+    await settle()
+    act(() => dispatchPointer(shield, 'pointermove', toScreen(view.store, dropped)))
+    expect(view.container.querySelector('[data-move-ghost]')).not.toBeNull()
+  }
+
+  function setDecls(view: Mounted): string[] {
+    return view.ws.sendOp.mock.calls.flatMap(([op]) => (op.kind === 'setDecl' ? [`${op.payload.prop}: ${op.payload.value}`] : []))
+  }
+
+  it('writes the dragged absolute element’s left and top and previews them in the frame', async () => {
+    const view = await asideSelected()
+
+    await startDrag(view)
+    act(() => dispatchPointer(shieldOf(view.container), 'pointerup', toScreen(view.store, dropped)))
+    await settle()
+
+    expect(setDecls(view)).toEqual(['left: 740px', 'top: 230px'])
+    expect(latestProbe().previewDecl).toHaveBeenCalledWith(ids('aside'), 'left', '740px')
+    expect(view.container.querySelector('[data-move-ghost]')).toBeNull()
+    expect(view.store.getState().view.selection).toEqual(ids('aside'))
+  })
+
+  it('ends the drag on pointercancel with no write, and goes back to hovering', async () => {
+    const view = await asideSelected()
+    await startDrag(view)
+
+    act(() => dispatchPointer(shieldOf(view.container), 'pointercancel', toScreen(view.store, dropped), { buttons: 0 }))
+    await settle()
+    act(() => dispatchPointer(shieldOf(view.container), 'pointerup', toScreen(view.store, dropped)))
+    await settle()
+    await hoverAt(view, at.label)
+
+    expect(view.ws.sendOp).not.toHaveBeenCalled()
+    expect(view.container.querySelector('[data-move-ghost]')).toBeNull()
+    expect(view.store.getState().hover).toBe(edId('card'))
+  })
+
+  it('ends the drag with no write when pointer capture is lost, and goes back to hovering', async () => {
+    const view = await asideSelected()
+    await startDrag(view)
+
+    act(() => dispatchPointer(shieldOf(view.container), 'lostpointercapture', toScreen(view.store, dropped), { buttons: 0 }))
+    await settle()
+    act(() => dispatchPointer(shieldOf(view.container), 'pointerup', toScreen(view.store, dropped)))
+    await settle()
+    await hoverAt(view, at.label)
+
+    expect(view.ws.sendOp).not.toHaveBeenCalled()
+    expect(view.container.querySelector('[data-move-ghost]')).toBeNull()
+    expect(view.store.getState().hover).toBe(edId('card'))
+  })
+
+  it('cancels the drag on Escape, so the release writes nothing', async () => {
+    const view = await asideSelected()
+    await startDrag(view)
+
+    const escape = await pressKey(view.container, 'Escape')
+    act(() => dispatchPointer(shieldOf(view.container), 'pointerup', toScreen(view.store, dropped)))
+    await settle()
+
+    expect(escape.defaultPrevented).toBe(true)
+    expect(view.ws.sendOp).not.toHaveBeenCalled()
+    expect(view.container.querySelector('[data-move-ghost]')).toBeNull()
+    expect(view.store.getState().view.selection).toEqual(ids('aside'))
+  })
+
+  it('drops the drag through the tool when the shell cancels the gesture', async () => {
+    const view = await asideSelected()
+    await startDrag(view)
+
+    act(() => view.context().cancelGesture())
+    await settle()
+    act(() => dispatchPointer(shieldOf(view.container), 'pointerup', toScreen(view.store, dropped)))
+    await settle()
+
+    expect(view.ws.sendOp).not.toHaveBeenCalled()
+    expect(view.container.querySelector('[data-move-ghost]')).toBeNull()
+    expect(view.store.getState().view.selection).toEqual(ids('aside'))
+  })
+})
+
+describe('preview width', () => {
+  const BOARD_H = 900
+
+  function labelOf(container: HTMLElement): HTMLElement {
+    const label = container.querySelector<HTMLElement>('[data-board-label]')
+    if (!label) throw new Error('no board label')
+    return label
+  }
+
+  function documentHeightReads(): number {
+    return probes.created.flatMap((probe) => probe.read.mock.calls).filter(([read]) => read.kind === 'documentHeight').length
+  }
+
+  it('shows the board at its preview width: the frame, and the label that names it a preview', async () => {
+    const view = await openHome({ previewWidth: 375 })
+
+    const label = labelOf(view.container)
+    const { zoom } = view.store.getState().view.viewport
+    expect(frameSize(frameOf(view.container)).width).toBe(375)
+    expect(label.textContent).toContain('375 preview')
+    expect(label.textContent).not.toContain('1280')
+    expect(Number.parseFloat(label.style.width)).toBeCloseTo(375 * zoom)
+  })
+
+  it('fits the board at its preview width, centred where the authored width is', async () => {
+    const view = await openHome({ previewWidth: 375 })
+    const atPreview = view.store.getState().view.viewport
+
+    await view.setPreviewWidth(undefined)
+    act(() => view.context().fit('board'))
+    const atAuthored = view.store.getState().view.viewport
+
+    expect(frameSize(frameOf(view.container)).width).toBe(1280)
+    expect(labelOf(view.container).textContent).toBe('home.dc.html1280 × 900')
+    expect(atPreview.panX).toBeGreaterThan(atAuthored.panX + 100)
+    expect(atPreview.panX + (375 * atPreview.zoom) / 2).toBeCloseTo(atAuthored.panX + (1280 * atAuthored.zoom) / 2)
+  })
+
+  it('grows the frame to the content, measured with the frame held at the board height', async () => {
+    probes.scene.contentHeight = ({ height }) => Math.round(1.1 * height)
+
+    const view = await openHome({ previewWidth: 375 })
+
+    expect(frameSize(frameOf(view.container)).height).toBe(990)
+    expect(labelOf(view.container).textContent).toContain('990')
+    expect(probes.scene.measuredAt.length).toBeGreaterThan(0)
+    expect(probes.scene.measuredAt.every((size) => size.height === BOARD_H)).toBe(true)
+  })
+
+  it('settles a board with a min-height: 110vh child at one height across reloads, scrolls and redraws', async () => {
+    probes.scene.contentHeight = ({ height }) => Math.round(1.1 * height)
+    const view = await openHome({ previewWidth: 375 })
+
+    await act(async () => latestProbe().emit({ type: 'ready', scrollX: 0, scrollY: 0 }))
+    await settle()
+    expect(frameSize(frameOf(view.container)).height).toBe(990)
+    expect(probes.scene.measuredAt.every((size) => size.height === BOARD_H)).toBe(true)
+
+    const readsAfterReload = documentHeightReads()
+    await act(async () => latestProbe().emit({ type: 'scrolled', scrollX: 0, scrollY: 120 }))
+    await setViewport(view.store, 0.5, 10, 10)
+    await clickAt(view, at.label)
+    await settle()
+
+    expect(documentHeightReads()).toBe(readsAfterReload)
+    expect(frameSize(frameOf(view.container)).height).toBe(990)
+  })
+
+  it('caps the frame at four board heights, and measures again at the board height when the width changes', async () => {
+    probes.scene.contentHeight = ({ width }) => (width < 500 ? 10_000 : 300)
+    const view = await openHome({ previewWidth: 375 })
+
+    expect(frameSize(frameOf(view.container)).height).toBe(4 * BOARD_H)
+
+    await view.setPreviewWidth(768)
+
+    expect(frameSize(frameOf(view.container))).toEqual({ width: 768, height: BOARD_H })
+    expect(probes.scene.measuredAt.at(-1)).toEqual({ width: 768, height: BOARD_H })
+  })
+
+  it('keeps the board its own size and reads no content height without a preview width', async () => {
+    probes.scene.contentHeight = () => 2000
+
+    const view = await openHome()
+
+    expect(frameSize(frameOf(view.container))).toEqual({ width: 1280, height: BOARD_H })
+    expect(labelOf(view.container).textContent).toBe('home.dc.html1280 × 900')
+    expect(documentHeightReads()).toBe(0)
+  })
+})

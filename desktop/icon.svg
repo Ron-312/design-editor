@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2d241e"/>
+      <stop offset="1" stop-color="#16110e"/>
+    </linearGradient>
+    <linearGradient id="clay" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f08a55"/>
+      <stop offset="1" stop-color="#c85a2c"/>
+    </linearGradient>
+    <filter id="drop" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#000" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="186" fill="url(#tile)" filter="url(#drop)"/>
+  <rect x="101" y="101" width="822" height="822" rx="185" fill="none" stroke="#ffffff" stroke-opacity="0.07" stroke-width="2"/>
+  <!-- the kiln arch from the editor's top bar -->
+  <path d="M332 700V496a180 180 0 0 1 360 0V700z" fill="url(#clay)"/>
+  <path d="M461 700v-94a51 51 0 0 1 102 0v94" fill="#1d1713"/>
+  <circle cx="512" cy="468" r="36" fill="#1d1713"/>
+  <!-- the selection frame and its handles -->
+  <rect x="280" y="264" width="464" height="488" fill="none" stroke="#f3e6da" stroke-width="10" stroke-opacity="0.9"/>
+  <g fill="#1d1713" stroke="#f3e6da" stroke-width="10">
+    <rect x="254" y="238" width="52" height="52" rx="6"/>
+    <rect x="718" y="238" width="52" height="52" rx="6"/>
+    <rect x="254" y="726" width="52" height="52" rx="6"/>
+    <rect x="718" y="726" width="52" height="52" rx="6"/>
+  </g>
+</svg>

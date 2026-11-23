@@ -1,0 +1,39 @@
+appId: com.ron312.design-editor
+productName: Design Editor
+electronVersion: 45.4.1
+directories:
+  app: build/app
+  output: release
+  buildResources: desktop
+files:
+  - '**/*'
+  # main.mjs bundles every dependency, so the repo's node_modules stays out.
+  - '!node_modules/**'
+asar: false
+npmRebuild: false
+artifactName: Design-Editor-${version}-${os}-${arch}.${ext}
+mac:
+  category: public.app-category.graphics-design
+  icon: desktop/icon.png
+  # Ad-hoc signed: no Apple Developer ID yet, so first launch needs right-click → Open.
+  identity: '-'
+  hardenedRuntime: false
+  target:
+    - target: dmg
+      arch: [arm64, x64]
+dmg:
+  title: Design Editor
+win:
+  icon: desktop/icon.png
+  target:
+    - target: nsis
+      arch: [x64]
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Design Editor
+  uninstallDisplayName: Design Editor
+publish: null

@@ -2,5 +2,10 @@ node_modules/
 dist/
 .workflow/
 projects/
+test-results/
+playwright-report/
 .DS_Store
 *.log
+coverage/
+build/
+release/

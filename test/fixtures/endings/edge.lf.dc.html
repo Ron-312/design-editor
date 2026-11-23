@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script src="./support.js"></script>
+</head>
+<body>
+<!-- golden edge cases: comments, indentation, shorthands, entities -->
+<x-dc data-props='{"$preview":{"w":800,"h":600}}'>
+  <helmet>
+    <style>
+      /* page basics */
+      .sheet { margin: 0 auto; padding: 12px 16px 20px; }
+	.note { color: var(--brandInk, #1c1917) !important; }
+      @media (min-width: 600px) {
+        .sheet { border: 1px dashed #a8a29e; }
+      }
+    </style>
+  </helmet>
+	<section class="sheet" style="font: 600 14px/1.4 Inter, sans-serif; background: #fff7ed">
+		<h2 class="note">Tom&#8217;s notes</h2>
+    <p>Salt &amp; pepper,&nbsp;then <em>taste</em> again.<br>Twice.</p>
+   <hr style="border: 0; border-top: 1px solid #e7e5e4">
+	<img src="/_blob/0f1e2d3c4b5a69788796a5b4c3d2e1f0" alt="mark">
+    <table style="width: 100%; border-collapse: collapse">
+      <tr><td style="padding: 4px 8px !important">Flour</td><td>200g</td></tr>
+      <tr><td>Water</td><td>140g</td></tr>
+    </table>
+	</section>
+</x-dc>
+</body>
+</html>
