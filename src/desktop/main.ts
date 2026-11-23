@@ -1,8 +1,9 @@
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
-import { app, BrowserWindow, dialog, Menu, shell, type MenuItemConstructorOptions } from 'electron'
+import { app, BrowserWindow, dialog, Menu, shell } from 'electron'
 import { startEditor, type Editor } from '../server/main'
 import { DEFAULT_EDITOR_PORT, LOOPBACK_HOST } from '../shared/protocol'
+import { menuTemplate } from './menu'
 import { findFreePortPair } from './ports'
 import { isPulledCanvas, readRecent, withRecent, writeRecent } from './recent'
 
@@ -89,26 +90,13 @@ async function chooseProject(): Promise<void> {
   if (!picked.canceled && picked.filePaths[0]) await openProject(picked.filePaths[0])
 }
 
-/** No Undo/Redo roles: Mod-Z must reach the editor, whose undo writes the canvas files. */
 function buildMenu(): void {
-  const openRecent: MenuItemConstructorOptions[] = recent.length
-    ? recent.map((dir) => ({ label: dir, click: () => void openProject(dir) }))
-    : [{ label: 'None yet', enabled: false }]
-  const template: MenuItemConstructorOptions[] = [
-    ...(process.platform === 'darwin' ? [{ role: 'appMenu' as const }] : []),
-    {
-      label: 'File',
-      submenu: [
-        { label: 'Open Canvas Folder…', accelerator: 'CmdOrCtrl+O', click: () => void chooseProject() },
-        { label: 'Open Recent', submenu: openRecent },
-        { type: 'separator' },
-        process.platform === 'darwin' ? { role: 'close' } : { role: 'quit' },
-      ],
-    },
-    { label: 'Edit', submenu: [{ role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }] },
-    { label: 'View', submenu: [{ role: 'reload' }, { role: 'toggleDevTools' }, { type: 'separator' }, { role: 'togglefullscreen' }] },
-    { role: 'windowMenu' },
-  ]
+  const template = menuTemplate({
+    platform: process.platform,
+    recent,
+    openProject: (dir) => void openProject(dir),
+    chooseProject: () => void chooseProject(),
+  })
   Menu.setApplicationMenu(Menu.buildFromTemplate(template))
 }
 

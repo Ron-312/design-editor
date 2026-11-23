@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest'
+import type { Rect } from '../../../src/shared/protocol'
 import type { EdId, TemplateNode } from '../../../src/shared/types'
 import {
   childSelection,
   clickSelection,
   doubleClickSelection,
+  isMarqueeContainer,
+  marqueeSelection,
   parentSelection,
   selectableHit,
   siblingSelection,
@@ -137,5 +140,67 @@ describe('keyboard', () => {
 
   it('Tab with nothing selected selects the first top-level element', () => {
     expect(siblingSelection(tree, [], 1)).toEqual(ids('card'))
+  })
+})
+
+describe('marquee hit set', () => {
+  const rect = (x: number, y: number, width: number, height: number): Rect => ({ x, y, width, height })
+  // Three columns side by side, and one below them.
+  const candidates = [
+    { edId: edId('a'), rect: rect(0, 0, 100, 100) },
+    { edId: edId('b'), rect: rect(150, 0, 100, 100) },
+    { edId: edId('c'), rect: rect(300, 0, 100, 100) },
+    { edId: edId('d'), rect: rect(0, 200, 100, 100) },
+  ]
+
+  it('selects the candidates the rectangle intersects, in candidate order', () => {
+    expect(marqueeSelection([], candidates, rect(50, 50, 200, 20))).toEqual(ids('a', 'b'))
+  })
+
+  it('counts a candidate the rectangle only clips', () => {
+    expect(marqueeSelection([], candidates, rect(390, 90, 50, 50))).toEqual(ids('c'))
+  })
+
+  it('selects nothing when the rectangle misses every candidate', () => {
+    expect(marqueeSelection([], candidates, rect(110, 110, 30, 30))).toEqual([])
+  })
+
+  it('replaces the selection it had at press without Shift', () => {
+    expect(marqueeSelection(ids('d'), candidates, rect(120, 10, 200, 20))).toEqual(ids('b', 'c'))
+  })
+
+  it('adds to the selection it had at press with Shift, keeping each element once', () => {
+    expect(marqueeSelection(ids('b', 'x'), candidates, rect(50, 10, 200, 20), { shift: true })).toEqual(ids('b', 'x', 'a'))
+  })
+
+  it('keeps the selection it had at press when a Shift marquee hits nothing', () => {
+    expect(marqueeSelection(ids('d'), candidates, rect(110, 110, 30, 30), { shift: true })).toEqual(ids('d'))
+  })
+})
+
+describe('marquee container', () => {
+  it('counts the artboard root as a container, whatever its children are', () => {
+    expect(isMarqueeContainer(tree, edId('root'), [])).toBe(true)
+    expect(isMarqueeContainer(tree, edId('root'), ['inline'])).toBe(true)
+  })
+
+  it('counts an element with a block-level element child as a container', () => {
+    expect(isMarqueeContainer(tree, edId('card'), ['block', 'inline-block'])).toBe(true)
+    expect(isMarqueeContainer(tree, edId('list'), ['flex'])).toBe(true)
+    expect(isMarqueeContainer(tree, edId('card'), ['inline', 'grid'])).toBe(true)
+  })
+
+  it('counts text with inline children as a leaf', () => {
+    expect(isMarqueeContainer(tree, edId('button'), ['inline'])).toBe(false)
+    expect(isMarqueeContainer(tree, edId('card'), ['inline', 'inline'])).toBe(false)
+  })
+
+  it('counts inline-block and contents children as inline-level', () => {
+    expect(isMarqueeContainer(tree, edId('card'), ['inline-block'])).toBe(false)
+    expect(isMarqueeContainer(tree, edId('card'), ['contents', 'inline'])).toBe(false)
+  })
+
+  it('counts an element with no element children as a leaf', () => {
+    expect(isMarqueeContainer(tree, edId('aside'), [])).toBe(false)
   })
 })

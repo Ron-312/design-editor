@@ -1,4 +1,6 @@
 /** Auto Layout mapped to flexbox, per plans/v1/research/02-layout-to-css.md and the R08 corrections. */
+import type { Rect } from '../../shared/protocol'
+import type { AutoLayout } from '../canvas/infer-layout'
 
 export type Axis = 'width' | 'height'
 export type SizingMode = 'hug' | 'fill' | 'fixed'
@@ -131,4 +133,69 @@ export function sizingWrites(mode: SizingMode, axis: Axis, onMain: boolean, auth
   if (mode === 'hug') return [...leaveFill, ...removals(onMain ? [axis, 'flex-shrink'] : [axis], authored)]
   const size = authored(axis) === null ? [{ prop: axis, value: `${Math.round(measured)}px` }] : []
   return [...leaveFill, ...size, ...(onMain ? [{ prop: 'flex-shrink', value: '0' }] : [])]
+}
+
+export function isWrapping(flexWrap: string): boolean {
+  return flexWrap !== 'nowrap'
+}
+
+export type SpacingMode = 'packed' | 'space-between' | 'space-evenly' | 'space-around'
+
+export const SPACING_MODES: readonly (readonly [SpacingMode, string])[] = [
+  ['packed', 'Packed'],
+  ['space-between', 'Space between'],
+  ['space-evenly', 'Space evenly'],
+  ['space-around', 'Space around'],
+]
+
+/** Any `justify-content` that is not a `space-*` distribution packs the items. */
+export function spacingModeOf(justifyContent: string): SpacingMode {
+  return SPACING_MODES.find(([mode]) => mode === justifyContent)?.[0] ?? 'packed'
+}
+
+/** The `justify-content` a spacing mode writes; Packed packs at the start, as the nine's top-left cell does. */
+export function spacingJustify(mode: SpacingMode): string {
+  return mode === 'packed' ? 'flex-start' : mode
+}
+
+/** The container declarations the Auto layout section writes, and so what removing auto layout removes. */
+export const AUTO_LAYOUT_PROPS = [
+  'display',
+  'flex-direction',
+  'flex-wrap',
+  'gap',
+  'row-gap',
+  'column-gap',
+  'justify-content',
+  'align-items',
+  'align-content',
+] as const
+
+export interface Insets {
+  readonly top: number
+  readonly right: number
+  readonly bottom: number
+  readonly left: number
+}
+
+/** How far the union of `boxes` sits inside `paddingBox` on each side, never negative. */
+export function insetOf(paddingBox: Rect, boxes: readonly Rect[]): Insets {
+  const left = Math.min(...boxes.map((box) => box.x))
+  const top = Math.min(...boxes.map((box) => box.y))
+  const right = Math.max(...boxes.map((box) => box.x + box.width))
+  const bottom = Math.max(...boxes.map((box) => box.y + box.height))
+  return {
+    top: Math.max(0, top - paddingBox.y),
+    right: Math.max(0, paddingBox.x + paddingBox.width - right),
+    bottom: Math.max(0, paddingBox.y + paddingBox.height - bottom),
+    left: Math.max(0, left - paddingBox.x),
+  }
+}
+
+const pxOf = (length: number) => `${Math.round(length * 100) / 100}px`
+
+/** Shift-A: flex in the inferred direction and gap, padded so the children stay where they are; no padding without children. */
+export function addAutoLayoutWrites({ direction, gap }: AutoLayout, padding: Insets | null): LayoutWrite[] {
+  const sides = padding ? (['top', 'right', 'bottom', 'left'] as const).map((side) => ({ prop: `padding-${side}`, value: pxOf(padding[side]) })) : []
+  return [{ prop: 'display', value: 'flex' }, { prop: 'flex-direction', value: direction }, { prop: 'gap', value: pxOf(gap) }, ...sides]
 }

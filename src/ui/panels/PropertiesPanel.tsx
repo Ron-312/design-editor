@@ -1,52 +1,88 @@
 /// <reference types="vite/client" />
-import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
-import type { BoardIndex } from '../../shared/protocol'
-import type { EdId, ProjectPath, ReadOnlyReason, StyleSource, TemplateNode } from '../../shared/types'
-import { findNode } from '../canvas/selection'
-import type { EditorContext, PanelSection, Selection } from '../plugin-api'
-import { Icon, PanelStateContext, labelOf, type IconName, type PanelState, type StyleTarget, type Token } from './fields'
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import type { BoardIndex } from "../../shared/protocol";
+import type {
+  EdId,
+  ProjectPath,
+  ReadOnlyReason,
+  StyleSource,
+  TemplateNode,
+} from "../../shared/types";
+import { findNode } from "../canvas/selection";
+import type { EditorContext, PanelSection, Selection } from "../plugin-api";
+import { CodeTab } from "./CodeTab";
+import {
+  Icon,
+  PanelStateContext,
+  labelOf,
+  type IconName,
+  type PanelState,
+  type StyleTarget,
+  type Token,
+} from "./fields";
 
-export type { Token } from './fields'
+export type { Token } from "./fields";
 
 export interface SectionModule {
-  readonly sections: readonly PanelSection[]
+  readonly sections: readonly PanelSection[];
 }
 
-export function loadPanelSections(modules: Record<string, SectionModule>): PanelSection[] {
+export function loadPanelSections(
+  modules: Record<string, SectionModule>,
+): PanelSection[] {
   return Object.values(modules)
     .flatMap((module) => module.sections)
-    .sort((a, b) => a.order - b.order)
+    .sort((a, b) => a.order - b.order);
 }
 
 export function defaultPanelSections(): PanelSection[] {
-  return loadPanelSections(import.meta.glob<SectionModule>('./sections/*.section.tsx', { eager: true }))
+  return loadPanelSections(
+    import.meta.glob<SectionModule>("./sections/*.section.tsx", {
+      eager: true,
+    }),
+  );
 }
 
-const DEFAULT_SECTIONS = defaultPanelSections()
+const DEFAULT_SECTIONS = defaultPanelSections();
 
 const READ_ONLY_NOTES: Readonly<Record<ReadOnlyReason, string>> = {
-  hole: 'Bound to a {{hole}}: read-only',
-  'dc-import': 'An imported component: edit it in its own file',
-  'script-made': 'Made by a script: read-only',
-  'artboard-root': 'The artboard root: read-only',
-}
+  hole: "Bound to a {{hole}}: read-only",
+  "dc-import": "An imported component: edit it in its own file",
+  "script-made": "Made by a script: read-only",
+  "artboard-root": "The artboard root: read-only",
+};
 
 export interface PropertiesPanelProps {
-  readonly ctx: EditorContext
-  readonly tokens: readonly Token[]
-  readonly sections?: readonly PanelSection[]
+  readonly ctx: EditorContext;
+  readonly tokens: readonly Token[];
+  readonly sections?: readonly PanelSection[];
 }
+
+type PanelTab = "design" | "code";
+
+const TAB_NAMES: Readonly<Record<PanelTab, string>> = {
+  design: "Design",
+  code: "Code",
+};
 
 function selectionKeyOf(selection: Selection | null): string {
-  return selection ? `${selection.board} ${selection.edIds.join(' ')}` : ''
+  return selection ? `${selection.board} ${selection.edIds.join(" ")}` : "";
 }
 
-export function PropertiesPanel({ ctx, tokens, sections = DEFAULT_SECTIONS }: PropertiesPanelProps) {
-  const index = useSyncExternalStore(ctx.onChange, ctx.index)
-  const selectionKey = useSyncExternalStore(ctx.onChange, () => selectionKeyOf(ctx.selection()))
-  const readOnly = useSyncExternalStore(ctx.onChange, ctx.readOnly)
-  const selection = ctx.selection()
-  const hasSelection = index !== null && selection !== null && selection.edIds.length > 0
+export function PropertiesPanel({
+  ctx,
+  tokens,
+  sections = DEFAULT_SECTIONS,
+}: PropertiesPanelProps) {
+  const index = useSyncExternalStore(ctx.onChange, ctx.index);
+  const selectionKey = useSyncExternalStore(ctx.onChange, () =>
+    selectionKeyOf(ctx.selection()),
+  );
+  const readOnly = useSyncExternalStore(ctx.onChange, ctx.readOnly);
+  const [tab, setTab] = useState<PanelTab>("design");
+  const selection = ctx.selection();
+  const hasSelection =
+    index !== null && selection !== null && selection.edIds.length > 0;
 
   return (
     <aside className="props" aria-label="Properties">
@@ -60,43 +96,151 @@ export function PropertiesPanel({ ctx, tokens, sections = DEFAULT_SECTIONS }: Pr
           tokens={tokens}
           sections={sections}
           readOnly={readOnly}
+          tab={tab}
+          onTab={setTab}
         />
       ) : (
         <p className="empty">Select a layer to edit its styles</p>
       )}
     </aside>
-  )
+  );
 }
 
 interface SelectionPropertiesProps {
-  readonly ctx: EditorContext
-  readonly index: BoardIndex
-  readonly selection: Selection
-  readonly tokens: readonly Token[]
-  readonly sections: readonly PanelSection[]
-  readonly readOnly: boolean
+  readonly ctx: EditorContext;
+  readonly index: BoardIndex;
+  readonly selection: Selection;
+  readonly tokens: readonly Token[];
+  readonly sections: readonly PanelSection[];
+  readonly readOnly: boolean;
+  readonly tab: PanelTab;
+  readonly onTab: (tab: PanelTab) => void;
 }
 
-function readOnlyReasonOf(tree: TemplateNode, edIds: readonly EdId[]): ReadOnlyReason | null {
-  return edIds.map((edId) => findNode(tree, edId)?.readOnly).find((reason) => reason !== undefined) ?? null
+function readOnlyReasonOf(
+  tree: TemplateNode,
+  edIds: readonly EdId[],
+): ReadOnlyReason | null {
+  return (
+    edIds
+      .map((edId) => findNode(tree, edId)?.readOnly)
+      .find((reason) => reason !== undefined) ?? null
+  );
 }
 
-function SelectionProperties({ ctx, index, selection, tokens, sections, readOnly }: SelectionPropertiesProps) {
-  const [target, setTarget] = useState<StyleTarget>('inline')
-  const readOnlyReason = readOnlyReasonOf(index.tree, selection.edIds)
+function SelectionProperties({
+  ctx,
+  index,
+  selection,
+  tokens,
+  sections,
+  readOnly,
+  tab,
+  onTab,
+}: SelectionPropertiesProps) {
+  const [target, setTarget] = useState<StyleTarget>("inline");
+  const readOnlyReason = readOnlyReasonOf(index.tree, selection.edIds);
   const state = useMemo<PanelState>(
-    () => ({ ctx, edIds: selection.edIds, styles: index.styles, target, tokens, editable: !readOnly && readOnlyReason === null }),
-    [ctx, selection.edIds, index.styles, target, tokens, readOnly, readOnlyReason],
-  )
-  const shown = sections.filter((section) => section.appliesTo(ctx, selection))
+    () => ({
+      ctx,
+      edIds: selection.edIds,
+      styles: index.styles,
+      target,
+      tokens,
+      editable: !readOnly && readOnlyReason === null,
+    }),
+    [
+      ctx,
+      selection.edIds,
+      index.styles,
+      target,
+      tokens,
+      readOnly,
+      readOnlyReason,
+    ],
+  );
 
   return (
     <PanelStateContext.Provider value={state}>
       <SelectionHeading tree={index.tree} edIds={selection.edIds} />
+      <PanelTabs tab={tab} onTab={onTab} />
+      <div role="tabpanel" aria-label={TAB_NAMES[tab]}>
+        {tab === "design" ? (
+          <DesignTab
+            ctx={ctx}
+            index={index}
+            selection={selection}
+            sections={sections}
+            target={target}
+            onPick={setTarget}
+            readOnlyReason={readOnlyReason}
+          />
+        ) : (
+          <CodeTab ctx={ctx} index={index} edId={selection.edIds[0]!} />
+        )}
+      </div>
+    </PanelStateContext.Provider>
+  );
+}
+
+function PanelTabs({
+  tab,
+  onTab,
+}: {
+  readonly tab: PanelTab;
+  readonly onTab: (tab: PanelTab) => void;
+}) {
+  return (
+    <div className="tabs" role="tablist" aria-label="Properties view">
+      {(Object.keys(TAB_NAMES) as PanelTab[]).map((name) => (
+        <button
+          type="button"
+          role="tab"
+          key={name}
+          aria-selected={name === tab}
+          onClick={() => onTab(name)}
+        >
+          {TAB_NAMES[name]}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+interface DesignTabProps {
+  readonly ctx: EditorContext;
+  readonly index: BoardIndex;
+  readonly selection: Selection;
+  readonly sections: readonly PanelSection[];
+  readonly target: StyleTarget;
+  readonly onPick: (target: StyleTarget) => void;
+  readonly readOnlyReason: ReadOnlyReason | null;
+}
+
+function DesignTab({
+  ctx,
+  index,
+  selection,
+  sections,
+  target,
+  onPick,
+  readOnlyReason,
+}: DesignTabProps) {
+  const shown = sections.filter((section) => section.appliesTo(ctx, selection));
+
+  return (
+    <>
       <div className="target">
-        <SelectorChip index={index} selection={selection} target={target} onPick={setTarget} />
+        <SelectorChip
+          index={index}
+          selection={selection}
+          target={target}
+          onPick={onPick}
+        />
         <RepeatsNotice ctx={ctx} tree={index.tree} edIds={selection.edIds} />
-        {readOnlyReason && <p className="note">{READ_ONLY_NOTES[readOnlyReason]}</p>}
+        {readOnlyReason && (
+          <p className="note">{READ_ONLY_NOTES[readOnlyReason]}</p>
+        )}
       </div>
       {shown.map((section) => (
         <section className="sec" data-section={section.id} key={section.id}>
@@ -113,70 +257,107 @@ function SelectionProperties({ ctx, index, selection, tokens, sections, readOnly
           <section.component ctx={ctx} selection={selection} />
         </section>
       ))}
-    </PanelStateContext.Provider>
-  )
+    </>
+  );
 }
 
-const TEXT_TAGS = new Set(['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'span', 'a', 'label', 'li', 'strong', 'em', 'small'])
+const TEXT_TAGS = new Set([
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "p",
+  "span",
+  "a",
+  "label",
+  "li",
+  "strong",
+  "em",
+  "small",
+]);
 
 function headingIcon(node: TemplateNode): IconName {
-  if (node.tag === 'img' || node.tag === 'picture' || node.tag === 'svg') return 'image'
-  return TEXT_TAGS.has(node.tag) ? 'text' : 'box'
+  if (node.tag === "img" || node.tag === "picture" || node.tag === "svg")
+    return "image";
+  return TEXT_TAGS.has(node.tag) ? "text" : "box";
 }
 
-function SelectionHeading({ tree, edIds }: { readonly tree: TemplateNode; readonly edIds: readonly EdId[] }) {
-  const only = edIds.length === 1 ? findNode(tree, edIds[0]!) : null
+function SelectionHeading({
+  tree,
+  edIds,
+}: {
+  readonly tree: TemplateNode;
+  readonly edIds: readonly EdId[];
+}) {
+  const only = edIds.length === 1 ? findNode(tree, edIds[0]!) : null;
   return (
     <div className="ctx">
-      <Icon name={only ? headingIcon(only) : 'grid'} />
+      <Icon name={only ? headingIcon(only) : "grid"} />
       <span className="nm">{only ? only.name : `${edIds.length} layers`}</span>
       {only && <span className="tg">{only.tag}</span>}
     </div>
-  )
+  );
 }
 
 function fileName(file: ProjectPath): string {
-  return file.split('/').at(-1) ?? file
+  return file.split("/").at(-1) ?? file;
 }
 
 function whereOf(source: StyleSource): string {
-  return `${fileName(source.file)}:${source.line}`
+  return `${fileName(source.file)}:${source.line}`;
 }
 
 /** The inline style of each element, plus every `<helmet><style>` rule all the selected elements share. */
 function targetsOf(index: BoardIndex, edIds: readonly EdId[]): StyleSource[] {
-  const [first, ...rest] = edIds.map((edId) => index.styles[edId] ?? [])
-  const shared = (source: StyleSource) => rest.every((sources) => sources.some((other) => other.target === source.target))
-  return (first ?? []).filter((source) => source.target !== 'inline' && shared(source))
+  const [first, ...rest] = edIds.map((edId) => index.styles[edId] ?? []);
+  const shared = (source: StyleSource) =>
+    rest.every((sources) =>
+      sources.some((other) => other.target === source.target),
+    );
+  return (first ?? []).filter(
+    (source) => source.target !== "inline" && shared(source),
+  );
 }
 
-function chipText(index: BoardIndex, selection: Selection, target: StyleTarget, rules: readonly StyleSource[]): readonly [string, string] {
-  const rule = rules.find((source) => source.target === target)
-  if (rule) return [labelOf(rule), whereOf(rule)]
-  if (selection.edIds.length > 1) return ['style', `${selection.edIds.length} layers`]
-  const inline = index.styles[selection.edIds[0]!]?.find((source) => source.target === 'inline')
-  return ['style', inline ? whereOf(inline) : fileName(selection.board)]
+function chipText(
+  index: BoardIndex,
+  selection: Selection,
+  target: StyleTarget,
+  rules: readonly StyleSource[],
+): readonly [string, string] {
+  const rule = rules.find((source) => source.target === target);
+  if (rule) return [labelOf(rule), whereOf(rule)];
+  if (selection.edIds.length > 1)
+    return ["style", `${selection.edIds.length} layers`];
+  const inline = index.styles[selection.edIds[0]!]?.find(
+    (source) => source.target === "inline",
+  );
+  return ["style", inline ? whereOf(inline) : fileName(selection.board)];
 }
 
 interface SelectorChipProps {
-  readonly index: BoardIndex
-  readonly selection: Selection
-  readonly target: StyleTarget
-  readonly onPick: (target: StyleTarget) => void
+  readonly index: BoardIndex;
+  readonly selection: Selection;
+  readonly target: StyleTarget;
+  readonly onPick: (target: StyleTarget) => void;
 }
 
 function SelectorChip({ index, selection, target, onPick }: SelectorChipProps) {
-  const [open, setOpen] = useState(false)
-  const rules = targetsOf(index, selection.edIds)
-  const [label, where] = chipText(index, selection, target, rules)
+  const [open, setOpen] = useState(false);
+  const rules = targetsOf(index, selection.edIds);
+  const [label, where] = chipText(index, selection, target, rules);
   const choices: readonly (readonly [StyleTarget, string, string])[] = [
-    ['inline', ...chipText(index, selection, 'inline', rules)],
-    ...rules.map((rule) => [rule.target, labelOf(rule), whereOf(rule)] as const),
-  ]
+    ["inline", ...chipText(index, selection, "inline", rules)],
+    ...rules.map(
+      (rule) => [rule.target, labelOf(rule), whereOf(rule)] as const,
+    ),
+  ];
 
   function pick(next: StyleTarget) {
-    setOpen(false)
-    onPick(next)
+    setOpen(false);
+    onPick(next);
   }
 
   return (
@@ -197,9 +378,21 @@ function SelectorChip({ index, selection, target, onPick }: SelectorChipProps) {
         <Icon name="chev-d" />
       </button>
       {open && (
-        <div className="pop" role="listbox" aria-label="Write target" onKeyDown={(event) => event.key === 'Escape' && setOpen(false)}>
+        <div
+          className="pop"
+          role="listbox"
+          aria-label="Write target"
+          onKeyDown={(event) => event.key === "Escape" && setOpen(false)}
+        >
           {choices.map(([choice, choiceLabel, choiceWhere]) => (
-            <button type="button" key={choice} role="option" aria-selected={choice === target} className="opt" onClick={() => pick(choice)}>
+            <button
+              type="button"
+              key={choice}
+              role="option"
+              aria-selected={choice === target}
+              className="opt"
+              onClick={() => pick(choice)}
+            >
               <span className="mono">{choiceLabel}</span>
               <span className="mono dimmed">{choiceWhere}</span>
             </button>
@@ -207,47 +400,53 @@ function SelectorChip({ index, selection, target, onPick }: SelectorChipProps) {
         </div>
       )}
     </div>
-  )
+  );
 }
 
-function isInsideRepeat(tree: TemplateNode, edId: EdId, repeated = false): boolean {
-  if (tree.edId === edId) return repeated
-  return tree.children.some((child) => isInsideRepeat(child, edId, repeated || tree.kind === 'sc-for'))
+function isInsideRepeat(
+  tree: TemplateNode,
+  edId: EdId,
+  repeated = false,
+): boolean {
+  if (tree.edId === edId) return repeated;
+  return tree.children.some((child) =>
+    isInsideRepeat(child, edId, repeated || tree.kind === "sc-for"),
+  );
 }
 
 interface RepeatsNoticeProps {
-  readonly ctx: EditorContext
-  readonly tree: TemplateNode
-  readonly edIds: readonly EdId[]
+  readonly ctx: EditorContext;
+  readonly tree: TemplateNode;
+  readonly edIds: readonly EdId[];
 }
 
 /** An `<sc-for>` child shares one source element across its repeats, so an edit changes every copy. */
 function RepeatsNotice({ ctx, tree, edIds }: RepeatsNoticeProps) {
-  const repeated = edIds.find((edId) => isInsideRepeat(tree, edId)) ?? null
-  const [count, setCount] = useState<number | null>(null)
+  const repeated = edIds.find((edId) => isInsideRepeat(tree, edId)) ?? null;
+  const [count, setCount] = useState<number | null>(null);
 
   useEffect(() => {
-    if (!repeated) return
-    let current = true
+    if (!repeated) return;
+    let current = true;
     ctx
-      .read({ kind: 'rects', edId: repeated })
+      .read({ kind: "rects", edId: repeated })
       .then((result) => {
-        if (current) setCount(result.rects.length)
+        if (current) setCount(result.rects.length);
       })
       // A reload rejects reads in flight; the notice waits for the next selection or index.
-      .catch(() => {})
+      .catch(() => {});
     return () => {
-      current = false
-    }
-  }, [ctx, repeated])
+      current = false;
+    };
+  }, [ctx, repeated]);
 
-  if (!repeated || count === null) return null
+  if (!repeated || count === null) return null;
   return (
     <p className="shared">
       <Icon name="warn" />
       This edit affects {count} repeats
     </p>
-  )
+  );
 }
 
 const PANEL_CSS = `
@@ -271,6 +470,14 @@ const PANEL_CSS = `
 .props .shared,.props .note,.props .fwarn{display:flex;align-items:center;gap:6px;font-size:11px;line-height:16px;color:var(--text-2)}
 .props .shared svg.i,.props .fwarn svg.i{width:12px;height:12px;color:var(--warn)}
 .props .fwarn{margin-top:4px;color:var(--warn)}
+.props .tabs{height:32px;flex:none;display:flex;align-items:center;gap:4px;padding:0 8px;border-bottom:1px solid var(--line)}
+.props .tabs [role="tab"]{height:24px;padding:0 8px;border-radius:var(--r-sm);color:var(--text-3);font-weight:600;font-size:12px}
+.props .tabs [role="tab"][aria-selected="true"]{color:var(--text);background:var(--field)}
+.props .code .sh{gap:6px;flex-wrap:wrap;height:auto;min-height:24px}
+.props .code .tag{padding:0 6px;border-radius:10px;background:var(--accent-soft);color:var(--accent-text)}
+.props .code .copy{margin-left:auto;height:24px;padding:0 6px;border-radius:var(--r-xs);color:var(--text-3);font-size:11px}
+.props .code .copy:hover{background:var(--field-hover);color:var(--text)}
+.props .code .src{margin:0;padding:8px;border-radius:var(--r-sm);background:var(--field);white-space:pre-wrap;overflow-wrap:anywhere;user-select:text}
 .props .sec{padding:8px 12px 12px;border-bottom:1px solid var(--line)}
 .props .sh{height:24px;display:flex;align-items:center;margin-bottom:4px}
 .props .sh h3{font-size:12px;font-weight:600;line-height:16px;margin:0}
@@ -310,4 +517,4 @@ const PANEL_CSS = `
 .props .switch::after{content:"";position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;background:var(--text);transition:transform .12s}
 .props .switch[aria-checked="true"]{background:var(--accent)}
 .props .switch[aria-checked="true"]::after{transform:translateX(12px);background:var(--accent-ink)}
-`
+`;

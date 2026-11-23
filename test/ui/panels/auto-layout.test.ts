@@ -74,11 +74,21 @@ const defaultComputed: Computed = {
     'flex-direction': 'row',
     'justify-content': 'normal',
     'align-items': 'normal',
+    'flex-wrap': 'nowrap',
+    'align-content': 'normal',
     position: 'static',
     'box-sizing': 'border-box',
     ...ROW_PADDING,
   },
-  column: { display: 'flex', 'flex-direction': 'column', 'justify-content': 'normal', 'align-items': 'normal', position: 'static' },
+  column: {
+    display: 'flex',
+    'flex-direction': 'column',
+    'justify-content': 'normal',
+    'align-items': 'normal',
+    'flex-wrap': 'nowrap',
+    'align-content': 'normal',
+    position: 'static',
+  },
   a: { ...FLEX_ITEM, width: '240px', height: '40px' },
   b: { ...FLEX_ITEM, width: '180px', height: '40px' },
   badge: { display: 'block', position: 'absolute' },
@@ -145,7 +155,7 @@ function contextFor(store: EditorStore, computed: Computed) {
     readOnly: () => store.getState().readOnly,
     select: (edIds: readonly EdId[]) => store.select(edIds),
     setViewport: (viewport) => store.setViewport(viewport),
-    apply: vi.fn(async (op: EditOp) => ackFor(op)),
+    apply: vi.fn(async (op: EditOp, _actionId?: string) => ackFor(op)),
     beginAction: vi.fn(() => `action-${++actions}`),
     preview: vi.fn(),
     setMode: (mode: 'select' | 'hand') => store.setMode(mode),
@@ -470,13 +480,241 @@ describe('Layout section: the 9-dot alignment box', () => {
 
     expect(writesOf(view.ctx, 'align-items')).toEqual([{ target: 'row', prop: 'align-items', value: 'center' }])
   })
+})
 
-  it('offers space-between on the main axis', async () => {
+function requireSelect(root: ParentNode, name: string): HTMLSelectElement {
+  const found = root.querySelector<HTMLSelectElement>(`select[aria-label="${name}"]`)
+  if (!found) throw new Error(`no ${name} menu`)
+  return found
+}
+
+function shownOption(select: HTMLSelectElement): string {
+  return select.selectedOptions[0]?.textContent?.trim() ?? ''
+}
+
+async function choose(select: HTMLSelectElement, optionText: string) {
+  const option = [...select.options].find((candidate) => candidate.textContent?.trim() === optionText)
+  if (!option) throw new Error(`no ${optionText} option`)
+  act(() => {
+    select.value = option.value
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+  })
+  await settle()
+}
+
+function fieldShown(root: ParentNode, prop: string): boolean {
+  return root.querySelector(`[data-prop="${prop}"]`) !== null
+}
+
+const WRAPPING_ROW: Setup = {
+  selection: ['row'],
+  styles: { row: inline(['display', 'flex'], ['gap', '16px'], ['flex-wrap', 'wrap'], ['row-gap', '24px']) },
+  computed: { row: { 'flex-wrap': 'wrap', 'row-gap': '24px', 'column-gap': '16px' } },
+}
+
+describe('Layout section: wrap', () => {
+  it('turns wrapping on with flex-wrap: wrap', async () => {
+    const view = await mountPanel({ selection: ['row'] })
+    expect(isOn(requireControl(view.panel, 'Wrap'))).toBe(false)
+
+    await press(requireControl(view.panel, 'Wrap'))
+
+    expect(writesOf(view.ctx, 'flex-wrap')).toEqual([{ target: 'row', prop: 'flex-wrap', value: 'wrap' }])
+  })
+
+  it('shows an authored wrap as on and turning it off stops wrapping', async () => {
+    const view = await mountPanel(WRAPPING_ROW)
+    expect(isOn(requireControl(view.panel, 'Wrap'))).toBe(true)
+
+    await press(requireControl(view.panel, 'Wrap'))
+
+    const [write, ...others] = writesOf(view.ctx, 'flex-wrap')
+    expect(others).toEqual([])
+    expect(write?.target).toBe('row')
+    expect([null, 'nowrap']).toContain(write?.value)
+  })
+
+  it('shows row-gap, column-gap and align-content only once the row wraps', async () => {
+    const single = await mountPanel({ selection: ['row'] })
+    expect(['row-gap', 'column-gap', 'align-content'].filter((prop) => fieldShown(single.panel, prop))).toEqual([])
+    act(() => mounted!.unmount())
+    mounted = null
+
+    const wrapping = await mountPanel(WRAPPING_ROW)
+    expect(['row-gap', 'column-gap', 'align-content'].filter((prop) => fieldShown(wrapping.panel, prop))).toEqual(['row-gap', 'column-gap', 'align-content'])
+    expect(inputOf(wrapping.panel, 'row-gap').value).toBe('24px')
+  })
+
+  it('edits row-gap and column-gap as their own properties', async () => {
+    const view = await mountPanel(WRAPPING_ROW)
+
+    await commit(inputOf(view.panel, 'row-gap'), '40')
+    await commit(inputOf(view.panel, 'column-gap'), '12px')
+
+    expect(writes(view.ctx)).toEqual([
+      { target: 'row', prop: 'row-gap', value: '40px' },
+      { target: 'row', prop: 'column-gap', value: '12px' },
+    ])
+  })
+
+  it('writes align-content from its menu', async () => {
+    const view = await mountPanel(WRAPPING_ROW)
+    const menu = view.panel.querySelector<HTMLSelectElement>('[data-prop="align-content"] select')
+    if (!menu) throw new Error('no align-content menu')
+
+    act(() => {
+      menu.value = 'space-between'
+      menu.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    await settle()
+
+    expect(writesOf(view.ctx, 'align-content')).toEqual([{ target: 'row', prop: 'align-content', value: 'space-between' }])
+  })
+})
+
+describe('Layout section: spacing mode', () => {
+  it.each([
+    ['Space between', 'space-between'],
+    ['Space evenly', 'space-evenly'],
+    ['Space around', 'space-around'],
+  ])('%s writes justify-content: %s', async (name, value) => {
     const view = await mountPanel({ selection: ['row'] })
 
-    await press(requireControl(view.panel, 'Space between'))
+    await choose(requireSelect(view.panel, 'Spacing mode'), name)
 
-    expect(writesOf(view.ctx, 'justify-content')).toEqual([{ target: 'row', prop: 'justify-content', value: 'space-between' }])
+    expect(writesOf(view.ctx, 'justify-content')).toEqual([{ target: 'row', prop: 'justify-content', value }])
+  })
+
+  it.each([
+    ['space-evenly', 'Space evenly'],
+    ['space-around', 'Space around'],
+    ['space-between', 'Space between'],
+    ['center', 'Packed'],
+  ])('reads an authored justify-content: %s as %s', async (value, name) => {
+    const view = await mountPanel({
+      selection: ['row'],
+      styles: { row: inline(['display', 'flex'], ['justify-content', value]) },
+      computed: { row: { 'justify-content': value } },
+    })
+
+    expect(shownOption(requireSelect(view.panel, 'Spacing mode'))).toBe(name)
+  })
+
+  it('Packed leaves a space-* distribution for packing at the start', async () => {
+    const view = await mountPanel({
+      selection: ['row'],
+      styles: { row: inline(['display', 'flex'], ['justify-content', 'space-between']) },
+      computed: { row: { 'justify-content': 'space-between' } },
+    })
+
+    await choose(requireSelect(view.panel, 'Spacing mode'), 'Packed')
+
+    const [write, ...others] = writesOf(view.ctx, 'justify-content')
+    expect(others).toEqual([])
+    expect(write?.target).toBe('row')
+    expect([null, 'flex-start']).toContain(write?.value)
+  })
+
+  it('is offered in a column too', async () => {
+    const view = await mountPanel({ selection: ['column'] })
+
+    await choose(requireSelect(view.panel, 'Spacing mode'), 'Space around')
+
+    expect(writesOf(view.ctx, 'justify-content')).toEqual([{ target: 'column', prop: 'justify-content', value: 'space-around' }])
+  })
+})
+
+describe('Layout section: baseline alignment', () => {
+  it('aligns a row to the text baseline with align-items: baseline', async () => {
+    const view = await mountPanel({ selection: ['row'] })
+
+    await press(requireControl(view.panel, 'Baseline'))
+
+    expect(writesOf(view.ctx, 'align-items')).toEqual([{ target: 'row', prop: 'align-items', value: 'baseline' }])
+  })
+
+  it('shows an authored baseline as its own state, outside the nine cells and not as stretch', async () => {
+    const view = await mountPanel({
+      selection: ['row'],
+      styles: { row: inline(['display', 'flex'], ['align-items', 'baseline']) },
+      computed: { row: { 'align-items': 'baseline' } },
+    })
+
+    expect(isOn(requireControl(view.panel, 'Baseline'))).toBe(true)
+    expect(isOn(requireControl(view.panel, 'Stretch'))).toBe(false)
+    expect(checkedCells(view.panel)).toEqual([])
+  })
+
+  it('is not offered in a column', async () => {
+    const view = await mountPanel({ selection: ['column'] })
+    const baseline = control(view.panel, 'Baseline')
+
+    if (baseline) await press(baseline)
+
+    expect(baseline === null || baseline.hasAttribute('disabled')).toBe(true)
+    expect(writesOf(view.ctx, 'align-items')).toEqual([])
+  })
+})
+
+describe('Layout section: one action per command', () => {
+  function actionIds(ctx: Context): Array<string | undefined> {
+    return ctx.apply.mock.calls.map(([, actionId]) => actionId)
+  }
+
+  it('sends every write of a sizing change without waiting for the first ack', async () => {
+    const view = await mountPanel({ selection: ['a'] })
+    view.ctx.apply.mockImplementation(() => new Promise(() => {}))
+
+    await press(sizing(view.panel, 'Width', 'Fill'))
+
+    expect(writes(view.ctx)).toEqual(
+      expect.arrayContaining([
+        { target: 'a', prop: 'flex', value: '1 1 0' },
+        { target: 'a', prop: 'min-width', value: '0' },
+      ]),
+    )
+  })
+
+  it('sends the writes of one sizing change under one action id', async () => {
+    const view = await mountPanel({ selection: ['a'] })
+
+    await press(sizing(view.panel, 'Width', 'Fill'))
+
+    const ids = actionIds(view.ctx)
+    expect(ids.length).toBeGreaterThan(1)
+    expect(ids[0]).toEqual(expect.any(String))
+    expect(new Set(ids).size).toBe(1)
+  })
+
+  it('gives two sizing changes two action ids', async () => {
+    const view = await mountPanel({ selection: ['b'] })
+
+    await press(sizing(view.panel, 'Width', 'Fixed'))
+    const first = new Set(actionIds(view.ctx))
+    view.ctx.apply.mockClear()
+    await press(sizing(view.panel, 'Height', 'Fill'))
+    const second = new Set(actionIds(view.ctx))
+
+    expect(first.size).toBe(1)
+    expect(second.size).toBe(1)
+    expect([...first][0]).toEqual(expect.any(String))
+    expect([...second][0]).toEqual(expect.any(String))
+    expect([...first][0]).not.toBe([...second][0])
+  })
+
+  it('sends ignore auto layout and its parent fix as one action', async () => {
+    const view = await mountPanel({ selection: ['a'], styles: { badge: [] }, computed: { badge: { position: 'static' } } })
+    view.ctx.apply.mockImplementation(() => new Promise(() => {}))
+
+    await press(requireControl(view.panel, 'Ignore auto layout'))
+
+    expect(writes(view.ctx)).toEqual([
+      { target: 'a', prop: 'position', value: 'absolute' },
+      { target: 'row', prop: 'position', value: 'relative' },
+    ])
+    const ids = actionIds(view.ctx)
+    expect(ids[0]).toEqual(expect.any(String))
+    expect(new Set(ids).size).toBe(1)
   })
 })
 

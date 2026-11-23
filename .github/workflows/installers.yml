@@ -10,6 +10,7 @@ on:
       - 'electron-builder.yml'
       - 'scripts/build-app.mjs'
       - 'scripts/smoke-app.mjs'
+      - 'scripts/electron-suite.mjs'
       - '.github/workflows/installers.yml'
 
 jobs:
@@ -45,6 +46,9 @@ jobs:
       - name: Launch the packaged app on it
         shell: bash
         run: node scripts/smoke-app.mjs "${{ matrix.exe }}" "$PWD/projects/sample" app-${{ matrix.os }}.png
+      - name: Drive the packaged app through its Edit menu
+        shell: bash
+        run: node scripts/electron-suite.mjs "${{ matrix.exe }}" "$PWD/projects/sample"
       - uses: actions/upload-artifact@v4
         with:
           name: installer-${{ matrix.os }}

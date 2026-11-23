@@ -1,3 +1,4 @@
+import type { Rect } from '../../shared/protocol'
 import type { EdId, TemplateNode } from '../../shared/types'
 
 export interface ClickModifiers {
@@ -5,6 +6,14 @@ export interface ClickModifiers {
   readonly mod?: boolean
   readonly shift?: boolean
 }
+
+/** A child a marquee can select, at its first rendered rect. */
+export interface MarqueeCandidate {
+  readonly edId: EdId
+  readonly rect: Rect
+}
+
+const INLINE_LEVEL_DISPLAYS = ['inline', 'inline-block', 'contents']
 
 export function findNode(tree: TemplateNode, edId: EdId): TemplateNode | null {
   if (tree.edId === edId) return tree
@@ -101,4 +110,24 @@ export function siblingSelection(tree: TemplateNode, selection: readonly EdId[],
       return siblings[(index + step + siblings.length) % siblings.length]?.edId ?? edId
     }),
   )
+}
+
+/** The artboard root always marquees; any other element only when a child of it lays out as a block. */
+export function isMarqueeContainer(tree: TemplateNode, edId: EdId, childDisplays: readonly string[]): boolean {
+  return edId === tree.edId || childDisplays.some((display) => !INLINE_LEVEL_DISPLAYS.includes(display))
+}
+
+function intersects(a: Rect, b: Rect): boolean {
+  return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
+}
+
+/** The candidates `area` touches, replacing the selection at press, or added to it with Shift. */
+export function marqueeSelection(
+  selection: readonly EdId[],
+  candidates: readonly MarqueeCandidate[],
+  area: Rect,
+  { shift = false }: ClickModifiers = {},
+): EdId[] {
+  const hit = candidates.filter((candidate) => intersects(candidate.rect, area)).map((candidate) => candidate.edId)
+  return shift ? unique([...selection, ...hit]) : hit
 }

@@ -69,3 +69,25 @@ Records what each wave built and where it departed from the plan.
   deviated: the board's own width is read from data-board-width on BoardSwitcher tabs (boardWidthOf), since neither BoardIndex nor EditorContext carries it.
   deviated: the 'Edits apply to all widths' bar floats over the canvas with fixed positioning, not as a row above the board.
   deviated: outline mode is a module-level flag in view.actions.ts, not editor state.
+
+## Wave 6 (2026-11-23)
+- t9 M8 select all / invert and the Electron Edit menu — select.all (Mod+A) and select.invert (Mod+Shift+A) pick unlocked, visible element children of the last-selected element's parent (or the artboard root). A select-all overlay slot replays Mod-A through the registry for the Electron menu's cancelable editor:select-all event; src/desktop/menu.ts holds menuTemplate with a Select All item replacing the role, and scripts/electron-suite.mjs runs in installers.yml after the smoke step.
+  deviated: the slot replays a Mod-A chord through registry.handleKeyDown instead of calling the action, so the registry's text-entry, scope and text-editing gates decide.
+  deviated: only children with kind 'element' are selectable; sc-for, sc-if and dc-import children are excluded.
+  deviated: scripts/electron-suite.mjs was not run locally; its fixture assumptions (hero h1/p/img siblings, role-item click paste adding a second h1) are unverified.
+- t11 M9 marquee select — marquee.tool (priority 0) claims every press, hit-tests, draws a marquee over container backgrounds and hands leaf presses to the move tool; selection.ts gains isMarqueeContainer, marqueeSelection and MarqueeCandidate.
+  deviated: container test and candidate rects are read per child, not as one batched probe read.
+  deviated: a childless hit is decided without a display read so a click selects as soon as the hit lands.
+  deviated: Shift is taken from the press; a candidate's first rect is its rect; locked or hidden children are not filtered from candidates.
+- t12 M9 resize keeps units, takes modifiers and snaps edges — resize writes width and height in the authored unit via units.ts toAuthoredUnit, snapEdges snaps only moving edges, Shift keeps ratio, Alt centres (absolute or fixed only), and all writes share one action id.
+  deviated: authored keywords such as auto are written as px without a toast; the warning toast is for calc() and viewport units.
+  deviated: guideMark is copied into resize.tool since move.tool keeps it private.
+  deviated: rem converts with the artboard root's computed font-size, because probe reads are keyed by edId.
+  deviated: Shift+Alt scales around the centre on both axes, insets are written only in Alt mode, and a snap mirrors the opposite edge under Alt.
+- t17 M10 auto layout: wrap, spacing modes, baseline, Shift-A / Alt-Shift-A — layout section gains Wrap, Row and Column gap, align-content, a Spacing mode select and Baseline; layout.add-auto-layout (Shift+A) infers a flex container from the children and layout.remove-auto-layout (Alt+Shift+A) removes the authored layout properties. applyWrites is now synchronous and takes an action id.
+  deviated: the Space between toggle is replaced by the Spacing mode menu, and Baseline takes its slot.
+  deviated: Shift-A always writes flex-direction and ignores absolute or fixed children.
+  deviated: Alt-Shift-A removes only inline-style declarations, also removes the v2 wrap properties, and uses scope ['canvas','layers'] rather than 'global'.
+- t20 M11 read-only Code tab — PropertiesPanel gains Design and Code tabs; CodeTab shows the inline style and matched rules with file:line, state or pseudo-element label, media condition and exact source, each with a copy button, via code-rules.ts codeBlocksOf and the probe's matches read.
+  deviated: for a multi-layer selection the Code tab shows the first selected element only.
+  deviated: the inline block's button reads "Copy declarations", and the copy buttons are text buttons since the icon set has none.
