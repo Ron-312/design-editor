@@ -21,3 +21,11 @@ Records what each wave built and where it departed from the plan.
   deviated: a `restored` message reloads the frame only when `reload` is set; the ack-vs-live check for undo previews has to be added by the task that wires undo previews.
   deviated: `rejected` also reloads the frame when the op had previewed values.
   deviated: during a push lock, sendOp is refused rather than queued, since a push can rewrite files and queued ids would go stale.
+
+## Wave 3 (2026-11-23)
+- t3 M1 SourceIndex: byte-exact parse, ids, template tree, style index — bytes.ts (decode/encode, EOL, lineLocator), source-index.ts (stable edIds bound by start offset, locate, flags), template-tree.ts, style-index.ts (inline and helmet rules, hole-safe PostCSS), and shared/paths.ts.
+  deviated: RuleIds are minted fresh on every indexFile call; only edIds carry over between re-indexes.
+  deviated: a helmet with several style blocks is one rule sequence in source order when findRule counts the order.
+  deviated: textEditable is false for script and style even with a single text node.
+  deviated: readOnly 'artboard-root' is not set on the x-dc root row; the plan does not tie it to the SourceIndex.
+- t11 M1 canvas: viewport, shield, overlay, selection, board switcher — CanvasView.tsx, viewport.ts, overlay.ts, selection.ts in src/ui/canvas/.
