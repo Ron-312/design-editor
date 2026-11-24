@@ -26,6 +26,8 @@ interface TextEdit {
 
 const ID_ATTR = 'data-ed-id'
 const TEMPLATE_ROOT = 'x-dc'
+// The runtime's own test for its first draw: a template element inside the root it renders into.
+const RUNTIME_DRAWN = '#dc-root [data-dc-tpl]'
 const GOOGLE_FONTS_CSS2 = 'link[rel~="stylesheet"][href^="https://fonts.googleapis.com/css2"]'
 const EMPTY_RECT: Rect = { x: 0, y: 0, width: 0, height: 0 }
 // `matches()` never sees a state as active and throws on a pseudo-element, so both are matched as if absent.
@@ -277,6 +279,16 @@ function watchFonts(): void {
   })
 }
 
+/** A draw before the handshake needs no message: the editor's first reads, on `ready`, already see it. */
+function watchRuntimeDraw(): void {
+  const observer = new MutationObserver(() => {
+    if (!document.querySelector(RUNTIME_DRAWN)) return
+    observer.disconnect()
+    post({ type: 'runtimeDrawn' })
+  })
+  observer.observe(document, { subtree: true, childList: true })
+}
+
 function isEditorHandshake(event: MessageEvent): boolean {
   const data = event.data as { type?: unknown } | null
   return port === null && editorWindow !== window && event.source === editorWindow && data?.type === PROBE_HANDSHAKE && event.ports.length === 1
@@ -296,3 +308,4 @@ function acceptHandshake(event: Event): void {
 listen.call(window, 'message', acceptHandshake)
 listen.call(window, 'scroll', () => postScroll('scrolled'), { passive: true })
 watchFonts()
+watchRuntimeDraw()

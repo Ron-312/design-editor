@@ -39,15 +39,18 @@ node tools/edsync.mjs ingest --remote-dir "<snapshot folder>" --slug <slug>
    (true when the artboards load `./support.js`).
 
 3. **Fetch the assets.** Read every id in `blobIds` with the Artifact tool's `read` and `paths` on the
-   canvas, and, when `supportJs` is true, `support.js` from the canvas's type URL. Leave them in the
-   default scratchpad folder as before. Then run:
+   canvas. When `supportJs` is true, also read the canvas's `index.html`: its
+   `<meta name="dc-runtime-file" content="…">` names the runtime the host serves as `./support.js`
+   (`artifact-type/dc-runtime.js` so far), and its `<meta name="mega-build-stamp" content="…">` is the
+   release. Read that runtime file from the canvas and put a copy named `support.js` in a folder of its
+   own with the fetched blobs. Leave everything in the default scratchpad folder as before. Then run:
 
 ```
 node tools/edsync.mjs cache --slug <slug> --from "<fetched folder>" --release <type release>
 ```
 
-   `<type release>` is the version of the Design type the canvas was read from, as recorded in
-   `plans/v1/research/06-project-format.md`.
+   `<type release>` is `design-` and the first 8 characters of the build stamp, such as
+   `design-f4676d0f` (see `plans/v1/research/06-project-format.md`).
 
    The JSON it prints has `missing`: ids that fetched stylesheets or scripts reference and the cache
    still lacks. While `missing` is not empty, read those ids into the scratchpad the same way and

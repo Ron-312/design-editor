@@ -70,6 +70,8 @@ function isProbeToEditor(value: unknown): value is ProbeToEditor {
       return isString(value.session) && isString(value.reason) && TEXT_CANCEL_REASONS.includes(value.reason)
     case 'fontsFailed':
       return isArrayOf(value.families, isString)
+    case 'runtimeDrawn':
+      return true
     default:
       return false
   }

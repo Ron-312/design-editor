@@ -6,16 +6,29 @@ Status: written 2026-11-23 from the Design type's documented format (SKILL.md, `
 
 Per Ron's adjustment (2), M0 runs as a stand-in: no live check has been run against Claude Design or the Artifact tool, and Test Site was neither pulled nor copied. Each live check below is not run and stays open until a live M0 session does it:
 
-- Pull of one real canvas (file layout, `/_blob/` ids, the `support.js` release).
+- ~~Pull of one real canvas (file layout, `/_blob/` ids, the `support.js` release).~~ Done 2026-11-24, see below.
 - Publish → read round-trip, byte-exact or wrapped.
 - Partial publish: whether one refused file rejects the whole call.
 - Save footprint of the built-in editor (lines touched by a one-property Save).
 - Theme menu write: what picking a token writes into the artboard.
 - Version history: what Artifact versions show, and whether one can be diffed or restored.
 - Design system location after 2026-12-14 and its API.
-- Whether `support.js` waits for a host-page postMessage, and whether it runs under the sandboxed serving layer.
-- Whether `data-ed-id` survives the real runtime's template expansion.
+- ~~Whether `support.js` waits for a host-page postMessage, and whether it runs under the sandboxed serving layer.~~ Done 2026-11-24, see below.
+- ~~Whether `data-ed-id` survives the real runtime's template expansion.~~ Done 2026-11-24, see below.
 - What the built-in canvas editor already does (snapping, Alt-measure, gap/padding handles, Hug / Fill / Fixed, token binding).
+
+## Live pull, 2026-11-24
+
+The first live pull, of Ron's Test Site canvas (read only; nothing was published), settled these:
+
+- **Pull of one real canvas.** The canvas lists `project/Main.dc.html` and `project/canvas.json` next to the Design type's own files under `artifact-type/`. The artboard matches the fixtured shape: `./support.js` in `<head>`, one `<x-dc>` with a `<helmet>`, inline styles, `{{accent}}` holes and one `data-dc-script` with `data-props` (including `$preview`). It uses no `/_blob/` assets. The pulled bytes hash the same as the remote.
+- **The `support.js` release.** The canvas's `index.html` names the runtime in `<meta name="dc-runtime-file" content="artifact-type/dc-runtime.js">`: the host serves that file as every artboard's `./support.js`. `/design-pull` reads it from the canvas and caches it under the release `design-<mega-build-stamp prefix>` (`design-f4676d0f` on this pull).
+- **`support.js` under the sandboxed serving layer.** The real runtime runs there and needs no host message to draw. It is a React app: it removes `<x-dc>`, renders into `#dc-root > .sc-host` about 350 ms after `DOMContentLoaded` (its own "drawn" test is `#dc-root [data-dc-tpl]`), and injects `html,body{height:100%}#dc-root,#dc-root>.sc-host{height:100%}`. It posts `__dc_booted`, `__dc_render_errors` and `__dc_design_mode` to the parent and listens for `__dc_theme` and `__dc_probe`. The editor ignores all of them.
+- **`data-ed-id` survives the real runtime's expansion.** Selection, the layers panel and edits work on the rendered page, and a launch with no input leaves the file unchanged.
+- **`canvas.json` as Claude Design writes it.** `{"v":3, "title", "launch", "pages":[], "boards":{…}, "order", "notes":{}, "designSystems":[]}`. A board entry adds `title` and `"expand":"fill"`, which marks a PAGE: on Claude Design's canvas it is a `w`×`h` frame the page scrolls inside (here 1440×1720 for a 2048 px page). `pages` and `designSystems` are arrays, not the fixture's board list and record.
+- **Editor change from this pull.** The canvas measured the frame height before the runtime had drawn, and never for a board at its own width, so a `fill` page showed only its first 1720 px. A `fill` board is now shown at its full page height. The probe tells the editor when the runtime first draws (`runtimeDrawn`), and the canvas measures again. `canvas.json` is not changed, so Claude Design still shows its own frame.
+
+Still open: everything else in the list above (publish round-trip, partial publish, save footprint, theme menu, version history, design systems, the built-in editor's features).
 
 ## Format as fixtured
 

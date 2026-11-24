@@ -17,6 +17,7 @@ describe('parseProbeToEditor', () => {
     { type: 'textCommit', session: 's1', edId: edId('e1'), text: '' },
     { type: 'textCancelled', session: 's1', reason: 'escape' },
     { type: 'fontsFailed', families: ['Inter'] },
+    { type: 'runtimeDrawn' },
     {
       type: 'readResult',
       id: 7,

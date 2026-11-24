@@ -5,7 +5,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import { gitOutput } from '../../src/core/git'
-import { diffAgainstSynced, loadTokens, readEditorState, writeEditorState } from '../../src/server/editor-services'
+import { diffAgainstSynced, loadTokens, readCanvasLayout, readEditorState, writeEditorState } from '../../src/server/editor-services'
 import type { EditorState } from '../../src/shared/protocol'
 import type { EdId, ProjectPath } from '../../src/shared/types'
 
@@ -68,6 +68,31 @@ function filesUnder(dir: string): string[] {
 function snapshotOf(dir: string): Map<string, string> {
   return new Map(filesUnder(dir).map((file) => [file, readFileSync(file).toString('base64')]))
 }
+
+describe('readCanvasLayout', () => {
+  it('marks a board with "expand": "fill" as a fill page, as a live Claude Design canvas.json writes it', async () => {
+    const root = makeProject()
+    writeFileSync(
+      path.join(root, 'project', 'canvas.json'),
+      JSON.stringify({
+        v: 3,
+        title: 'Test Site',
+        pages: [],
+        boards: { 'home.dc.html': { x: 0, y: 0, w: 1440, h: 1720, title: 'Landing page', expand: 'fill' }, 'card.dc.html': { x: 1500, y: 0, w: 360, h: 220 } },
+        order: ['home.dc.html', 'card.dc.html'],
+        notes: {},
+        designSystems: [],
+      }),
+    )
+
+    const layout = await readCanvasLayout(root)
+
+    expect(layout.boards).toEqual([
+      { path: HOME, w: 1440, h: 1720, page: false, fill: true },
+      { path: CARD, w: 360, h: 220, page: false, fill: false },
+    ])
+  })
+})
 
 describe('loadTokens', () => {
   it('reads the design-system tokens from project/ds/*/tokens.json', async () => {
