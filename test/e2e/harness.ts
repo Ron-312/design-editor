@@ -212,6 +212,23 @@ export function computedStyleOf(element: Locator, props: readonly string[]): Pro
 }
 
 /**
+ * An editor element's box once two reads in a row agree. A selection handle can be rendered again between
+ * a check that it is there and a second read, so the read that settles is the one that is returned.
+ */
+export async function settledBoxOf(element: Locator): Promise<{ x: number; y: number; width: number; height: number }> {
+  let last: { x: number; y: number; width: number; height: number } | null = null
+  await expect
+    .poll(async () => {
+      const box = await element.boundingBox()
+      const settled = box !== null && JSON.stringify(box) === JSON.stringify(last)
+      last = box
+      return settled
+    })
+    .toBe(true)
+  return last!
+}
+
+/**
  * The on-page box of an element inside the artboard frame. Edge's `boundingBox()` leaves out the
  * frame's zoom transform, so the box is built from the frame's own box and the element's rect in it.
  */

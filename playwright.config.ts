@@ -2,8 +2,17 @@ import { defineConfig, devices } from '@playwright/test'
 
 const EDITOR_URL = 'http://127.0.0.1:5300'
 
+// Edge shares Chromium's engine, so a pull request runs only the specs that read positions or the clipboard in it.
+const EDGE_SMOKE = ['m3-manipulation.spec.ts', 'm8-clipboard.spec.ts']
+
 const edgeOnWindows = process.platform === 'win32'
-  ? [{ name: 'msedge', use: { ...devices['Desktop Edge'], channel: 'msedge' } }]
+  ? [
+      {
+        name: 'msedge',
+        use: { ...devices['Desktop Edge'], channel: 'msedge' },
+        ...(process.env.E2E_EDGE === 'smoke' ? { testMatch: EDGE_SMOKE.map((spec) => `**/${spec}`) } : {}),
+      },
+    ]
   : []
 
 export default defineConfig({

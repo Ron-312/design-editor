@@ -10,6 +10,7 @@ import {
   layerRowOf,
   openEditor,
   screenBoxOf,
+  settledBoxOf,
   selectOnCanvas,
   test,
   type E2eProject,
@@ -73,8 +74,7 @@ async function grab(page: Page, at: Point): Promise<Drag> {
 
 async function grabHandle(page: Page, name: string): Promise<Drag> {
   const handle = page.locator(`[data-resize-handle="${name}"]`)
-  await expect.poll(() => handle.boundingBox()).not.toBeNull()
-  const box = (await handle.boundingBox())!
+  const box = await settledBoxOf(handle)
   return grab(page, { x: box.x + box.width / 2, y: box.y + box.height / 2 })
 }
 
