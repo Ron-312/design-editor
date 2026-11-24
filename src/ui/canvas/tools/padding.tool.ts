@@ -104,7 +104,7 @@ export const tool: CanvasTool = {
     if (!box || box.edId !== editableSelection(ctx)) return false
     const side = sideAt(box, pointer)
     if (!side) return false
-    drag = { box, side, sides: sidesMoved(side, pointer), from: { x: pointer.boardX, y: pointer.boardY }, actionId: ctx.beginAction() }
+    drag = { box, side, sides: sidesMoved(side, pointer), from: { x: pointer.boardX, y: pointer.boardY }, actionId: ctx.beginAction({ held: true }) }
     return true
   },
   onPointerMove() {

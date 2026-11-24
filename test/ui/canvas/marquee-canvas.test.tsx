@@ -143,6 +143,7 @@ const homeComputed: Record<string, Readonly<Record<string, string>>> = {
 
 const at = {
   hero: { x: 100, y: 80 },
+  title1: { x: 120, y: 220 },
   rowPadding: { x: 50, y: 170 },
   rowPaddingAboveCol2: { x: 370, y: 170 },
   rowFarCorner: { x: 1020, y: 300 },
@@ -424,6 +425,22 @@ describe('marquee select', () => {
     expect(selectionOf(view)).toEqual(ids('row'))
   })
 
+  it('selects the smallest element on a click, and the enclosing one with Cmd', async () => {
+    const view = await openHome()
+
+    await clickAt(view, at.title1, { metaKey: true })
+    expect(selectionOf(view)).toEqual(ids('col1'))
+
+    await clickAt(view, at.title1, { metaKey: true })
+    expect(selectionOf(view)).toEqual(ids('row'))
+
+    await clickAt(view, at.title1)
+    expect(selectionOf(view)).toEqual(ids('title1'))
+
+    await clickAt(view, at.rowPadding, { metaKey: true })
+    expect(selectionOf(view)).toEqual(ids('row'))
+  })
+
   it('adds to the selection as it was at press with Shift', async () => {
     const view = await openHome()
     await clickAt(view, at.hero)
@@ -490,6 +507,31 @@ describe('a drag on a leaf', () => {
 
     expect(setDecls(view)).toEqual(['left: 940px', 'top: 70px'])
     expect(selectionOf(view)).toEqual(ids('badge'))
+  })
+
+  it('selects the smallest element under the press, not the element around it', async () => {
+    const view = await openHome()
+
+    await dragAt(view, at.title1, [{ x: 160, y: 250 }])
+
+    expect(selectionOf(view)).toEqual(ids('title1'))
+    expect(marqueeShown(view)).toBe(false)
+  })
+
+  it('drags the selected element by what is inside it, where a click would select the inside', async () => {
+    const view = await openHome()
+    act(() => view.store.select(ids('col1')))
+    await settle()
+
+    await dragAt(view, at.title1, [{ x: 900, y: 250 }])
+
+    expect(selectionOf(view)).toEqual(ids('col1'))
+    expect(view.ws.sendOp.mock.calls.map(([op]) => op)).toEqual([
+      expect.objectContaining({ kind: 'moveNode', target: ids('col1'), payload: { parent: edId('row'), before: null } }),
+    ])
+
+    await clickAt(view, at.title1)
+    expect(selectionOf(view)).toEqual(ids('title1'))
   })
 
   it('moves a selected element, since the move tool keeps priority over the marquee', async () => {

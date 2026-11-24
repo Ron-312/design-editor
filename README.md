@@ -69,7 +69,8 @@ To run the editor on an already-pulled project yourself: `npm start -- --project
 ## What it does
 
 - **Canvas that feels like Figma.**
-  - Click picks the top-level element, double-click goes deeper, Cmd/Ctrl-click picks the deepest element.
+  - Click picks the smallest layer under the pointer, Cmd/Ctrl-click picks the layer around it, double-click
+    edits selected text in place.
   - Drag a child of a flex or grid layout to reorder it; drag an absolutely positioned element to move it.
   - 8 resize handles (they write px), edge and centre snapping with guides while moving, Alt-hover red
     distance lines, zoom and pan.

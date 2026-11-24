@@ -478,6 +478,7 @@ describe('held arrow steps', () => {
     await settle()
 
     expect(view.ctx.beginAction).toHaveBeenCalledTimes(1)
+    expect(view.ctx.beginAction).toHaveBeenCalledWith({ held: true })
     expect(writtenValues(view)).toEqual(['15px', '16px', '17px'])
     expect(actionIds(view)).toEqual(['action-1', 'action-1', 'action-1'])
   })

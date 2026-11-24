@@ -11,7 +11,7 @@ import { decodeSource } from '../../../src/server/source/bytes'
 import { SourceIndex, type IndexedFile } from '../../../src/server/source/source-index'
 import { toNativePath } from '../../../src/shared/paths'
 import type { ServerMessage } from '../../../src/shared/protocol'
-import type { EdId, EditOp, EditPayloads, ProjectPath, SourceRange } from '../../../src/shared/types'
+import { mintHeldActionId, type EdId, type EditOp, type EditPayloads, type ProjectPath, type SourceRange } from '../../../src/shared/types'
 
 vi.mock('../../../src/core/atomic-write', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../src/core/atomic-write')>()
@@ -86,6 +86,8 @@ function op<K extends keyof EditPayloads>(kind: K, target: readonly EdId[], payl
 const setDecl = (target: EdId, prop: string, value: string) => op('setDecl', [target], { prop, value })
 
 /** Every op one user action sends carries that action's id. */
+const HELD = mintHeldActionId()
+
 const inAction = (actionId: string, edit: EditOp): EditOp => ({ ...edit, actionId })
 
 function submit(writer: Writer, edit: EditOp): string {
@@ -143,7 +145,7 @@ function writtenFiles(): string[] {
   return vi.mocked(atomicWrite).mock.calls.map(([file]) => file)
 }
 
-describe('debounced flush', () => {
+describe('when a flush happens', () => {
   it('writes nothing for a session with no ops', async () => {
     const { writer, nativeOf } = await openSession({ 'home.dc.html': HOME_TEXT, 'card.dc.html': CARD_TEXT })
     await writer.flush()
@@ -153,9 +155,19 @@ describe('debounced flush', () => {
     expect(readFileSync(nativeOf(CARD), 'utf8')).toBe(CARD_TEXT)
   })
 
-  it('waits 300 ms after an op before it writes', async () => {
+  it('writes a command at once, without waiting for more of it', async () => {
     const { writer, messages, current, diskText } = await openSession({ 'home.dc.html': HOME_TEXT })
-    const opId = submit(writer, setDecl(findId(current(HOME), /^<h1/), 'font-size', '56px'))
+    const sentAt = performance.now()
+    const opId = submit(writer, inAction('fill', setDecl(findId(current(HOME), /^<h1/), 'font-size', '56px')))
+    await ackFor(messages, opId)
+
+    expect(performance.now() - sentAt).toBeLessThan(250)
+    expect(diskText(HOME)).toBe(replaceOnce(HOME_TEXT, H1_STYLE, 'style="margin: 0; font-size: 56px"'))
+  })
+
+  it('waits 300 ms after the last op of a held action before it writes', async () => {
+    const { writer, messages, current, diskText } = await openSession({ 'home.dc.html': HOME_TEXT })
+    const opId = submit(writer, inAction(HELD, setDecl(findId(current(HOME), /^<h1/), 'font-size', '56px')))
     await sleep(200)
     expect(atomicWrite).not.toHaveBeenCalled()
     expect(diskText(HOME)).toBe(HOME_TEXT)
@@ -163,12 +175,22 @@ describe('debounced flush', () => {
     expect(diskText(HOME)).toBe(replaceOnce(HOME_TEXT, H1_STYLE, 'style="margin: 0; font-size: 56px"'))
   })
 
-  it("flushes one action's ops that arrive within 300 ms together, in one write per file", async () => {
+  it('never lets a held op push back a command already due', async () => {
+    const { writer, messages, current } = await openSession({ 'home.dc.html': HOME_TEXT, 'card.dc.html': CARD_TEXT })
+    const command = submit(writer, inAction('fill', setDecl(findId(current(HOME), /^<h1/), 'font-size', '56px')))
+    const sentAt = performance.now()
+    submit(writer, inAction(HELD, setDecl(findId(current(CARD), /^<article/), 'width', '340px')))
+    await ackFor(messages, command)
+
+    expect(performance.now() - sentAt).toBeLessThan(250)
+  })
+
+  it("flushes one held action's ops that arrive within 300 ms together, in one write per file", async () => {
     const { writer, messages, current, diskText, nativeOf } = await openSession({ 'home.dc.html': HOME_TEXT, 'card.dc.html': CARD_TEXT })
-    const first = submit(writer, inAction('align', setDecl(findId(current(HOME), /^<h1/), 'font-size', '56px')))
+    const first = submit(writer, inAction(HELD, setDecl(findId(current(HOME), /^<h1/), 'font-size', '56px')))
     await sleep(100)
-    const second = submit(writer, inAction('align', setDecl(findId(current(HOME), /^<main/), 'color', '#000000')))
-    const third = submit(writer, inAction('align', setDecl(findId(current(CARD), /^<article/), 'width', '340px')))
+    const second = submit(writer, inAction(HELD, setDecl(findId(current(HOME), /^<main/), 'color', '#000000')))
+    const third = submit(writer, inAction(HELD, setDecl(findId(current(CARD), /^<article/), 'width', '340px')))
     await Promise.all([first, second, third].map((opId) => ackFor(messages, opId)))
 
     expect(writtenFiles().sort()).toEqual([nativeOf(CARD), nativeOf(HOME)].sort())
@@ -180,7 +202,7 @@ describe('debounced flush', () => {
   it('writes the last value once when a drag sets one property many times inside the window, and acks every op with it', async () => {
     const { writer, messages, current, diskText } = await openSession({ 'home.dc.html': HOME_TEXT })
     const img = findId(current(HOME), /^<img/)
-    const opIds = [25, 26, 27, 28, 29, 30, 31].map((top) => submit(writer, inAction('drag', setDecl(img, 'top', `${top}px`))))
+    const opIds = [25, 26, 27, 28, 29, 30, 31].map((top) => submit(writer, inAction(HELD, setDecl(img, 'top', `${top}px`))))
     const acks = await Promise.all(opIds.map((opId) => ackFor(messages, opId)))
 
     expect(atomicWrite).toHaveBeenCalledTimes(1)

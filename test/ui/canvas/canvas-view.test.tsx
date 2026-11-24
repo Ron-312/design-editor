@@ -120,7 +120,7 @@ function node(id: string, children: TemplateNode[] = [], extra: Partial<Template
 }
 
 // root > card > (title, button > label); list > item (<sc-for>, text is {{ item.label }});
-// lede is <p> with <strong> and <em> inside; aside.
+// lede is <p> with <strong> and <em> inside; aside; toolbar > icon (svg) > stroke.
 const homeTree = node(
   'root',
   [
@@ -128,6 +128,7 @@ const homeTree = node(
     node('list', [node('item', [], { tag: 'li', readOnly: 'hole' })], { tag: 'ul' }),
     node('lede', [node('strong', [], { tag: 'strong' }), node('em', [], { tag: 'em' })], { tag: 'p' }),
     node('aside'),
+    node('toolbar', [node('icon', [node('stroke', [], { tag: 'path' })], { tag: 'svg' })]),
   ],
   { readOnly: 'artboard-root' },
 )
@@ -149,6 +150,9 @@ const homeScene: Array<readonly [string, Rect]> = [
   ['strong', { x: 800, y: 40, width: 60, height: 40 }],
   ['em', { x: 900, y: 40, width: 60, height: 40 }],
   ['aside', { x: 700, y: 200, width: 300, height: 400 }],
+  ['toolbar', { x: 1040, y: 200, width: 200, height: 60 }],
+  ['icon', { x: 1050, y: 210, width: 40, height: 40 }],
+  ['stroke', { x: 1060, y: 220, width: 20, height: 20 }],
 ]
 
 const at = {
@@ -157,6 +161,8 @@ const at = {
   secondItem: { x: 100, y: 490 },
   ledeText: { x: 720, y: 60 },
   aside: { x: 800, y: 300 },
+  cardPadding: { x: 500, y: 300 },
+  stroke: { x: 1070, y: 230 },
 }
 
 function indexFor(board: ProjectPath, tree: TemplateNode): BoardIndex {
@@ -363,15 +369,18 @@ async function clickAt(view: Mounted, board: { x: number; y: number }, modifiers
   await settle()
 }
 
-async function doubleClickAt(view: Mounted, board: { x: number; y: number }) {
-  await clickAt(view, board, {}, 1)
-  await clickAt(view, board, {}, 2)
-  act(() => dispatchMouse(shieldOf(view.container), 'dblclick', toScreen(view.store, board), { detail: 2 }))
+/** Presses that select the layer enclosing the one under the pointer. */
+const ENCLOSING = { mac: { metaKey: true }, windows: { ctrlKey: true } } as const
+
+async function doubleClickAt(view: Mounted, board: { x: number; y: number }, modifiers: Modifiers = {}) {
+  await clickAt(view, board, modifiers, 1)
+  await clickAt(view, board, modifiers, 2)
+  act(() => dispatchMouse(shieldOf(view.container), 'dblclick', toScreen(view.store, board), { ...modifiers, detail: 2 }))
   await settle()
 }
 
-async function hoverAt(view: Mounted, board: { x: number; y: number }) {
-  act(() => dispatchPointer(shieldOf(view.container), 'pointermove', toScreen(view.store, board), { buttons: 0 }))
+async function hoverAt(view: Mounted, board: { x: number; y: number }, modifiers: Modifiers = {}) {
+  act(() => dispatchPointer(shieldOf(view.container), 'pointermove', toScreen(view.store, board), { ...modifiers, buttons: 0 }))
   await settle()
 }
 
@@ -549,7 +558,7 @@ describe('one artboard at a time', () => {
 
   it('switches boards, swapping the one frame, and keeps selection and zoom per board', async () => {
     const view = await openHome()
-    await clickAt(view, at.label)
+    await clickAt(view, at.title, ENCLOSING.mac)
     await setViewport(view.store, 2, 15, 25)
 
     act(() => openBoard(view.store, view.ws as unknown as WsClient, card))
@@ -686,7 +695,7 @@ describe('zoom and pan', () => {
   it('zooms to the selection with Shift-2', async () => {
     const view = await openHome()
     await setViewport(view.store, 1, 0, 0)
-    await clickAt(view, at.title, { metaKey: true })
+    await clickAt(view, at.title)
 
     await pressKey(view.container, '@', { code: 'Digit2', shiftKey: true })
 
@@ -741,14 +750,14 @@ describe('event shield and Interact', () => {
     await clickAt(view, at.label)
 
     expect(view.store.getState().interact).toBe(false)
-    expect(view.store.getState().view.selection).toEqual(ids('card'))
+    expect(view.store.getState().view.selection).toEqual(ids('label'))
   })
 })
 
 describe('restore after a reload', () => {
   it('restores selection, scroll and zoom by edId', async () => {
     const view = await openHome()
-    await clickAt(view, at.title, { metaKey: true })
+    await clickAt(view, at.title)
     await setViewport(view.store, 1.5, 30, 40)
     act(() => latestProbe().emit({ type: 'scrolled', scrollX: 0, scrollY: 300 }))
     await settle()
@@ -766,7 +775,7 @@ describe('restore after a reload', () => {
 
   it("shows 'page reset to its first state' when a restored edId is no longer rendered", async () => {
     const view = await openHome()
-    await clickAt(view, at.title, { metaKey: true })
+    await clickAt(view, at.title)
 
     probes.scene.rendered = homeScene.filter(([id]) => id !== 'title')
     await loadFrame(view.container)
@@ -776,19 +785,46 @@ describe('restore after a reload', () => {
 })
 
 describe('hover and selection outlines', () => {
-  it('hovers the element a click would select, from the same hit-test', async () => {
+  it('hovers the smallest element under the pointer, the one a click selects from the same hit-test', async () => {
     const view = await openHome()
     await setViewport(view.store, 0.5, 100, 50)
+    const label = sceneRects('label').map((rect) => screenBox(view.store, rect))
 
     await hoverAt(view, at.label)
 
-    expect(view.store.getState().hover).toBe(edId('card'))
-    expectBoxes(outlines(view.container, 'hover'), sceneRects('card').map((rect) => screenBox(view.store, rect)))
+    expect(view.store.getState().hover).toBe(edId('label'))
+    expectBoxes(outlines(view.container, 'hover'), label)
 
     await clickAt(view, at.label)
 
+    expect(view.store.getState().view.selection).toEqual(ids('label'))
+    expectBoxes(outlines(view.container, 'selection'), label)
+  })
+
+  it('hovers the smallest element whatever is selected', async () => {
+    const view = await openHome()
+    await clickAt(view, at.title, ENCLOSING.mac)
     expect(view.store.getState().view.selection).toEqual(ids('card'))
-    expectBoxes(outlines(view.container, 'selection'), sceneRects('card').map((rect) => screenBox(view.store, rect)))
+
+    await hoverAt(view, at.label)
+
+    expect(view.store.getState().hover).toBe(edId('label'))
+  })
+
+  it('hovers and selects an icon as one layer, whichever of its paths is under the pointer', async () => {
+    const view = await openHome()
+    await setViewport(view.store, 0.5, 100, 50)
+    const icon = sceneRects('icon').map((rect) => screenBox(view.store, rect))
+
+    await hoverAt(view, at.stroke)
+
+    expect(view.store.getState().hover).toBe(edId('icon'))
+    expectBoxes(outlines(view.container, 'hover'), icon)
+
+    await clickAt(view, at.stroke)
+
+    expect(view.store.getState().view.selection).toEqual(ids('icon'))
+    expectBoxes(outlines(view.container, 'selection'), icon)
   })
 
   it('outlines every rendered repeat of an <sc-for> element', async () => {
@@ -796,7 +832,7 @@ describe('hover and selection outlines', () => {
     await setViewport(view.store, 0.5, 100, 50)
     const repeats = sceneRects('item').map((rect) => screenBox(view.store, rect))
 
-    await clickAt(view, at.secondItem, { metaKey: true })
+    await clickAt(view, at.secondItem)
 
     expect(view.store.getState().view.selection).toEqual(ids('item'))
     expectBoxes(outlines(view.container, 'selection'), repeats)
@@ -812,56 +848,127 @@ describe('hover and selection outlines', () => {
 
     await hoverAt(view, at.aside)
     expect(outlines(view.container, 'hover')).toEqual([])
+    await hoverAt(view, at.title)
+    expect(view.store.getState().hover).toBe(edId('card'))
 
     await clickAt(view, at.aside)
     expect(view.store.getState().view.selection).toEqual([])
 
-    await clickAt(view, at.title, { metaKey: true })
+    await clickAt(view, at.title)
     expect(view.store.getState().view.selection).toEqual(ids('card'))
   })
 })
 
 describe('selection rules on the canvas', () => {
-  it('click selects the top-level element, double-click goes one level deeper', async () => {
+  it('a click on nested text selects the text, not the card around it', async () => {
     const view = await openHome()
 
     await clickAt(view, at.label)
+    expect(view.store.getState().view.selection).toEqual(ids('label'))
+
+    await clickAt(view, at.title)
+    expect(view.store.getState().view.selection).toEqual(ids('title'))
+
+    await clickAt(view, at.cardPadding)
     expect(view.store.getState().view.selection).toEqual(ids('card'))
+  })
+
+  it('a double-click selects the smallest element when its presses selected nothing', async () => {
+    const claims: CanvasTool = { id: 'claims', priority: 5, onPointerDown: () => true }
+    const view = await openHome({ tools: [claims] })
 
     await doubleClickAt(view, at.label)
+
+    expect(view.store.getState().view.selection).toEqual(ids('label'))
+    expect(latestProbe().beginTextEdit).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['Cmd', 'mac'],
+    ['Ctrl', 'windows'],
+  ] as const)('%s-click selects the enclosing element on %s', async (_key, platform) => {
+    const view = await openHome({ platform })
+
+    await clickAt(view, at.label, ENCLOSING[platform])
     expect(view.store.getState().view.selection).toEqual(ids('button'))
+
+    await clickAt(view, at.label, ENCLOSING[platform])
+    expect(view.store.getState().view.selection).toEqual(ids('card'))
+
+    await clickAt(view, at.label, ENCLOSING[platform])
+    expect(view.store.getState().view.selection).toEqual(ids('card'))
   })
 
-  it('Cmd-click selects the deepest element on macOS', async () => {
-    const view = await openHome({ platform: 'mac' })
+  it.each([
+    ['Cmd', 'mac'],
+    ['Ctrl', 'windows'],
+  ] as const)('%s-hover outlines the element a click with it would pick, on %s', async (_key, platform) => {
+    const view = await openHome({ platform })
 
-    await clickAt(view, at.label, { metaKey: true })
-
-    expect(view.store.getState().view.selection).toEqual(ids('label'))
+    await hoverAt(view, at.label, ENCLOSING[platform])
+    expect(view.store.getState().hover).toBe(edId('button'))
   })
 
-  it('Ctrl-click selects the deepest element on Windows', async () => {
-    const view = await openHome({ platform: 'windows' })
+  it('a Cmd double-click never drops back to the smallest element', async () => {
+    const view = await openHome()
 
-    await clickAt(view, at.label, { ctrlKey: true })
+    await clickAt(view, at.label, ENCLOSING.mac)
+    await doubleClickAt(view, at.label, ENCLOSING.mac)
 
-    expect(view.store.getState().view.selection).toEqual(ids('label'))
+    expect(latestProbe().beginTextEdit).not.toHaveBeenCalled()
+    expect(view.store.getState().view.selection).not.toEqual(ids('label'))
   })
 
-  it('Shift-click adds and removes', async () => {
+  it.each(['img', 'svg'] as const)('a double-click on an <%s> edits no text', async (tag) => {
+    const view = await openHome()
+    const pictured = { ...homeTree, children: homeTree.children.map((child) => (child.edId === edId('aside') ? { ...child, tag } : child)) }
+    act(() => view.store.setIndex(indexFor(home, pictured)))
+    await settle()
+
+    await doubleClickAt(view, at.aside)
+
+    expect(view.store.getState().view.selection).toEqual(ids('aside'))
+    expect(latestProbe().beginTextEdit).not.toHaveBeenCalled()
+    expect(view.store.getState().toasts).toEqual([])
+  })
+
+  it('Shift-click adds and removes the smallest element', async () => {
     const view = await openHome()
 
     await clickAt(view, at.label)
     await clickAt(view, at.aside, { shiftKey: true })
-    expect(view.store.getState().view.selection).toEqual(ids('card', 'aside'))
+    expect(view.store.getState().view.selection).toEqual(ids('label', 'aside'))
 
     await clickAt(view, at.title, { shiftKey: true })
+    expect(view.store.getState().view.selection).toEqual(ids('label', 'aside', 'title'))
+
+    await clickAt(view, at.label, { shiftKey: true })
+    expect(view.store.getState().view.selection).toEqual(ids('aside', 'title'))
+  })
+
+  it('Shift-click inside a selected element keeps it, since a selection never holds an element and its ancestor', async () => {
+    const view = await openHome()
+    await clickAt(view, at.title, ENCLOSING.mac)
+
+    await clickAt(view, at.label, { shiftKey: true })
+
+    expect(view.store.getState().view.selection).toEqual(ids('card'))
+  })
+
+  it('Shift-Cmd-click adds and removes the enclosing element', async () => {
+    const view = await openHome()
+
+    await clickAt(view, at.title, ENCLOSING.mac)
+    await clickAt(view, at.aside, { ...ENCLOSING.mac, shiftKey: true })
+    expect(view.store.getState().view.selection).toEqual(ids('card', 'aside'))
+
+    await clickAt(view, at.title, { ...ENCLOSING.mac, shiftKey: true })
     expect(view.store.getState().view.selection).toEqual(ids('aside'))
   })
 
   it('Enter goes one level deeper and Shift-Enter selects the parent', async () => {
     const view = await openHome()
-    await clickAt(view, at.label)
+    await clickAt(view, at.title, ENCLOSING.mac)
 
     await pressKey(view.container, 'Enter')
     expect(view.store.getState().view.selection).toEqual(ids('title'))
@@ -872,7 +979,7 @@ describe('selection rules on the canvas', () => {
 
   it('Tab and Shift-Tab move between siblings and never leave the canvas', async () => {
     const view = await openHome()
-    await clickAt(view, at.title, { metaKey: true })
+    await clickAt(view, at.title)
 
     const tab = await pressKey(view.container, 'Tab', { code: 'Tab' })
     expect(view.store.getState().view.selection).toEqual(ids('button'))
@@ -898,13 +1005,49 @@ describe('selection rules on the canvas', () => {
 })
 
 describe('text editing entry', () => {
-  it('starts the in-place text edit through the probe on a double-click on a text element', async () => {
+  it('starts the in-place text edit through the probe on a double-click on text that is already selected', async () => {
     const view = await openHome()
-    await clickAt(view, at.title, { metaKey: true })
+    await clickAt(view, at.title)
+    expect(view.store.getState().view.selection).toEqual(ids('title'))
+    expect(latestProbe().beginTextEdit).not.toHaveBeenCalled()
 
-    await doubleClickAt(view, at.title)
+    act(() => dispatchMouse(shieldOf(view.container), 'dblclick', toScreen(view.store, at.title), { detail: 2 }))
+    await settle()
 
-    expect(latestProbe().beginTextEdit).toHaveBeenCalledWith(edId('title'))
+    expect(latestProbe().beginTextEdit).toHaveBeenCalledExactlyOnceWith(edId('title'))
+    expect(view.store.getState().view.selection).toEqual(ids('title'))
+  })
+
+  it('starts the edit on a double-click on nested text with nothing selected, since its first click selects the text', async () => {
+    const view = await openHome()
+
+    await doubleClickAt(view, at.label)
+
+    expect(view.store.getState().view.selection).toEqual(ids('label'))
+    expect(latestProbe().beginTextEdit).toHaveBeenCalledExactlyOnceWith(edId('label'))
+  })
+
+  it('selects the text, and edits nothing, when the double-click lands on one of several selected elements', async () => {
+    const view = await openHome()
+    act(() => view.store.select(ids('title', 'aside')))
+    await settle()
+
+    act(() => dispatchMouse(shieldOf(view.container), 'dblclick', toScreen(view.store, at.title), { detail: 2 }))
+    await settle()
+
+    expect(view.store.getState().view.selection).toEqual(ids('title'))
+    expect(latestProbe().beginTextEdit).not.toHaveBeenCalled()
+  })
+
+  it('edits nothing on a double-click on the empty artboard, and clears the selection', async () => {
+    const view = await openHome()
+    await clickAt(view, at.title)
+
+    act(() => dispatchMouse(shieldOf(view.container), 'dblclick', toScreen(view.store, { x: 20, y: 860 }), { detail: 2 }))
+    await settle()
+
+    expect(view.store.getState().view.selection).toEqual([])
+    expect(latestProbe().beginTextEdit).not.toHaveBeenCalled()
   })
 
   it("shows 'edit in source' for an element with inline children", async () => {
@@ -922,7 +1065,7 @@ describe('text editing entry', () => {
 
   it("shows 'contains a live value; edit in source or Tweaks' for text with a {{hole}}", async () => {
     const view = await openHome()
-    await clickAt(view, at.secondItem, { metaKey: true })
+    await clickAt(view, at.secondItem)
 
     await doubleClickAt(view, at.secondItem)
 
@@ -936,7 +1079,7 @@ describe('rulers', () => {
     const view = await openHome()
     await setViewport(view.store, 0.5, 100, 50)
 
-    await clickAt(view, at.secondItem, { metaKey: true })
+    await clickAt(view, at.secondItem)
 
     const xRange = view.container.querySelector<HTMLElement>('[data-ruler="x"] [data-ruler-range]')
     const yRange = view.container.querySelector<HTMLElement>('[data-ruler="y"] [data-ruler-range]')
@@ -951,7 +1094,7 @@ describe('rulers', () => {
     const view = await openHome()
     await setViewport(view.store, 0.5, 100, 50)
 
-    await clickAt(view, at.secondItem, { metaKey: true })
+    await clickAt(view, at.secondItem)
 
     const numbers = (axis: string) =>
       [...view.container.querySelectorAll(`[data-ruler="${axis}"] span:not(.edge)`)].map((span) => span.textContent)
@@ -1024,7 +1167,7 @@ describe('canvas tools', () => {
     await clickAt(view, at.label)
 
     expect(onPointerUp).toHaveBeenCalled()
-    expect(view.store.getState().view.selection).toEqual(ids('card'))
+    expect(view.store.getState().view.selection).toEqual(ids('label'))
   })
 
   it('falls through to selection when no tool claims the gesture', async () => {
@@ -1034,7 +1177,7 @@ describe('canvas tools', () => {
     await clickAt(view, at.label)
 
     expect(declining.onPointerDown).toHaveBeenCalled()
-    expect(view.store.getState().view.selection).toEqual(ids('card'))
+    expect(view.store.getState().view.selection).toEqual(ids('label'))
   })
 })
 
@@ -1199,7 +1342,7 @@ describe('the view setters on the context the canvas hands the shell', () => {
     act(() => view.context().fit('board'))
     expect(view.store.getState().view.viewport).toEqual(fitted)
 
-    await clickAt(view, at.title, { metaKey: true })
+    await clickAt(view, at.title)
     act(() => view.context().fit('selection'))
     await settle()
 
@@ -1212,7 +1355,7 @@ describe('the view setters on the context the canvas hands the shell', () => {
 describe('keys the canvas keeps for itself', () => {
   it('leaves every pressed shortcut to the action registry', async () => {
     const view = await openHome({ shortcuts: false })
-    await clickAt(view, at.label)
+    await clickAt(view, at.title, ENCLOSING.mac)
     const viewport = view.store.getState().view.viewport
 
     const pressed = [
@@ -1271,7 +1414,7 @@ describe('keys and pointer leaving the canvas', () => {
 describe('reads a reload rejects', () => {
   it('keeps the outlines it had and shows no reset notice', async () => {
     const view = await openHome()
-    await clickAt(view, at.title, { metaKey: true })
+    await clickAt(view, at.title)
     latestProbe().read.mockRejectedValue(new Error('reloaded'))
 
     act(() => latestProbe().emit({ type: 'scrolled', scrollX: 0, scrollY: 10 }))
@@ -1389,7 +1532,7 @@ describe('dragging with the built-in move tool', () => {
 
     expect(view.ws.sendOp).not.toHaveBeenCalled()
     expect(view.container.querySelector('[data-move-ghost]')).toBeNull()
-    expect(view.store.getState().hover).toBe(edId('card'))
+    expect(view.store.getState().hover).toBe(edId('label'))
   })
 
   it('ends the drag with no write when pointer capture is lost, and goes back to hovering', async () => {
@@ -1404,7 +1547,7 @@ describe('dragging with the built-in move tool', () => {
 
     expect(view.ws.sendOp).not.toHaveBeenCalled()
     expect(view.container.querySelector('[data-move-ghost]')).toBeNull()
-    expect(view.store.getState().hover).toBe(edId('card'))
+    expect(view.store.getState().hover).toBe(edId('label'))
   })
 
   it('cancels the drag on Escape, so the release writes nothing', async () => {

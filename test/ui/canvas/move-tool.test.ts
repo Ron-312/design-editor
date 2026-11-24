@@ -495,6 +495,7 @@ describe('the action behind a drag', () => {
     await drag(fake, [150, 100], [180, 115])
 
     expect(fake.ctx.beginAction).toHaveBeenCalledTimes(1)
+    expect(fake.ctx.beginAction).toHaveBeenCalledWith({ held: true })
     expect(fake.actionIds()).toEqual(['action-1', 'action-1'])
   })
 
@@ -576,6 +577,7 @@ describe('moving several absolute elements together', () => {
     await drag(fake, [150, 100], [180, 115])
 
     expect(fake.ctx.beginAction).toHaveBeenCalledTimes(1)
+    expect(fake.ctx.beginAction).toHaveBeenCalledWith({ held: true })
     expect(fake.actionIds()).toEqual(['action-1', 'action-1', 'action-1', 'action-1'])
     expect(fake.undoEntries()).toBe(1)
   })

@@ -2,9 +2,13 @@ import { existsSync, statSync } from 'node:fs'
 import {
   EDITOR_VIEWPORT,
   HOME_BOARD,
+  MOD,
   canvasFrame,
+  clickOnCanvas,
+  edIdOf,
   expect,
   goOffline,
+  layerRowOf,
   mockupTokenNames,
   openEditor,
   openMockup,
@@ -42,6 +46,32 @@ test.describe('M1: open a pulled project', () => {
     await expect(selectedRows).toHaveCount(1)
     await expect(selectedRows).toHaveAttribute('data-layer-id', edId)
     await expect(page.locator('[data-selector-chip]')).toHaveText(/style\s*·\s*home\.dc\.html:22/)
+  })
+
+  test('a click selects the smallest layer, and a Cmd/Ctrl-click the layer around it', async ({ page, editor }) => {
+    await openEditor(page, editor)
+    const title = canvasFrame(page).locator('h1')
+    const selectedRows = page.locator('[role="treeitem"][aria-selected="true"]')
+    const hero = canvasFrame(page).locator('header.hero')
+    const aroundId = await edIdOf(title.locator('xpath=..'))
+    const outerId = await edIdOf(title.locator('xpath=../..'))
+
+    const titleId = await selectOnCanvas(page, title)
+    await expect(selectedRows).toHaveCount(1)
+    await expect(selectedRows).toHaveAttribute('data-layer-id', titleId)
+
+    await clickOnCanvas(page, title, [MOD])
+    await expect(selectedRows).toHaveAttribute('data-layer-id', aroundId)
+    await clickOnCanvas(page, title, [MOD])
+    await expect(selectedRows).toHaveAttribute('data-layer-id', outerId)
+    await expect(selectedRows).toHaveCount(1)
+
+    const heroId = await edIdOf(hero)
+    await layerRowOf(page, heroId).click()
+    await expect(selectedRows).toHaveAttribute('data-layer-id', heroId)
+    await clickOnCanvas(page, canvasFrame(page).locator('section.row > .col').first(), [MOD])
+    await expect(selectedRows).toHaveCount(1)
+    await expect(selectedRows).toHaveAttribute('data-layer-id', await edIdOf(canvasFrame(page).locator('section.row')))
   })
 
   test("shows the offline banner naming the font that did not load", async ({ page, editor }) => {

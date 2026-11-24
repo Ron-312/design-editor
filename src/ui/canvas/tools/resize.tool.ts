@@ -303,7 +303,7 @@ function onPointerDown(ctx: EditorContext, pointer: CanvasPointer): boolean {
   }
   if (ctx.readOnly()) return true
   const fromBoard = { x: pointer.boardX, y: pointer.boardY }
-  const current: Resize = { ctx, edId: selected.edId, actionId: ctx.beginAction(), handle, start: selected.rect, fromBoard, last: null, plan: null }
+  const current: Resize = { ctx, edId: selected.edId, actionId: ctx.beginAction({ held: true }), handle, start: selected.rect, fromBoard, last: null, plan: null }
   resize = current
   readSizingPlan(ctx, selected.edId)
     .then((plan) => {

@@ -14,12 +14,12 @@ Note: plan.md has no "Considered and rejected" section. Scope exclusions come fr
 |---|---|---|---|---|
 | Iframe + overlay + transparent event shield | M1 | Built | `src/ui/canvas/CanvasView.tsx:486`, `:284` · `cv:635` | |
 | Zoom about cursor: Cmd/Ctrl-wheel, trackpad pinch | M1 | Built | `CanvasView.tsx:270-286`, `src/ui/canvas/viewport.ts:42` · `cv:521`, `test/ui/canvas/viewport.test.ts:24` | A plain wheel pans |
-| Space-drag pan; Hand tool (H) | M1 | Built | `CanvasView.tsx:445`, `:437` · `cv:552`, `cv:597`, `e2e/m1:145` | |
-| Shift-1 fit board, Shift-2 zoom to selection | M1 | Built | `CanvasView.tsx:403-411`, `:426-427` · `cv:572`, `cv:619`, `e2e/m1:114` | |
+| Space-drag pan; Hand tool (H) | M1 | Built | `CanvasView.tsx:445`, `:437` · `cv:552`, `cv:597`, `e2e/m1:174` | |
+| Shift-1 fit board, Shift-2 zoom to selection | M1 | Built | `CanvasView.tsx:403-411`, `:426-427` · `cv:572`, `cv:619`, `e2e/m1:143` | |
 | Zoom menu: in/out, 50/100/200% presets | R07 #16 | Built | `src/ui/TopBar.tsx:96`, `:112` · `test/ui/app.test.tsx:438` | Menu only: there are no Shift-0 or Cmd +/- keys (R07 #11) |
 | Board switcher, selection and zoom kept per board | M1 | Built | `TopBar.tsx:69`, `src/ui/store.ts:10`, `:119` · `cv:483`, `test/ui/store.test.ts:44`, `app.test.tsx:423` | |
 | Interact toggle (hold I / Preview switch) + "page reset" notice | M1 | Built | `CanvasView.tsx:450` · `cv:642`, `cv:656`, `cv:700`, `app.test.tsx:452` | |
-| Offline-font banner | Goals | Built | `src/ui/App.tsx:75`, `:166`; `src/probe/probe.ts:227` · `e2e/m1:47` | |
+| Offline-font banner | Goals | Built | `src/ui/App.tsx:75`, `:166`; `src/probe/probe.ts:227` · `e2e/m1:76` | |
 | Rulers showing the selection range | plan Next (R07 #4) | Built | `CanvasView.tsx:511`, `:585` · `cv:868`, `cv:883` | Built early. Guides are not built (Next) |
 | Multi-board side-by-side view | plan Next | Out of scope | — | One artboard is mounted at a time |
 | Pixel grid (Cmd-'), outline view | M7 #7 | Not built | — | |
@@ -28,11 +28,11 @@ Note: plan.md has no "Considered and rejected" section. Scope exclusions come fr
 
 | Feature | Planned in | Status | Evidence (impl · test) | Note |
 |---|---|---|---|---|
-| One hit-test for hover and click; hover outline | M1 | Built | `CanvasView.tsx:313`, `:324` · `cv:712`, `cv:727` | |
-| Click = top level, double-click = one level deeper, Cmd/Ctrl-click = deepest | M1 | Built | `src/ui/canvas/selection.ts:50-74` · `test/ui/canvas/selection.test.ts:51-105`, `cv:758-776` | |
-| Shift-click add/remove; ancestors of selected elements dropped | M1, M5 | Built | `selection.ts:56`, `store.ts:126` · `cv:784`, `store.test.ts:72-88` | |
-| Enter / Shift-Enter / Tab / Shift-Tab / Esc | M1 | Built | `selection.ts:80-104`, `CanvasView.tsx:428-436` · `selection.test.ts:111-138`, `cv:795`, `cv:806`, `cv:1059` | |
-| Hit-test skips locked layers | M5 | Built | `selection.ts:34` · `selection.test.ts:35-43`, `cv:743` | |
+| One hit-test for hover and click; hover outline | M1 | Built | `CanvasView.tsx:418`, `:432` · `cv:788`, `cv:804`, `cv:830` | |
+| Click = smallest layer (an icon's `<svg>` is one layer), Cmd/Ctrl-click = enclosing layer, double-click on the selected text = edit it | M1 | Built | `src/ui/canvas/selection.ts:43-81`, `CanvasView.tsx:451` · `test/ui/canvas/selection.test.ts:83-186`, `cv:814`, `cv:863-898`, `cv:973-1016`, `e2e/m1:51` | Differs from Figma, where a click picks the top level and Cmd-click the deepest (Ron, 2026-11-24) |
+| Shift-click add/remove; ancestors of selected elements dropped | M1, M5 | Built | `selection.ts:71`, `store.ts:126` · `selection.test.ts:188-210`, `cv:900-932`, `store.test.ts:72-88` | |
+| Enter / Shift-Enter / Tab / Shift-Tab / Esc | M1 | Built | `selection.ts:80-104`, `CanvasView.tsx:428-436` · `selection.test.ts:212-243`, `cv:934`, `cv:945`, `cv:1354` | |
+| Hit-test skips locked layers | M5 | Built | `selection.ts:48` · `selection.test.ts:56-113`, `cv:846` | |
 | Marquee select | R00 Next | Not built | — | Not scheduled in any milestone |
 | Select matching (Opt-Cmd-A) | M7 #7 | Not built | — | |
 
@@ -75,7 +75,7 @@ Note: plan.md has no "Considered and rejected" section. Scope exclusions come fr
 
 | Feature | Planned in | Status | Evidence (impl · test) | Note |
 |---|---|---|---|---|
-| Selector chip with `file:line`; pick a `<helmet><style>` rule | M1, M2 | Built | `src/ui/panels/PropertiesPanel.tsx:142`, `:168` · `pp:281`, `pp:290`, `e2e/m1:35` | |
+| Selector chip with `file:line`; pick a `<helmet><style>` rule | M1, M2 | Built | `src/ui/panels/PropertiesPanel.tsx:142`, `:168` · `pp:281`, `pp:290`, `e2e/m1:39` | |
 | Warning when a class is shared by other elements | R00 arch, README | Partial | `PropertiesPanel.tsx:225` · `pp:305` | Only the `<sc-for>` "affects N repeats" notice exists. Picking a shared `<helmet>` rule gives no warning |
 | "Overridden by `.y`" check after a write | M2 | Built | `src/ui/panels/fields.tsx:140-157` · `pp:319-341`, `e2e/m2:100` | |
 | Number inputs: arrow steps (Shift 10), authored unit kept, no px on unitless props | M2 | Built | `src/ui/panels/css-values.ts:25`, `:39`, `:68`; `fields.tsx:381` · `test/ui/panels/css-values.test.ts:12-70`, `pp:366-399` | |
@@ -110,7 +110,7 @@ Note: plan.md has no "Considered and rejected" section. Scope exclusions come fr
 |---|---|---|---|---|
 | Template-tree layers (`sc-for` as one row, `sc-for`/`sc-if` labelled, `dc-import` leaf, unrendered rows dimmed) | M1 | Built | `src/ui/panels/LayersPanel.tsx:53`, `:144` · `lp:248-300` | |
 | Names: `data-layer-name` → id → class → tag | M1 | Built | `src/server/source/template-tree.ts:62-65` · `lp:248` | |
-| Two-way selection sync | M1 | Built | `LayersPanel.tsx:238` · `lp:368`, `lp:376`, `app.test.tsx:342`, `e2e/m1:35` | |
+| Two-way selection sync | M1 | Built | `LayersPanel.tsx:238` · `lp:368`, `lp:376`, `app.test.tsx:342`, `e2e/m1:39` | |
 | Drag reorder/reparent; forbidden parents greyed | M5 | Built | `LayersPanel.tsx:102`, `:201-236` · `lp:390-458`, `e2e/m5:134` | |
 | Hide / lock, editor-only (`.editor/state.json`); hide applied at serve time | M5 | Built | `LayersPanel.tsx:243`; `src/server/serve/serve-transform.ts:56`; `src/server/editor-state.ts:10` · `lp:468-490`, `test/server/serve/serve-transform.test.ts:173`, `editor-services.test.ts:126`, `e2e/m5:267` | |
 | Layer search (Cmd-F) | R00 Next | Built | `LayersPanel.tsx:65`, `:70`, `:189` · `lp:330-356` | Built early |
