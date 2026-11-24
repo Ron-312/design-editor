@@ -1,7 +1,7 @@
 import { writeFileSync } from 'node:fs'
 import path from 'node:path'
 import type { Locator, Page } from '@playwright/test'
-import { EDITOR_VIEWPORT, MOD, canvasFrame, edIdOf, expect, goOffline, layerRowOf, openEditor, screenBoxOf, test, type E2eProject } from './harness'
+import { EDITOR_VIEWPORT, MOD, canvasFrame, edIdOf, expect, goOffline, layerRowOf, openEditor, screenBoxOf, settledBoxOf, test, type E2eProject } from './harness'
 
 const CARD_BOARD = 'project/card.dc.html'
 const PX_WIDTH = 'width: 328px'
@@ -51,8 +51,7 @@ async function hover(page: Page, element: Locator): Promise<void> {
 /** Drags a resize handle by (dx, dy) screen px. */
 async function dragHandle(page: Page, name: string, dx: number, dy: number): Promise<void> {
   const handle = page.locator(`[data-resize-handle="${name}"]`)
-  await expect.poll(() => handle.boundingBox()).not.toBeNull()
-  const box = (await handle.boundingBox())!
+  const box = await settledBoxOf(handle)
   const at = { x: box.x + box.width / 2, y: box.y + box.height / 2 }
   await page.mouse.move(at.x, at.y)
   await page.mouse.down()

@@ -458,9 +458,10 @@ Edge; Safari stays unsupported for the editor). From R11; all rules below are
   `http://127.0.0.1:<port>`, never `localhost`.
 - **Skills.** Skills only call the `edsync` Node CLI and `git`, with quoted paths; Git Bash is not
   assumed.
-- **CI.** GitHub Actions matrix `os: [windows-latest, macos-latest]` × `autocrlf: [false, true]`
-  (set before checkout), `fail-fast: false`: lint, vitest, Playwright Chromium (plus `msedge` on
-  Windows), the CRLF/BOM fixtures and a Windows-only locked-file rename test.
+- **CI.** GitHub Actions on pull requests and on `main`, `windows-latest` with `autocrlf=true` and
+  `macos-latest` with `autocrlf=false` (set before checkout), `fail-fast: false`: lint, vitest, Playwright
+  Chromium (plus `msedge` on Windows: a few specs on pull requests, all on `main`), the CRLF/BOM fixtures
+  and a Windows-only locked-file rename test. Trimmed from the full matrix on every push (Ron, 2026-11-24).
 
 ## Milestones
 
@@ -805,8 +806,8 @@ One line each on why it waits (decided: Claude, Ron AFK 2026-11-23):
   scratch dir, keying by id and release, and reporting `/_blob` ids referenced by fetched CSS/JS until none
   are missing, and a Git older than 2.44 refused.
   (decided: Claude, Ron AFK 2026-11-23; critic v8)
-- **CI:** GitHub Actions matrix `windows-latest` + `macos-latest` × `autocrlf` false / true runs all
-  of the above plus Playwright on every PR (see Cross-platform). Windows-only jobs: the locked-file
+- **CI:** GitHub Actions on `windows-latest` + `macos-latest` runs all of the above plus Playwright on
+  every PR and on `main` (see Cross-platform). Windows-only jobs: the locked-file
   rename test and the lock-takeover test. (decided: Claude, Ron AFK 2026-11-23)
 - **Safety rule:** automated and manual push tests target a throwaway Artifact copy created for the
   test, never Ron's real canvases; Test Site is only ever read. Automated tests use a fake remote and

@@ -1,15 +1,25 @@
 name: ci
 on:
   push:
+    branches: [main]
   pull_request:
+
+# A newer push to a pull request replaces its running checks; every run on main finishes.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest]
-        autocrlf: ['false', 'true']
+        # autocrlf=true is Git for Windows' default, so only Windows runs with it.
+        include:
+          - os: windows-latest
+            autocrlf: 'true'
+          - os: macos-latest
+            autocrlf: 'false'
     runs-on: ${{ matrix.os }}
     steps:
       # Set before checkout so the checkout itself reproduces a Git for Windows autocrlf=true user.
@@ -23,7 +33,10 @@ jobs:
       - run: npm run check
       - run: npx playwright install chromium
       - run: npm run build
+      # Pull requests run only a few specs in Edge (see playwright.config.ts); main runs every spec there too.
       - run: npm run e2e
+        env:
+          E2E_EDGE: ${{ github.event_name == 'push' && 'full' || 'smoke' }}
       - if: failure()
         uses: actions/upload-artifact@v4
         with:
