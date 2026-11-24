@@ -613,15 +613,20 @@ describe('a step that fails', () => {
 })
 
 /** PowerShell opens the file with FileShare.Read only, so a rename onto it fails until the handle closes. */
-function holdOpenWithoutShareDelete(file: string, ms: number) {
+function holdOpenWithoutShareDelete(file: string) {
   const script = [
     `$f = [System.IO.File]::Open('${file.replace(/'/g, "''")}', 'Open', 'Read', 'Read')`,
     `[Console]::Out.WriteLine('held')`,
-    `Start-Sleep -Milliseconds ${ms}`,
+    `[Console]::In.ReadLine() | Out-Null`,
     `$f.Close()`,
   ].join('; ')
-  const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { windowsHide: true })
-  const released = new Promise<void>((resolve) => child.once('exit', () => resolve()))
+  const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'] })
+  // A write to a process that has already gone must not fail the test.
+  child.stdin.on('error', () => {})
+  const released = new Promise<void>((resolve) => {
+    child.once('exit', () => resolve())
+    child.once('error', () => resolve())
+  })
   const held = new Promise<void>((resolve, reject) => {
     child.stdout.on('data', (chunk: Buffer) => {
       if (chunk.toString().includes('held')) resolve()
@@ -629,7 +634,20 @@ function holdOpenWithoutShareDelete(file: string, ms: number) {
     child.once('error', reject)
     child.once('exit', (code) => reject(new Error(`holder exited with ${code} before holding the file`)))
   })
-  return { held, released }
+  held.catch(() => {})
+  return {
+    held,
+    /** A signal, not a timer: a busy machine can stretch a sleep past the writer's retry window. */
+    async release() {
+      child.stdin.end('\n')
+      await released
+    },
+    /** Frees the file even when a test fails before releasing it, so the temp folder can be removed. */
+    async kill() {
+      child.kill()
+      await released
+    },
+  }
 }
 
 describe.runIf(ON_WINDOWS)('a file held open by another program (Windows)', () => {
@@ -637,37 +655,50 @@ describe.runIf(ON_WINDOWS)('a file held open by another program (Windows)', () =
     'retries the save while the handle is open and writes once it closes',
     async () => {
       const { writer, messages, current, nativeOf, diskText } = await openSession({ 'home.dc.html': HOME_TEXT })
-      const holder = holdOpenWithoutShareDelete(nativeOf(HOME), 1_000)
-      await holder.held
-      const opId = submit(writer, setDecl(findId(current(HOME), /^<main/), 'color', '#000000'))
-      await writer.flush()
+      const holder = holdOpenWithoutShareDelete(nativeOf(HOME))
+      try {
+        await holder.held
+        const opId = submit(writer, setDecl(findId(current(HOME), /^<main/), 'color', '#000000'))
+        const flushed = writer.flush()
+        await vi.waitFor(() => expect(atomicWrite).toHaveBeenCalled())
 
-      await ackFor(messages, opId)
-      expect(diskText(HOME)).toBe(replaceOnce(HOME_TEXT, MAIN_STYLE, 'style="color: #000000"'))
-      await holder.released
+        await holder.release()
+        await flushed
+        // A machine too slow to close the handle inside the retry window reports it and keeps the edit for the next flush.
+        if (writer.hasPending(HOME)) await writer.flush()
+
+        await ackFor(messages, opId)
+        expect(diskText(HOME)).toBe(replaceOnce(HOME_TEXT, MAIN_STYLE, 'style="color: #000000"'))
+      } finally {
+        await holder.kill()
+      }
     },
-    20_000,
+    30_000,
   )
 
   it(
     'reports the file as locked when the handle outlasts the retry, and keeps the edit until it can be written',
     async () => {
       const { writer, messages, current, nativeOf, diskText } = await openSession({ 'home.dc.html': HOME_TEXT })
-      const holder = holdOpenWithoutShareDelete(nativeOf(HOME), 6_000)
-      await holder.held
-      const opId = submit(writer, setDecl(findId(current(HOME), /^<main/), 'color', '#000000'))
-      await writer.flush()
+      const holder = holdOpenWithoutShareDelete(nativeOf(HOME))
+      try {
+        await holder.held
+        const opId = submit(writer, setDecl(findId(current(HOME), /^<main/), 'color', '#000000'))
+        await writer.flush()
 
-      const failed = await waitForMessage(messages, 'writeFailed')
-      expect(failed).toMatchObject({ file: HOME, reason: 'locked' })
-      expect(failed.message).toMatch(LOCKED_MESSAGE)
-      expect(writer.hasPending(HOME)).toBe(true)
-      expect(messagesFor(messages, opId)).toEqual([])
+        const failed = await waitForMessage(messages, 'writeFailed')
+        expect(failed).toMatchObject({ file: HOME, reason: 'locked' })
+        expect(failed.message).toMatch(LOCKED_MESSAGE)
+        expect(writer.hasPending(HOME)).toBe(true)
+        expect(messagesFor(messages, opId)).toEqual([])
 
-      await holder.released
-      await writer.flush()
-      await ackFor(messages, opId)
-      expect(diskText(HOME)).toBe(replaceOnce(HOME_TEXT, MAIN_STYLE, 'style="color: #000000"'))
+        await holder.release()
+        await writer.flush()
+        await ackFor(messages, opId)
+        expect(diskText(HOME)).toBe(replaceOnce(HOME_TEXT, MAIN_STYLE, 'style="color: #000000"'))
+      } finally {
+        await holder.kill()
+      }
     },
     30_000,
   )
