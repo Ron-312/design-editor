@@ -16,14 +16,14 @@ import {
   type RefObject,
 } from 'react'
 import type { EditorState, ProbeToEditor, Rect, ResolvedValues } from '../../shared/protocol'
-import type { Board, CanvasLayout, EdId, EditOp, ProjectPath, TemplateNode } from '../../shared/types'
+import { mintHeldActionId, type Board, type CanvasLayout, type EdId, type EditOp, type ProjectPath, type TemplateNode } from '../../shared/types'
 import type { Platform } from '../actions/registry'
 import type { CanvasPointer, CanvasTool, EditorContext, FitKind, PointerHandler, Viewport } from '../plugin-api'
 import { createProbeClient, type ProbeClient } from '../probe-client'
 import type { EditorStore } from '../store'
 import type { WsClient } from '../ws-client'
 import { boundsOf, screenBoxOf, type ScreenBox } from './overlay'
-import { clickSelection, doubleClickSelection, findNode, selectableHit } from './selection'
+import { clickSelection, findNode, selectableHit } from './selection'
 import { fitRect, panBy, screenToBoard, viewportTransform, wheelZoomFactor, zoomAt, zoomTo, type Insets, type Point, type Size } from './viewport'
 
 export interface ToolModule {
@@ -100,6 +100,8 @@ interface TextEdit {
 const PAGE_RESET = 'Page reset to its first state'
 const PAGE_REDREW = 'Page redrew, edit cancelled'
 const LIVE_VALUE = 'Contains a live value; edit in source or Tweaks'
+/** Elements that never hold text, so a double-click on one has nothing to edit. */
+const HOLDS_NO_TEXT = new Set(['img', 'svg', 'picture', 'video', 'audio', 'canvas', 'iframe', 'object', 'embed', 'input', 'select', 'textarea', 'br', 'hr'])
 const EDIT_IN_SOURCE = 'Edit in source: only an element holding a single run of text is edited in place'
 
 const RULER = 20
@@ -212,7 +214,7 @@ export function canvasContext(
     fit: (kind) => view.fit(kind),
     cancelGesture: () => view.cancelGesture(),
     setEditorState: (patch) => view.changeEditorState({ ...editorState, ...patch }),
-    beginAction: mintActionId,
+    beginAction: ({ held = false } = {}) => (held ? mintHeldActionId() : mintActionId()),
     apply: (op, actionId = mintActionId()) => ws.sendOp({ ...op, actionId }, previewedValues(probe, op)),
     preview: (op) => {
       previewedValues(probe, op)
@@ -433,13 +435,13 @@ export function CanvasView({
     const hit = await selectableAt(pointer)
     const { index, view } = store.getState()
     if (!index) return
-    const [target] = clickSelection(index.tree, view.selection, hit)
+    const [target] = clickSelection(index.tree, view.selection, hit, { mod: pointer.modKey })
     store.setHover(target ?? null)
   }
 
   function beginTextEdit(tree: TemplateNode, edId: EdId): void {
     const node = findNode(tree, edId)
-    if (!node || !probe) return
+    if (!node || !probe || HOLDS_NO_TEXT.has(node.tag)) return
     const refusal = textEditRefusal(node)
     if (refusal) {
       store.toast({ message: refusal, tone: 'info' })
@@ -448,14 +450,16 @@ export function CanvasView({
     textEdit.current = { session: probe.beginTextEdit(edId), edId }
   }
 
+  /** A Cmd/Ctrl double-click is two Cmd/Ctrl clicks: each has already picked its layer. */
   async function doubleClickAt(pointer: CanvasPointer): Promise<void> {
+    if (pointer.modKey) return
     const hit = await selectableAt(pointer)
     const { index, view } = store.getState()
     if (!index) return
-    const next = doubleClickSelection(index.tree, view.selection, hit)
-    const alreadyOnHit = hit !== null && view.selection.length === 1 && view.selection[0] === hit && next[0] === hit
-    if (alreadyOnHit) beginTextEdit(index.tree, hit)
-    else store.select(next)
+    const [target] = clickSelection(index.tree, view.selection, hit)
+    const alreadySelected = view.selection.length === 1 && view.selection[0] === target
+    if (target && alreadySelected) beginTextEdit(index.tree, target)
+    else store.select(target ? [target] : [])
   }
 
   function onPointerDown(event: ReactPointerEvent<HTMLDivElement>): void {

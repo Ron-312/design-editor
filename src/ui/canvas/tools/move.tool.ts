@@ -467,7 +467,7 @@ function onPointerDown(ctx: EditorContext, pointer: CanvasPointer): boolean {
   const union = selectionUnion()
   if (!measuring && !(union && containsPoint(union, pointer.boardX, pointer.boardY))) return false
   const fromBoard = { x: pointer.boardX, y: pointer.boardY }
-  const current: Press = { ctx, actionId: ctx.beginAction(), from: pointer, fromBoard, plan: null, dragging: false, last: pointer }
+  const current: Press = { ctx, actionId: ctx.beginAction({ held: true }), from: pointer, fromBoard, plan: null, dragging: false, last: pointer }
   press = current
   readSelectionPlan(ctx, edIds)
     .then((plan) => {

@@ -183,6 +183,7 @@ describe('one undo entry per padding drag', () => {
 
     expect(fake.writes()).toEqual(['padding-top: 32px', 'padding-right: 32px', 'padding-bottom: 32px', 'padding-left: 32px'])
     expect(fake.ctx.beginAction).toHaveBeenCalledTimes(1)
+    expect(fake.ctx.beginAction).toHaveBeenCalledWith({ held: true })
     expect(fake.actionIds()).toEqual(['action-1', 'action-1', 'action-1', 'action-1'])
     expect(fake.undoEntries()).toBe(1)
   })

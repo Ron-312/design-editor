@@ -51,7 +51,7 @@ export interface EditorContext {
   /** Editor-only state (collapsed, hidden, locked, preview width); never written into the source. */
   readonly setEditorState: (patch: Partial<EditorState>) => void
   /** A fresh id that every op of one user action carries, so the action is one undo entry. */
-  readonly beginAction: () => string
+  readonly beginAction: (options?: { /** A drag or a held key, whose ops are written once they stop coming. */ readonly held?: boolean }) => string
   /**
    * Previews a `setDecl` / `removeDecl` in the iframe, then resolves with the server's ack.
    * Without an `actionId` the op is an action of its own.

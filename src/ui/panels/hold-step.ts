@@ -14,7 +14,7 @@ export function useHeldStep(ctx: EditorContext) {
   const held = useRef<{ readonly key: string; readonly actionId: string } | null>(null)
   return {
     actionFor({ key, repeat }: StepKey): string {
-      if (!repeat || held.current?.key !== key) held.current = { key, actionId: ctx.beginAction() }
+      if (!repeat || held.current?.key !== key) held.current = { key, actionId: ctx.beginAction({ held: true }) }
       return held.current.actionId
     },
     keyUp({ key }: Pick<StepKey, 'key'>) {

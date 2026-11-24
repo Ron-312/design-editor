@@ -126,6 +126,17 @@ export interface InlineDeclaration {
   readonly value: string
 }
 
+const HELD_ACTION_PREFIX = 'held:'
+
+/** The id of a drag or a held key, whose ops keep coming until it is let go. */
+export function mintHeldActionId(): string {
+  return `${HELD_ACTION_PREFIX}${crypto.randomUUID()}`
+}
+
+export function isHeldAction(actionId: string | undefined): boolean {
+  return actionId?.startsWith(HELD_ACTION_PREFIX) ?? false
+}
+
 /**
  * UI → server. A multi-element edit is one op with several targets.
  * `actionId` names the user action the op belongs to; ops without one never share an undo entry.

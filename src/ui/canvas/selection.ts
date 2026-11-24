@@ -2,7 +2,7 @@ import type { Rect } from '../../shared/protocol'
 import type { EdId, TemplateNode } from '../../shared/types'
 
 export interface ClickModifiers {
-  /** Cmd on macOS, Ctrl on Windows: select the deepest element. */
+  /** Cmd on macOS, Ctrl on Windows: select the enclosing layer instead of the smallest one. */
   readonly mod?: boolean
   readonly shift?: boolean
 }
@@ -39,27 +39,32 @@ export function parentOf(tree: TemplateNode, edId: EdId): EdId | null {
   return path.at(-2) ?? null
 }
 
-/** Moves a hit inside a locked layer out to the element that holds the locked layer. */
+/** An icon is one layer on the canvas; its paths are picked in the layers panel. */
+function outermostSvg(tree: TemplateNode, path: readonly EdId[]): EdId | undefined {
+  return path.find((edId) => findNode(tree, edId)?.tag === 'svg')
+}
+
+/** Moves a hit inside a locked layer out to the element that holds the locked layer, and one inside an icon out to the icon. */
 export function selectableHit(tree: TemplateNode, hit: EdId | null, locked: readonly EdId[]): EdId | null {
   if (!hit) return null
   const path = pathTo(tree, hit)
   const outermostLocked = path.findIndex((edId) => locked.includes(edId))
-  if (outermostLocked < 0) return hit
-  return path[outermostLocked - 1] ?? null
+  const reachable = outermostLocked < 0 ? path : path.slice(0, outermostLocked)
+  if (path.length > 0 && reachable.length === 0) return null
+  return outermostSvg(tree, reachable) ?? reachable.at(-1) ?? hit
 }
 
-/** Clicks select within the parent of the selection, or at the top level when the hit is outside it. */
-function scopedTarget(tree: TemplateNode, selection: readonly EdId[], path: readonly EdId[]): EdId | undefined {
-  const scope = selection[0] ? parentOf(tree, selection[0]) : null
-  const scopeDepth = scope ? path.indexOf(scope) : -1
-  const insideScope = scopeDepth >= 0 && scopeDepth < path.length - 1
-  return path[insideScope ? scopeDepth + 1 : 1]
+/** One layer out from the selection when the hit is inside it, else from the hit; never the artboard root. */
+function enclosingTarget(selection: readonly EdId[], path: readonly EdId[]): EdId | undefined {
+  const selected = selection.length === 1 ? path.indexOf(selection[0]!) : -1
+  const from = selected > 0 ? selected : path.length - 1
+  return path[Math.max(1, from - 1)]
 }
 
 function clickTarget(tree: TemplateNode, selection: readonly EdId[], hit: EdId | null, mod: boolean): EdId | undefined {
   if (!hit || hit === tree.edId) return undefined
   const path = pathTo(tree, hit)
-  return mod ? path.at(-1) : scopedTarget(tree, selection, path)
+  return mod ? enclosingTarget(selection, path) : path.at(-1)
 }
 
 export function clickSelection(
@@ -72,14 +77,6 @@ export function clickSelection(
   if (!target) return shift ? [...selection] : []
   if (!shift) return [target]
   return selection.includes(target) ? selection.filter((edId) => edId !== target) : [...selection, target]
-}
-
-/** One level below what a click would select, toward the hit. */
-export function doubleClickSelection(tree: TemplateNode, selection: readonly EdId[], hit: EdId | null): EdId[] {
-  const [target] = clickSelection(tree, selection, hit)
-  if (!target || !hit) return []
-  const path = pathTo(tree, hit)
-  return [path[path.indexOf(target) + 1] ?? target]
 }
 
 function unique(edIds: readonly EdId[]): EdId[] {
@@ -112,8 +109,9 @@ export function siblingSelection(tree: TemplateNode, selection: readonly EdId[],
   )
 }
 
-/** The artboard root always marquees; any other element only when a child of it lays out as a block. */
+/** The artboard root always marquees; any other element only when a child of it lays out as a block. An icon is one layer. */
 export function isMarqueeContainer(tree: TemplateNode, edId: EdId, childDisplays: readonly string[]): boolean {
+  if (findNode(tree, edId)?.tag === 'svg') return false
   return edId === tree.edId || childDisplays.some((display) => !INLINE_LEVEL_DISPLAYS.includes(display))
 }
 

@@ -710,6 +710,7 @@ describe('one gesture, one undo entry', () => {
     await drag(fake, BOX_HANDLES.se, [20, 10])
 
     expect(fake.ctx.beginAction).toHaveBeenCalledTimes(1)
+    expect(fake.ctx.beginAction).toHaveBeenCalledWith({ held: true })
     expect(fake.actionIds()).toEqual(['action-1', 'action-1'])
     expect(fake.undoEntries()).toBe(1)
   })

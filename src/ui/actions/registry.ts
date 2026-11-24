@@ -1,4 +1,5 @@
 /// <reference types="vite/client" />
+import { mintHeldActionId } from '../../shared/types'
 import type { ActionScope, EditorAction, EditorContext } from '../plugin-api'
 
 export interface ActionModule {
@@ -170,7 +171,7 @@ export function createActionRegistry(modules: Record<string, ActionModule>, plat
   }
 
   function actionIdFor(action: EditorAction, event: KeyboardEvent): string {
-    const actionId = event.repeat && held?.action === action ? held.actionId : crypto.randomUUID()
+    const actionId = event.repeat && held?.action === action ? held.actionId : action.hold ? mintHeldActionId() : crypto.randomUUID()
     held = action.hold ? { action, code: event.code, actionId } : null
     return actionId
   }

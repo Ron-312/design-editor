@@ -4,7 +4,6 @@ import type { EdId, TemplateNode } from '../../../src/shared/types'
 import {
   childSelection,
   clickSelection,
-  doubleClickSelection,
   isMarqueeContainer,
   marqueeSelection,
   parentSelection,
@@ -30,6 +29,25 @@ const tree = node(
   { readOnly: 'artboard-root' },
 )
 
+// root > toolbar > (icon (svg) > (glyph > stroke, badge (svg) > dot), caption)
+const iconTree = node(
+  'root',
+  [
+    node('toolbar', [
+      node(
+        'icon',
+        [
+          node('glyph', [node('stroke', [], { tag: 'path' })], { tag: 'g' }),
+          node('badge', [node('dot', [], { tag: 'circle' })], { tag: 'svg' }),
+        ],
+        { tag: 'svg' },
+      ),
+      node('caption', [], { tag: 'span' }),
+    ]),
+  ],
+  { readOnly: 'artboard-root' },
+)
+
 describe('the shared hit-test', () => {
   it('returns the deepest element under the point when nothing is locked', () => {
     expect(selectableHit(tree, edId('label'), [])).toBe(edId('label'))
@@ -43,29 +61,77 @@ describe('the shared hit-test', () => {
     expect(selectableHit(tree, edId('label'), ids('button'))).toBe(edId('card'))
   })
 
+  it('moves out of the outermost of two nested locked layers', () => {
+    expect(selectableHit(tree, edId('label'), ids('label', 'button'))).toBe(edId('card'))
+  })
+
   it('hits nothing selectable through a locked top-level layer', () => {
     const hit = selectableHit(tree, edId('aside'), ids('aside'))
 
     expect(clickSelection(tree, ids('card'), hit)).toEqual([])
   })
+
+  it('hits nothing when the artboard itself is locked', () => {
+    expect(selectableHit(tree, edId('label'), ids('root'))).toBeNull()
+  })
+
+  it('passes on a miss, and a hit the tree does not hold', () => {
+    expect(selectableHit(tree, null, [])).toBeNull()
+    expect(selectableHit(tree, edId('gone'), [])).toBe(edId('gone'))
+  })
+
+  it('moves a hit inside an icon out to the icon', () => {
+    expect(selectableHit(iconTree, edId('stroke'), [])).toBe(edId('icon'))
+    expect(selectableHit(iconTree, edId('glyph'), [])).toBe(edId('icon'))
+    expect(selectableHit(iconTree, edId('icon'), [])).toBe(edId('icon'))
+  })
+
+  it('moves a hit inside nested svgs out to the outermost one', () => {
+    expect(selectableHit(iconTree, edId('dot'), [])).toBe(edId('icon'))
+  })
+
+  it('leaves a hit beside an icon where it is', () => {
+    expect(selectableHit(iconTree, edId('caption'), [])).toBe(edId('caption'))
+    expect(selectableHit(iconTree, edId('toolbar'), [])).toBe(edId('toolbar'))
+  })
+
+  it('skips a locked icon, whichever of its paths is hit', () => {
+    expect(selectableHit(iconTree, edId('stroke'), ids('icon'))).toBe(edId('toolbar'))
+    expect(selectableHit(iconTree, edId('icon'), ids('icon'))).toBe(edId('toolbar'))
+  })
+
+  it('still hits an icon through a locked layer inside it', () => {
+    expect(selectableHit(iconTree, edId('stroke'), ids('stroke'))).toBe(edId('icon'))
+    expect(selectableHit(iconTree, edId('dot'), ids('badge'))).toBe(edId('icon'))
+  })
+
+  it('hits nothing selectable in an icon inside a locked top-level layer', () => {
+    const hit = selectableHit(iconTree, edId('stroke'), ids('toolbar'))
+
+    expect(clickSelection(iconTree, [], hit)).toEqual([])
+  })
 })
 
 describe('click', () => {
-  it('selects the top-level element when nothing is selected', () => {
-    expect(clickSelection(tree, [], edId('label'))).toEqual(ids('card'))
-    expect(clickSelection(tree, [], edId('aside'))).toEqual(ids('aside'))
+  it('selects the smallest element under the pointer, whatever is selected', () => {
+    expect(clickSelection(tree, [], edId('label'))).toEqual(ids('label'))
+    expect(clickSelection(tree, ids('card'), edId('label'))).toEqual(ids('label'))
+    expect(clickSelection(tree, ids('title'), edId('label'))).toEqual(ids('label'))
+    expect(clickSelection(tree, ids('aside'), edId('label'))).toEqual(ids('label'))
   })
 
-  it('keeps the selected element when clicking inside it', () => {
-    expect(clickSelection(tree, ids('card'), edId('label'))).toEqual(ids('card'))
-  })
-
-  it('selects within the current scope, the parent of the selection', () => {
-    expect(clickSelection(tree, ids('title'), edId('label'))).toEqual(ids('button'))
-  })
-
-  it('falls back to the top level for a hit outside the current scope', () => {
+  it('selects a top-level element hit on its own background', () => {
+    expect(clickSelection(tree, [], edId('card'))).toEqual(ids('card'))
+    expect(clickSelection(tree, ids('label'), edId('card'))).toEqual(ids('card'))
     expect(clickSelection(tree, ids('title'), edId('aside'))).toEqual(ids('aside'))
+  })
+
+  it('keeps the only selected element when it is clicked again', () => {
+    expect(clickSelection(tree, ids('label'), edId('label'))).toEqual(ids('label'))
+  })
+
+  it('narrows a multiple selection to the element clicked', () => {
+    expect(clickSelection(tree, ids('title', 'label'), edId('label'))).toEqual(ids('label'))
   })
 
   it('clears the selection on a click on the empty artboard or outside it', () => {
@@ -73,40 +139,74 @@ describe('click', () => {
     expect(clickSelection(tree, ids('card'), null)).toEqual([])
   })
 
-  it('selects the deepest element with Cmd/Ctrl', () => {
-    expect(clickSelection(tree, [], edId('label'), { mod: true })).toEqual(ids('label'))
-    expect(clickSelection(tree, ids('aside'), edId('label'), { mod: true })).toEqual(ids('label'))
-  })
-
-  it('adds with Shift and removes an element that is already selected', () => {
-    const added = clickSelection(tree, ids('card'), edId('aside'), { shift: true })
-    expect(added).toEqual(ids('card', 'aside'))
-
-    expect(clickSelection(tree, added, edId('label'), { shift: true })).toEqual(ids('aside'))
-  })
-
-  it('keeps the selection on a Shift-click on the empty artboard', () => {
-    expect(clickSelection(tree, ids('card', 'aside'), edId('root'), { shift: true })).toEqual(ids('card', 'aside'))
+  it('selects nothing for a hit the tree does not hold', () => {
+    expect(clickSelection(tree, ids('card'), edId('gone'))).toEqual([])
   })
 
   it('selects an <sc-for> repeat like any element, though its text is a live value', () => {
-    expect(clickSelection(tree, ids('list'), edId('item'))).toEqual(ids('list'))
-    expect(doubleClickSelection(tree, ids('list'), edId('item'))).toEqual(ids('item'))
+    expect(clickSelection(tree, [], edId('item'))).toEqual(ids('item'))
+    expect(clickSelection(tree, ids('list'), edId('item'))).toEqual(ids('item'))
   })
 })
 
-describe('double-click', () => {
-  it('goes one level deeper toward the hit', () => {
-    expect(doubleClickSelection(tree, ids('card'), edId('label'))).toEqual(ids('button'))
-    expect(doubleClickSelection(tree, ids('button'), edId('label'))).toEqual(ids('label'))
+describe('Cmd/Ctrl-click', () => {
+  const mod = { mod: true }
+
+  it('selects the layer around the hit, whatever else is selected', () => {
+    expect(clickSelection(tree, [], edId('label'), mod)).toEqual(ids('button'))
+    expect(clickSelection(tree, ids('aside'), edId('label'), mod)).toEqual(ids('button'))
+    expect(clickSelection(tree, ids('title'), edId('label'), mod)).toEqual(ids('button'))
   })
 
-  it('goes one level below what a click would select when nothing is selected', () => {
-    expect(doubleClickSelection(tree, [], edId('label'))).toEqual(ids('button'))
+  it('climbs one layer out with each click on the same spot', () => {
+    expect(clickSelection(tree, ids('label'), edId('label'), mod)).toEqual(ids('button'))
+    expect(clickSelection(tree, ids('button'), edId('label'), mod)).toEqual(ids('card'))
   })
 
-  it('stays on a leaf, where there is nothing deeper', () => {
-    expect(doubleClickSelection(tree, ids('title'), edId('title'))).toEqual(ids('title'))
+  it('stays on a top-level layer, never on the artboard root', () => {
+    expect(clickSelection(tree, ids('card'), edId('label'), mod)).toEqual(ids('card'))
+    expect(clickSelection(tree, [], edId('aside'), mod)).toEqual(ids('aside'))
+  })
+
+  it('climbs from the hit when several layers are selected', () => {
+    expect(clickSelection(tree, ids('button', 'aside'), edId('label'), mod)).toEqual(ids('button'))
+  })
+
+  it('clears the selection on a click on the empty artboard or outside it', () => {
+    expect(clickSelection(tree, ids('card'), edId('root'), mod)).toEqual([])
+    expect(clickSelection(tree, ids('card'), null, mod)).toEqual([])
+  })
+
+  it('selects the element that encloses an icon', () => {
+    const hit = selectableHit(iconTree, edId('stroke'), [])
+
+    expect(clickSelection(iconTree, [], hit)).toEqual(ids('icon'))
+    expect(clickSelection(iconTree, [], hit, mod)).toEqual(ids('toolbar'))
+    expect(clickSelection(iconTree, ids('stroke'), hit, mod)).toEqual(ids('toolbar'))
+  })
+})
+
+describe('Shift-click', () => {
+  it('adds the smallest element and removes it when it is already selected', () => {
+    const added = clickSelection(tree, ids('title'), edId('label'), { shift: true })
+    expect(added).toEqual(ids('title', 'label'))
+
+    expect(clickSelection(tree, added, edId('title'), { shift: true })).toEqual(ids('label'))
+  })
+
+  it('removes the last selected element', () => {
+    expect(clickSelection(tree, ids('label'), edId('label'), { shift: true })).toEqual([])
+  })
+
+  it('adds and removes the enclosing element with Cmd/Ctrl', () => {
+    const added = clickSelection(tree, ids('card'), edId('aside'), { shift: true, mod: true })
+    expect(added).toEqual(ids('card', 'aside'))
+
+    expect(clickSelection(tree, added, edId('title'), { shift: true, mod: true })).toEqual(ids('aside'))
+  })
+
+  it('keeps the selection on the empty artboard', () => {
+    expect(clickSelection(tree, ids('card', 'aside'), edId('root'), { shift: true })).toEqual(ids('card', 'aside'))
   })
 })
 
@@ -188,6 +288,10 @@ describe('marquee container', () => {
     expect(isMarqueeContainer(tree, edId('card'), ['block', 'inline-block'])).toBe(true)
     expect(isMarqueeContainer(tree, edId('list'), ['flex'])).toBe(true)
     expect(isMarqueeContainer(tree, edId('card'), ['inline', 'grid'])).toBe(true)
+  })
+
+  it('counts an icon as a leaf, though its text lays out as a block', () => {
+    expect(isMarqueeContainer(iconTree, edId('icon'), ['block'])).toBe(false)
   })
 
   it('counts text with inline children as a leaf', () => {

@@ -256,11 +256,11 @@ export async function edIdOf(element: Locator): Promise<string> {
   return edId
 }
 
-/** Mod-click selects the deepest element under the pointer; retried until the probe has shaken hands. */
+/** A click selects the smallest element under the pointer; retried until the probe has shaken hands. */
 export async function selectOnCanvas(page: Page, element: Locator): Promise<string> {
   const edId = await edIdOf(element)
   await expect(async () => {
-    await clickOnCanvas(page, element, [MOD])
+    await clickOnCanvas(page, element)
     await expect(layerRowOf(page, edId)).toHaveAttribute('aria-selected', 'true', { timeout: 1_000 })
   }).toPass()
   return edId

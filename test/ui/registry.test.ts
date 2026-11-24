@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from 'vitest'
 import { createActionRegistry, createDefaultRegistry, type ActionModule, type ActionRegistry, type Platform } from '../../src/ui/actions/registry'
 import type { EditorAction, EditorContext, ShellSlot, ShellSlotProps } from '../../src/ui/plugin-api'
+import { isHeldAction } from '../../src/shared/types'
 import type { ProbeClient } from '../../src/ui/probe-client'
 
 type Scope = 'canvas' | 'layers' | 'global'
@@ -570,6 +571,7 @@ describe('action ids', () => {
     expect(ids).toHaveLength(5)
     expect(new Set(ids.slice(0, 4)).size).toBe(1)
     expect(ids[4]).not.toBe(ids[0])
+    expect(ids.every(isHeldAction)).toBe(true)
   })
 
   it('starts a new action on a fresh press of a held key, even before its keyup', () => {
@@ -615,6 +617,7 @@ describe('action ids', () => {
 
     const [first, repeated] = actionIdsOf(undo.run)
     expect(repeated).not.toBe(first)
+    expect([first, repeated].some(isHeldAction)).toBe(false)
   })
 })
 

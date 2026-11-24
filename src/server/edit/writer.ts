@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises'
 import { atomicWrite } from '../../core/atomic-write'
 import { toNativePath } from '../../shared/paths'
 import type { ResolvedValues, RestoredDeclaration, ServerMessage } from '../../shared/protocol'
-import { supersedeKeyOf, type EdId, type EditOp, type EditRecord, type ElementLocation, type ProjectPath } from '../../shared/types'
+import { isHeldAction, supersedeKeyOf, type EdId, type EditOp, type EditRecord, type ElementLocation, type ProjectPath } from '../../shared/types'
 import { decodeSource, encodeSource } from '../source/bytes'
 import type { IndexedFile, SourceIndex } from '../source/source-index'
 import { attrValue } from '../source/template-tree'
@@ -14,7 +14,10 @@ import { STRUCTURAL_KINDS } from './structural-ops'
 import { lastDeclaration } from './text-splice'
 import type { FileSnapshot, UndoEntry, UndoLog } from './undo-log'
 
-const DEBOUNCE_MS = 300
+/** A drag or a held key keeps sending ops, so they wait for it to stop; a single command is written at once. */
+const HELD_DEBOUNCE_MS = 300
+/** Long enough for the ops of one command to arrive together. */
+const COMMAND_DELAY_MS = 10
 
 const LOCKED = 'file locked by another program'
 const GONE = 'that layer is gone; reload the canvas'
@@ -117,6 +120,7 @@ export class Writer {
   private readonly engine: PatchEngine
   private mintedCount = 0
   private timer: ReturnType<typeof setTimeout> | undefined
+  private commandDue = false
   private queue: Promise<void> = Promise.resolve()
 
   constructor(private readonly options: WriterOptions) {
@@ -152,7 +156,8 @@ export class Writer {
     if (!isSameAction(op.actionId, this.openActionId)) this.sealOpenBatches()
     this.openActionId = op.actionId
     open.pending = withOp(open.pending, { opIds: [opId], op })
-    this.armDebounce()
+    if (isHeldAction(op.actionId)) this.armHeldFlush()
+    else this.armFlush()
   }
 
   flush(): Promise<void> {
@@ -218,7 +223,7 @@ export class Writer {
       const open = this.files.get(file)
       if (!open) return
       open.paused = false
-      if (keep) return this.armDebounce()
+      if (keep) return this.armFlush()
       this.reject(this.takePending(file, open), DISCARDED)
     })
   }
@@ -247,9 +252,18 @@ export class Writer {
     }
   }
 
-  private armDebounce(): void {
+  /** A later held op never pushes back a command's flush, which is already due. */
+  private armHeldFlush(): void {
+    if (this.commandDue) return
     clearTimeout(this.timer)
-    this.timer = setTimeout(() => void this.flush(), DEBOUNCE_MS)
+    this.timer = setTimeout(() => void this.flush(), HELD_DEBOUNCE_MS)
+  }
+
+  private armFlush(): void {
+    if (this.commandDue) return
+    this.commandDue = true
+    clearTimeout(this.timer)
+    this.timer = setTimeout(() => void this.flush(), COMMAND_DELAY_MS)
   }
 
   private serialized(task: () => Promise<void>): Promise<void> {
@@ -264,6 +278,7 @@ export class Writer {
    */
   private async flushAll(): Promise<void> {
     clearTimeout(this.timer)
+    this.commandDue = false
     this.sealOpenBatches()
     const waiting: ActionBatch[] = []
     const acks: ServerMessage[] = []
