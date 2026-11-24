@@ -79,6 +79,8 @@ export interface Board {
   readonly w: number
   readonly h: number
   readonly page: boolean
+  /** canvas.json's `"expand": "fill"`: a page that scrolls in its frame, shown in the editor at its full height. */
+  readonly fill?: boolean
 }
 
 export interface CanvasLayout {

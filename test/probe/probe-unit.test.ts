@@ -461,6 +461,32 @@ describe('document height', () => {
   })
 })
 
+describe("Claude Design's runtime drawing after ready", () => {
+  it('tells the editor once, when a template element first appears in #dc-root', async () => {
+    const editor = await connect()
+
+    html('<div id="dc-root"></div>')
+    await settle()
+    expect(ofType(editor, 'runtimeDrawn')).toEqual([])
+
+    document.getElementById('dc-root')!.innerHTML = '<div class="sc-host"><div data-dc-tpl><h1>Page</h1></div></div>'
+    await settle()
+    document.querySelector('[data-dc-tpl]')!.append(document.createElement('p'))
+    await settle()
+
+    expect(ofType(editor, 'runtimeDrawn')).toEqual([{ type: 'runtimeDrawn' }])
+  })
+
+  it('says nothing for a page without the runtime', async () => {
+    const editor = await connect()
+
+    html('<x-dc><div data-ed-id="e1"><h1>Page</h1></div></x-dc>')
+    await settle()
+
+    expect(ofType(editor, 'runtimeDrawn')).toEqual([])
+  })
+})
+
 describe('root font size', () => {
   afterEach(() => {
     document.documentElement.style.removeProperty('font-size')

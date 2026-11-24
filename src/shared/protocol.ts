@@ -250,3 +250,5 @@ export type ProbeToEditor =
   | { readonly type: 'textCancelled'; readonly session: string; readonly reason: TextCancelReason }
   | { readonly type: 'fontsFailed'; readonly families: readonly string[] }
   | { readonly type: 'scrolled'; readonly scrollX: number; readonly scrollY: number }
+  /** Claude Design's runtime finished its first draw, which lands after `ready`. */
+  | { readonly type: 'runtimeDrawn' }

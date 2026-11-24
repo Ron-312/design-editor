@@ -87,7 +87,8 @@ interface FrameLoad {
 
 interface ContentHeight {
   readonly load: FrameLoad
-  readonly previewWidth: number
+  readonly width: number
+  readonly draws: number
   readonly height: number
 }
 
@@ -124,26 +125,28 @@ function grownHeight(board: Board, scrollHeight: number): number {
 }
 
 /**
- * The content height at a preview width, measured once per frame load and width with the frame held at the
- * board's height: `vh` units resolve against the frame, so measuring a grown frame would grow it without end.
+ * The content height of a page board or at a preview width, measured once per frame load, width and runtime draw
+ * with the frame held at the board's height: `vh` units resolve against the frame, so measuring a grown frame
+ * would grow it without end. Claude Design's runtime draws after `ready`, so its first draw measures again.
  */
-function useContentHeight(load: FrameLoad | null, board: Board | undefined, previewWidth: number | undefined): number | undefined {
+function useContentHeight(load: FrameLoad | null, board: Board | undefined, previewWidth: number | undefined, draws: number): number | undefined {
   const [measured, setMeasured] = useState<ContentHeight | null>(null)
+  const width = previewWidth ?? (board?.fill ? board.w : undefined)
   useLayoutEffect(() => {
-    if (!load || !board || previewWidth === undefined) return
+    if (!load || !board || width === undefined) return
     let current = true
     load.probe
       .read({ kind: 'documentHeight' })
       .then(({ scrollHeight }) => {
-        if (current) setMeasured({ load, previewWidth, height: grownHeight(board, scrollHeight) })
+        if (current) setMeasured({ load, width, draws, height: grownHeight(board, scrollHeight) })
       })
       // A reload rejects reads in flight; its own `ready` measures again.
       .catch(() => {})
     return () => {
       current = false
     }
-  }, [load, board, previewWidth])
-  return measured?.load === load && measured.previewWidth === previewWidth ? measured.height : undefined
+  }, [load, board, width, draws])
+  return measured?.load === load && measured.width === width && measured.draws === draws ? measured.height : undefined
 }
 
 /** The element's size, kept current as the window or the panels around it change. */
@@ -287,6 +290,7 @@ export function CanvasView({
   const state = useSyncExternalStore(store.subscribe, store.getState)
   const [probe, setProbe] = useState<ProbeClient | null>(null)
   const [load, setLoad] = useState<FrameLoad | null>(null)
+  const [runtimeDraws, setRuntimeDraws] = useState(0)
   const [renderCount, setRenderCount] = useState(0)
   const viewportRef = useRef<HTMLDivElement>(null)
   const shieldRef = useRef<HTMLDivElement>(null)
@@ -306,7 +310,7 @@ export function CanvasView({
   const board = layout.boards.find((entry) => entry.path === state.board)
   const viewport = state.view.viewport
   const previewWidth = board && editorState.boards[board.path]?.previewWidth
-  const contentHeight = useContentHeight(load, board, previewWidth)
+  const contentHeight = useContentHeight(load, board, previewWidth, runtimeDraws)
   const frameWidth = previewWidth ?? board?.w ?? 0
   const frameHeight = contentHeight ?? board?.h ?? 0
 
@@ -341,6 +345,10 @@ export function CanvasView({
             break
           case 'scrolled':
             store.setScroll({ x: message.scrollX, y: message.scrollY })
+            rendered()
+            break
+          case 'runtimeDrawn':
+            setRuntimeDraws((draws) => draws + 1)
             rendered()
             break
           case 'textCommit':

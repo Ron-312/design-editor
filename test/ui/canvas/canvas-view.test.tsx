@@ -1525,4 +1525,31 @@ describe('preview width', () => {
     expect(labelOf(view.container).textContent).toBe('home.dc.html1280 × 900')
     expect(documentHeightReads()).toBe(0)
   })
+
+  describe('a page board ("expand": "fill" in canvas.json)', () => {
+    const fillLayout: CanvasLayout = { ...layout, boards: [{ ...boards[0]!, fill: true }, boards[1]!] }
+
+    it('grows the frame to the whole page at the board width, measured with the frame held at the board height', async () => {
+      probes.scene.contentHeight = () => 2048
+
+      const view = await openHome({ layout: fillLayout })
+
+      expect(frameSize(frameOf(view.container))).toEqual({ width: 1280, height: 2048 })
+      expect(probes.scene.measuredAt).toEqual(expect.arrayContaining([{ width: 1280, height: BOARD_H }]))
+      expect(probes.scene.measuredAt.every((size) => size.height === BOARD_H)).toBe(true)
+    })
+
+    it("measures again when Claude Design's runtime draws the page after ready", async () => {
+      probes.scene.contentHeight = () => BOARD_H
+      const view = await openHome({ layout: fillLayout })
+      expect(frameSize(frameOf(view.container)).height).toBe(BOARD_H)
+
+      probes.scene.contentHeight = () => 2048
+      await act(async () => latestProbe().emit({ type: 'runtimeDrawn' }))
+      await settle()
+
+      expect(frameSize(frameOf(view.container))).toEqual({ width: 1280, height: 2048 })
+      expect(probes.scene.measuredAt.every((size) => size.height === BOARD_H)).toBe(true)
+    })
+  })
 })

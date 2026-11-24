@@ -11,7 +11,7 @@ import { readSource } from './source/bytes'
 import { SourceIndex } from './source/source-index'
 
 interface CanvasJson {
-  readonly boards: Readonly<Record<string, { readonly w: number; readonly h: number }>>
+  readonly boards: Readonly<Record<string, { readonly w: number; readonly h: number; readonly expand?: string }>>
   readonly order: readonly string[]
   readonly pages: readonly string[]
 }
@@ -50,11 +50,12 @@ function projectPathOf(name: string): ProjectPath {
 
 export async function readCanvasLayout(root: string): Promise<CanvasLayout> {
   const canvas = JSON.parse(await readFile(toNativePath(root, CANVAS_JSON), 'utf8')) as CanvasJson
-  const boards: Board[] = Object.entries(canvas.boards).map(([name, { w, h }]) => ({
+  const boards: Board[] = Object.entries(canvas.boards).map(([name, { w, h, expand }]) => ({
     path: projectPathOf(name),
     w,
     h,
     page: canvas.pages.includes(name),
+    fill: expand === 'fill',
   }))
   return { boards, order: canvas.order.map(projectPathOf), pages: canvas.pages.map(projectPathOf) }
 }
