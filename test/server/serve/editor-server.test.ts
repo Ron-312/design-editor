@@ -35,6 +35,8 @@ const endpoints: EditorEndpoints = {
   accept: () => {},
   beginPush: async () => 'nonce-1',
   endPush: async () => true,
+  knowsPushSecret: () => false,
+  receivePushHook: async () => ({}),
 }
 
 async function freePort(): Promise<number> {

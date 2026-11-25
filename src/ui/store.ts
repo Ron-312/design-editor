@@ -1,4 +1,5 @@
 import type { BoardIndex, EditorState } from '../shared/protocol'
+import { IDLE_PUSH, type PushState } from '../shared/push'
 import type { EdId, EditRecord, ProjectPath, TemplateNode } from '../shared/types'
 import type { Toast, Viewport } from './plugin-api'
 
@@ -37,6 +38,9 @@ export interface EditorStoreState {
   readonly toasts: readonly ShownToast[]
   readonly banners: readonly Banner[]
   readonly readOnly: boolean
+  readonly push: PushState
+  /** How many of `records` the last push sent. */
+  readonly pushed: number
 }
 
 export type EditorStore = ReturnType<typeof createEditorStore>
@@ -85,6 +89,8 @@ export function createEditorStore() {
     toasts: [],
     banners: [],
     readOnly: false,
+    push: IDLE_PUSH,
+    pushed: 0,
   }
 
   function update(patch: Partial<EditorStoreState>): void {
@@ -166,6 +172,11 @@ export function createEditorStore() {
     },
     hideBanner(id: string) {
       update({ banners: bannersWithout(id) })
+    },
+    /** Editing is paused while a push runs, so every record so far is in a push that just ended well. */
+    setPush(push: PushState) {
+      const endedWell = state.push.step !== null && push.step === null && push.outcome?.kind === 'pushed'
+      update({ push, pushed: endedWell ? state.records.length : state.pushed })
     },
     setReadOnly(readOnly: boolean) {
       const banners = bannersWithout(PUSH_BANNER.id)

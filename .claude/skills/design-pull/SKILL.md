@@ -27,8 +27,10 @@ variables.
 2. **Ingest the snapshot.** Run:
 
 ```
-node tools/edsync.mjs ingest --remote-dir "<snapshot folder>" --slug <slug>
+node tools/edsync.mjs ingest --remote-dir "<snapshot folder>" --slug <slug> --url "<canvas link>"
 ```
+
+   `<canvas link>` is the canvas's claude.ai artifact link; the editor's Push button sends to it.
 
    A new project is placed in `projects/<slug>/`, gets its own git repo and a pulled baseline, and
    `.editor/base.json`. An existing project is refreshed instead: remote-only changes are written and

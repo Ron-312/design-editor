@@ -33,7 +33,7 @@ const PROJECT_FOLDER = 'project'
 const CACHED_BLOB = /^([0-9a-f]{32})(\.[A-Za-z0-9]+)?$/
 
 /** The id `git hash-object` gives these bytes, so it compares with base.json's ls-tree hashes. */
-function gitBlobHash(bytes: Buffer | undefined): string | undefined {
+export function gitBlobHash(bytes: Buffer | undefined): string | undefined {
   return bytes && createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex')
 }
 

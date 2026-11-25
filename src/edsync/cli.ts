@@ -6,20 +6,15 @@ import { parseArgs } from 'node:util'
 import { ensureSupportedGit } from '../core/git'
 import { acquirePushLock, readPushLock, releasePushLock } from '../core/push-lock'
 import { EDITOR_FILES, HTTP_ROUTES, LOOPBACK_HOST, TOKEN_HEADER, type PushBeginRequest, type PushBeginResponse, type ServerInfo } from '../shared/protocol'
+import { canvasLink } from '../shared/push'
 import { EDSYNC_VERBS, LEASE, type ClassifyOutput, type EdsyncVerb, type FileClassification, type MergeOutcome, type PushLock } from '../shared/sync'
 import { cacheFetched, rewriteBlobs } from './cache'
-import { blockingEntries, classifyProject, missingBlobs } from './classify'
+import { saveCanvasLink } from './canvas-link'
+import { classifyProject } from './classify'
 import { ingest } from './ingest'
 import { hasClosedBlocks, mergeThreeWay } from './merge'
-import {
-  applyLocalWrites,
-  clearPendingSync,
-  loadPendingSync,
-  recordSync,
-  savePendingSync,
-  stageOutbox,
-  storeSynced,
-} from './sync-commit'
+import { assertHoldsLock, classifyPush, commitPush } from './push-steps'
+import { applyLocalWrites, recordSync, storeSynced } from './sync-commit'
 
 export interface EdsyncRun {
   readonly exitCode: number
@@ -38,7 +33,7 @@ type Flags = Readonly<Record<string, string | undefined>>
 const EXIT = { ok: 0, failed: 1, stopped: 2 } as const
 const PROJECTS_FOLDER = 'projects'
 const ARTBOARDS_MESSAGE = 'add/remove artboards in Claude Design'
-const FLAG_NAMES = ['slug', 'remote-dir', 'from', 'release', 'map', 'nonce', 'ours', 'base', 'theirs', 'file'] as const
+const FLAG_NAMES = ['slug', 'remote-dir', 'from', 'release', 'map', 'nonce', 'ours', 'base', 'theirs', 'file', 'url'] as const
 const HEALTH_TIMEOUT_MS = 2_000
 
 function isVerb(verb: string | undefined): verb is EdsyncVerb {
@@ -151,11 +146,6 @@ async function unlock(flags: Flags, cwd: string): Promise<VerbResult> {
   return ok({ released: true })
 }
 
-async function assertHoldsLock(projectDir: string, nonce: string): Promise<void> {
-  if ((await readPushLock(projectDir))?.nonce === nonce) return
-  throw new Error('push.lock is gone or belongs to another push: nothing was written or sent. Re-run /design-push.')
-}
-
 function stopMessage(entries: readonly FileClassification[]): string {
   const stops = entries.filter((entry) => entry.action === 'stop').map((entry) => entry.path)
   const conflicts = entries.filter((entry) => entry.action === 'conflict').map((entry) => entry.path)
@@ -167,36 +157,18 @@ function stopMessage(entries: readonly FileClassification[]): string {
   return lines.join('\n')
 }
 
-/** Push steps 3-4: writes remote-only and merged bytes, stages the one publish and the commit that follows it. */
 async function classify(flags: Flags, cwd: string): Promise<VerbResult> {
   const slug = required(flags, 'slug')
   const projectDir = projectDirOf(flags, cwd)
   const nonce = required(flags, 'nonce')
-  await assertHoldsLock(projectDir, nonce)
-  const classification = await classifyProject(projectDir, pathFlag(flags, 'remote-dir', cwd))
-  const plan = classification.outcomes.map((outcome) => outcome.entry)
-  const blocking = blockingEntries(classification)
-  if (blocking.length > 0) {
-    const output: ClassifyOutput = { plan, publish: null, missingBlobs: [] }
-    return { exitCode: EXIT.stopped, output, message: stopMessage(blocking) }
-  }
-  await assertHoldsLock(projectDir, nonce)
-  await applyLocalWrites(projectDir, classification.outcomes)
-  const publish = await stageOutbox(projectDir, slug, classification.outcomes)
-  const tree = await storeSynced(projectDir, classification.outcomes)
-  await savePendingSync(projectDir, { nonce, baseCommit: classification.baseCommit, tree })
-  const output: ClassifyOutput = { plan, publish, missingBlobs: await missingBlobs(projectDir, classification) }
-  return ok(output)
+  const { plan, blocking, publish, missingBlobs } = await classifyPush({ projectDir, slug, remoteDir: pathFlag(flags, 'remote-dir', cwd), nonce })
+  const output: ClassifyOutput = { plan, publish, missingBlobs }
+  return blocking.length > 0 ? { exitCode: EXIT.stopped, output, message: stopMessage(blocking) } : ok(output)
 }
 
-/** Push step 5 runs once the publish succeeded, so it needs the classified push, not a live lease. */
 async function commit(flags: Flags, cwd: string): Promise<VerbResult> {
   const slug = required(flags, 'slug')
-  const projectDir = projectDirOf(flags, cwd)
-  const pending = await loadPendingSync(projectDir, required(flags, 'nonce'))
-  const synced = await recordSync(projectDir, pending, `Pushed ${slug} to Claude Design`)
-  await clearPendingSync(projectDir)
-  return ok({ commit: synced })
+  return ok({ commit: await commitPush(projectDirOf(flags, cwd), slug, required(flags, 'nonce')) })
 }
 
 /** A refresh is a push with nothing to upload: a synced project can only hold remote-only changes. */
@@ -211,8 +183,11 @@ async function refreshFromRemote(projectDir: string, remoteDir: string, slug: st
 async function ingestVerb(flags: Flags, cwd: string): Promise<VerbResult> {
   const options = { remoteDir: pathFlag(flags, 'remote-dir', cwd), slug: required(flags, 'slug'), projectsDir: path.join(cwd, PROJECTS_FOLDER) }
   const projectDir = projectDirOf(flags, cwd)
+  const link = canvasLink(flags.url ?? '')
+  if (flags.url && !link) throw new Error(`--url must be a claude.ai artifact link, not ${JSON.stringify(flags.url)}`)
   const isRefresh = existsSync(path.join(projectDir, '.git'))
   const fetchList = await ingest(options)
+  if (link) await saveCanvasLink(projectDir, link)
   if (!isRefresh) return ok(fetchList)
   await refreshFromRemote(projectDir, options.remoteDir, options.slug)
   return ok(await ingest(options))

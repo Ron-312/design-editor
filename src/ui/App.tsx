@@ -266,7 +266,8 @@ export function App({ store, ws, platform, projectName, slots = DEFAULT_SLOTS }:
 
   // The panels read the artboard through the probe, so they wait for one to attach.
   const panelCtx = probe && ctx
-  const syncStep: SyncStep = state.readOnly ? 'pushing' : state.records.length > 0 ? 'edited' : 'pulled'
+  const pendingEdits = state.records.length - state.pushed
+  const syncStep: SyncStep = state.readOnly || state.push.step ? 'pushing' : pendingEdits > 0 ? 'edited' : 'pulled'
   const shortcuts = SHORTCUTS[platform]
   const shownTab = leftTab === 'tokens' && tokens.length === 0 ? 'layers' : leftTab
   const renderSlots = (place: ShellSlot['place']) =>
@@ -286,7 +287,7 @@ export function App({ store, ws, platform, projectName, slots = DEFAULT_SLOTS }:
             {projectName} {state.board && <span className="sub">/ {fileName(state.board)}</span>}
           </div>
           <div className="vsep" />
-          <SyncStrip step={syncStep} edits={state.records.length} />
+          <SyncStrip step={syncStep} edits={pendingEdits} />
           <div className="spacer" />
           <button type="button" className="ibtn" title={`Undo  ${shortcuts.undo}`} disabled={!undoState.canUndo || state.readOnly} onClick={() => ws.undo()}>
             <ShellIcon name="undo" />
@@ -309,7 +310,13 @@ export function App({ store, ws, platform, projectName, slots = DEFAULT_SLOTS }:
             <ShellIcon name="moon" className="i moon" />
           </button>
           <PreviewSwitch on={state.interact} onToggle={() => store.setInteract(!store.getState().interact)} />
-          <PushButton pending={state.records.length} pushing={state.readOnly} />
+          <PushButton
+            pending={pendingEdits}
+            locked={state.readOnly}
+            push={state.push}
+            onStart={(canvas) => ws.send(canvas === undefined ? { type: 'startPush' } : { type: 'startPush', canvas })}
+            onCancel={() => ws.send({ type: 'cancelPush' })}
+          />
         </header>
 
         <aside className="left">

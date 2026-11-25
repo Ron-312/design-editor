@@ -1,5 +1,7 @@
 import type WebSocket from 'ws'
 import { acquirePushLock, isPushLockLive, releasePushLock, renewPushLock } from '../core/push-lock'
+import type { HookEvent, HookReply } from '../push/conversation'
+import { PushRunner } from '../push/push-runner'
 import { findStoredPath } from '../shared/paths'
 import { withReplacedIds, type BoardIndex, type ClientMessage, type DesignToken, type EditorState, type ServerMessage } from '../shared/protocol'
 import { LEASE, type PushLock } from '../shared/sync'
@@ -46,6 +48,7 @@ export class EditSession {
   private readonly clients = new Set<WebSocket>()
   /** The IndexedFile each viewed board's last `index` message was built from. */
   private readonly sentIndexes = new Map<ProjectPath, IndexedFile>()
+  private readonly pusher: PushRunner
   private lock: LockState | null = null
   private frameBase = ''
   private recheck: ReturnType<typeof setTimeout> | undefined
@@ -58,6 +61,11 @@ export class EditSession {
     private layout: CanvasLayout,
   ) {
     this.writer = new Writer({ root, index: this.index, undo: this.undoLog, send: (message) => this.relay(message) })
+    this.pusher = new PushRunner(root, {
+      beginPush: () => this.beginPush(),
+      endPush: (nonce) => this.endPush(nonce),
+      changed: (state) => this.broadcast({ type: 'pushState', state }),
+    })
   }
 
   /** Every board is opened up front, so the served ids and the Writer's ids are one set from the first request. */
@@ -68,6 +76,7 @@ export class EditSession {
     session.persisted = JSON.stringify(stored)
     session.state = session.elementPaths().toIds(stored)
     session.tokens = await loadTokens(root)
+    await session.pusher.open()
     if (await isPushLockLive(root)) session.watchForeignLock()
     return session
   }
@@ -75,6 +84,19 @@ export class EditSession {
   /** `http://127.0.0.1:<project port>/project/<secret>/`, the base of every iframe `src`. */
   serveFramesAt(frameBase: string): void {
     this.frameBase = frameBase
+  }
+
+  /** Where the push's Claude Code session reports each call and asks for the next. */
+  servePushGuardAt(url: string): void {
+    this.pusher.serveGuardAt(url)
+  }
+
+  knowsPushSecret(secret: string | undefined): boolean {
+    return this.pusher.knowsSecret(secret)
+  }
+
+  receivePushHook(event: HookEvent): Promise<HookReply> {
+    return this.pusher.receiveHook(event)
   }
 
   get editorState(): EditorState {
@@ -105,6 +127,7 @@ export class EditSession {
     })
     this.sendTo(socket, { type: 'hello', layout: this.layout, editorState: this.state, readOnly: this.lock !== null })
     this.sendTo(socket, { type: 'tokens', tokens: this.tokens })
+    this.sendTo(socket, { type: 'pushState', state: this.pusher.current })
   }
 
   /** Flushes the debounce to disk, then takes push.lock; null while any lock is held. */
@@ -142,6 +165,7 @@ export class EditSession {
   }
 
   async close(): Promise<void> {
+    await this.pusher.close()
     this.stopLockTimer()
     clearTimeout(this.recheck)
     if (!this.lock) await this.writer.flush()
@@ -152,6 +176,8 @@ export class EditSession {
     if (message.type === 'open') return this.openBoard(socket, message.board)
     if (message.type === 'saveEditorState') return this.saveEditorState(message.state)
     if (message.type === 'unlockStalePush') return this.unlockStalePush()
+    if (message.type === 'startPush') return this.pusher.start(message.canvas)
+    if (message.type === 'cancelPush') return this.pusher.cancel()
     if (this.lock) return
     switch (message.type) {
       case 'undo':
