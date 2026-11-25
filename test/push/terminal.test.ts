@@ -46,11 +46,13 @@ describe('openTerminal', () => {
 
   it('closes a Claude that is still running', async () => {
     const script = path.join(project, 'stay.mjs')
-    writeFileSync(script, 'setInterval(() => {}, 1000)')
+    writeFileSync(script, "import { writeFileSync } from 'node:fs'\nwriteFileSync('running', '')\nsetInterval(() => {}, 1000)\n")
     const command = path.join(project, isWindows ? 'claude.cmd' : 'claude')
     writeFileSync(command, isWindows ? `@"${process.execPath}" "%~dp0stay.mjs"\r\n` : `#!/bin/sh\nexec "${process.execPath}" "$(dirname "$0")/stay.mjs"\n`)
     chmodSync(command, 0o755)
     const window = await openTerminal({ dir, command, args: [] })
+    // Closing before Claude has started is a different case: taskkill could miss a process cmd starts a moment later.
+    await vi.waitFor(() => readFileSync(path.join(project, 'running')), { timeout: 10_000, interval: 50 })
 
     window.close()
 
