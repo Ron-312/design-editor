@@ -110,29 +110,41 @@ function signal(pid: number, name: NodeJS.Signals | 0): boolean {
 class ChildWindow implements TerminalWindow {
   private isClosed = false
   private readonly listeners: (() => void)[] = []
+  /** On Windows the window's own process can outlive `cmd`; the end waits for `taskkill` to finish. */
+  private killed: Promise<void> = Promise.resolve()
 
   constructor(
     private readonly child: ChildProcess,
     private readonly platform: NodeJS.Platform,
   ) {
     const closed = () => {
+      if (this.isClosed) return
       this.isClosed = true
-      for (const listener of this.listeners.splice(0)) listener()
+      void this.killed.then(() => {
+        for (const listener of this.listeners.splice(0)) listener()
+      })
     }
     child.once('error', closed)
     child.once('close', closed)
   }
 
   onClosed(listener: () => void): void {
-    if (this.isClosed) listener()
+    if (this.isClosed) void this.killed.then(listener)
     else this.listeners.push(listener)
   }
 
   close(): void {
     if (this.isClosed || this.child.pid === undefined) return
-    if (this.platform !== 'win32') this.child.kill()
+    if (this.platform !== 'win32') {
+      this.child.kill()
+      return
+    }
     // `/T` because the window's own process is a grandchild.
-    else spawn('taskkill', ['/pid', String(this.child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' }).on('error', () => undefined)
+    const taskkill = spawn('taskkill', ['/pid', String(this.child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' })
+    this.killed = new Promise((resolve) => {
+      taskkill.once('error', () => resolve())
+      taskkill.once('close', () => resolve())
+    })
   }
 }
 

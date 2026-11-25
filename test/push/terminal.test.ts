@@ -19,7 +19,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllEnvs()
-  rmSync(path.dirname(project), { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
+  rmSync(path.dirname(project), { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
 })
 
 /** A command that writes the folder, arguments and environment it was run with. */
