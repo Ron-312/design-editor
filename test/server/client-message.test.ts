@@ -87,6 +87,9 @@ describe('parseClientMessage: other messages', () => {
     { type: 'undo' },
     { type: 'redo' },
     { type: 'unlockStalePush' },
+    { type: 'startPush' },
+    { type: 'startPush', canvas: 'https://claude.ai/artifact/abc' },
+    { type: 'cancelPush' },
     { type: 'resolvePending', file: 'project/home.dc.html', keep: false },
     { type: 'revertFile', file: 'project/home.dc.html' },
     { type: 'saveEditorState', state },
@@ -97,6 +100,7 @@ describe('parseClientMessage: other messages', () => {
   it.each([
     ['open without a board', { type: 'open' }],
     ['resolvePending with a string keep', { type: 'resolvePending', file: 'project/home.dc.html', keep: 'true' }],
+    ['startPush with a canvas that is not text', { type: 'startPush', canvas: { url: 'x' } }],
     ['revertFile without a file', { type: 'revertFile' }],
     ['saveEditorState with a broken state', { type: 'saveEditorState', state: { ...state, hidden: 'e1' } }],
     ['an unknown type', { type: 'shutdown' }],

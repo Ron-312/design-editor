@@ -9,6 +9,7 @@ import type {
   StyleSource,
   TemplateNode,
 } from './types'
+import type { PushState } from './push'
 
 export const DEFAULT_EDITOR_PORT = 5300
 export const LOOPBACK_HOST = '127.0.0.1'
@@ -34,6 +35,7 @@ export const EDITOR_FILES = {
   server: '.editor/server.json',
   pushLock: '.editor/push.lock',
   base: '.editor/base.json',
+  canvas: '.editor/canvas.json',
   cache: '.editor/cache',
   shots: '.editor/shots',
   asks: '.editor/asks',
@@ -84,6 +86,8 @@ export const HTTP_ROUTES = {
   health: '/health',
   pushBegin: '/push/begin',
   pushEnd: '/push/end',
+  /** Claude Code's permission hook, with its own per-push secret instead of the token. */
+  pushGuard: '/push/guard',
   shutdown: '/shutdown',
 } as const
 
@@ -118,6 +122,9 @@ export type ClientMessage =
   | { readonly type: 'saveEditorState'; readonly state: EditorState }
   /** The user's answer to `pushStale`: the push stopped in Claude Code, so the editor releases its lock. */
   | { readonly type: 'unlockStalePush' }
+  /** `canvas` is a link the user pasted, for a project whose canvas is not known yet. */
+  | { readonly type: 'startPush'; readonly canvas?: string }
+  | { readonly type: 'cancelPush' }
 
 export interface BoardIndex {
   readonly board: ProjectPath
@@ -193,6 +200,7 @@ export type ServerMessage =
   | { readonly type: 'writeFailed'; readonly file: ProjectPath; readonly reason: 'locked' | 'error'; readonly message: string }
   | { readonly type: 'pushLock'; readonly held: boolean }
   | { readonly type: 'pushStale'; readonly heldForMs: number }
+  | { readonly type: 'pushState'; readonly state: PushState }
   /** The token picker's list; sent on connect and again whenever it changes. */
   | { readonly type: 'tokens'; readonly tokens: readonly DesignToken[] }
 

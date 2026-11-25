@@ -1,3 +1,4 @@
+import { readCanvasLink } from '../../src/edsync/canvas-link'
 import { spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
@@ -104,6 +105,18 @@ describe.skipIf(ON_WINDOWS)('the Git version check', () => {
 })
 
 describe('edsync ingest, cache and rewrite-blobs', () => {
+  it('keeps the canvas link it is given for the Push button, and refuses one that is not a canvas link', async () => {
+    const snapshot = space.remote.snapshot()
+
+    const refused = await space.edsync('ingest', '--remote-dir', snapshot, '--slug', SLUG, '--url', 'https://evil.example/artifact/x')
+    expect(refused.exitCode).toBe(1)
+    expect(await readCanvasLink(space.projectDir)).toBeNull()
+
+    const pulled = await space.edsync('ingest', '--remote-dir', snapshot, '--slug', SLUG, '--url', 'https://claude.ai/code/artifact/0a1b-2c?v=3')
+    expect(pulled.exitCode).toBe(0)
+    expect(await readCanvasLink(space.projectDir)).toBe('https://claude.ai/code/artifact/0a1b-2c')
+  })
+
   it('ingests the snapshot into projects/<slug>/ under the working directory and prints what to fetch', async () => {
     const output = parsedOk<IngestOutput>(await space.edsync('ingest', '--remote-dir', space.remote.snapshot(), '--slug', SLUG))
 

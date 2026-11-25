@@ -134,6 +134,9 @@ export function connectWsClient({ host, token, store, reloadFrame }: WsClientOpt
       case 'pushLock':
         store.setReadOnly(message.held)
         break
+      case 'pushState':
+        store.setPush(message.state)
+        break
       case 'restored':
         if (message.reload) reloadFrame()
         break

@@ -120,6 +120,8 @@ html.light .btn.primary .cnt{background:rgba(255,255,255,.22)}
 .push-pop{left:auto;right:0;width:280px;padding:12px;gap:6px;color:var(--text-2)}
 .push-pop strong{color:var(--text);font-weight:600}
 .push-pop code{color:var(--accent-text);background:var(--field);padding:1px 4px;border-radius:var(--r-xs)}
+.push-pop [role=status],.push-pop form{display:grid;gap:6px}
+.push-pop .btn{justify-self:start;height:28px}
 .push-pop .pending{color:var(--text-3)}
 .theme-ico .moon{display:none}
 html.light .theme-ico .sun{display:none}

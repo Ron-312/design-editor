@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { parseArgs as parseCliArgs } from 'node:util'
 import { atomicWrite } from '../core/atomic-write'
 import { ensureSupportedGit } from '../core/git'
-import { DEFAULT_EDITOR_PORT, EDITOR_FILES, LOOPBACK_HOST, projectPortFor, type ServerInfo } from '../shared/protocol'
+import { DEFAULT_EDITOR_PORT, EDITOR_FILES, HTTP_ROUTES, LOOPBACK_HOST, projectPortFor, type ServerInfo } from '../shared/protocol'
 import { startEditorServer, type EditorServer } from './serve/editor-server'
 import { startProjectServer, type ProjectServer } from './serve/project-server'
 import { EditSession } from './session'
@@ -165,6 +165,7 @@ export async function startEditor(options: StartOptions): Promise<Editor> {
     const opened = prepared.session
     probeScript = prepared.probeScript
     opened.serveFramesAt(`http://${LOOPBACK_HOST}:${projectPort}${projectServer.prefix}`)
+    opened.servePushGuardAt(`http://${LOOPBACK_HOST}:${options.port}${HTTP_ROUTES.pushGuard}`)
     await editorServer.serve(opened)
     watcher = await watchProject({
       root,

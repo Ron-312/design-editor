@@ -35,6 +35,7 @@ const endpoints: EditorEndpoints = {
   accept: () => {},
   beginPush: async () => 'nonce-1',
   endPush: async () => true,
+  decidePushCall: () => null,
 }
 
 async function freePort(): Promise<number> {

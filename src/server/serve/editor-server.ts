@@ -16,6 +16,7 @@ import {
   WS_TOKEN_PARAM,
   type PushEndRequest,
 } from '../../shared/protocol'
+import { GUARD_HEADER, type HookReply } from '../../push/guard'
 import { contentTypeOf } from './blob-cache'
 
 /** The editor page reads the per-launch token from this meta tag; project documents never carry it. */
@@ -26,6 +27,8 @@ export interface EditorEndpoints {
   /** `nonce` is the caller's own, so a caller that gave up waiting can still end the push it asked for. */
   beginPush(nonce?: string): Promise<string | null>
   endPush(nonce: string): Promise<boolean>
+  /** Null when `secret` is not the running push's. */
+  decidePushCall(secret: string | undefined, toolName: unknown, input: unknown): HookReply | null
 }
 
 export interface EditorServerOptions {
@@ -47,6 +50,8 @@ export interface EditorServer {
 const VITE_CONFIG = fileURLToPath(new URL('../../../vite.config.ts', import.meta.url))
 const INDEX_HTML = 'index.html'
 const MAX_BODY_BYTES = 4096
+/** A hook call carries the tool's whole input, which for a publish lists every file. */
+const MAX_HOOK_BODY_BYTES = 256 * 1024
 
 interface Reply {
   readonly status: number
@@ -93,13 +98,13 @@ class RequestGuard {
   }
 }
 
-function readBody(request: http.IncomingMessage): Promise<string> {
+function readBody(request: http.IncomingMessage, limit = MAX_BODY_BYTES): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = []
     let size = 0
     request.on('data', (chunk: Buffer) => {
       size += chunk.length
-      if (size > MAX_BODY_BYTES) return request.destroy(new Error('request body too large'))
+      if (size > limit) return request.destroy(new Error('request body too large'))
       chunks.push(chunk)
     })
     request.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')))
@@ -113,6 +118,15 @@ function nonceOf(body: string): string | null {
     return typeof nonce === 'string' ? nonce : null
   } catch {
     return null
+  }
+}
+
+function hookCallOf(body: string): { tool_name?: unknown; tool_input?: unknown } {
+  try {
+    const call: unknown = JSON.parse(body)
+    return typeof call === 'object' && call !== null ? call : {}
+  } catch {
+    return {}
   }
 }
 
@@ -152,6 +166,7 @@ class EditorRoutes {
     if (!this.guard.isOwnHost(request.headers.host)) return plain(421, 'Misdirected request')
     if (request.headers.origin !== undefined && !this.guard.isOwnOrigin(request.headers.origin)) return plain(403, 'Forbidden')
     if (requestPath.startsWith(PROJECT_PATH_PREFIX)) return notFound
+    if (requestPath === HTTP_ROUTES.pushGuard) return this.pushGuard(request)
     if ((Object.values(HTTP_ROUTES) as string[]).includes(requestPath)) return this.api(request, requestPath)
     if (requestPath === '/' || requestPath === `/${INDEX_HTML}`) return this.editorPage(requestPath)
     return this.vite ? null : this.uiAsset(requestPath)
@@ -182,6 +197,15 @@ class EditorRoutes {
     const nonce = nonceOf(body)
     if (nonce === null) return plain(400, 'expected {"nonce": "..."}')
     return (await this.endpoints.endPush(nonce)) ? json({ ok: true }) : plain(409, 'not the editor’s push lock')
+  }
+
+  /** Claude Code's own request, so it has the push's secret in place of the token a browser page could never read. */
+  private async pushGuard(request: http.IncomingMessage): Promise<Reply> {
+    if (request.method !== 'POST') return plain(405, 'Method not allowed')
+    const secret = request.headers[GUARD_HEADER]
+    const { tool_name: toolName, tool_input: input } = hookCallOf(await readBody(request, MAX_HOOK_BODY_BYTES))
+    const decision = this.endpoints.decidePushCall(typeof secret === 'string' ? secret : undefined, toolName, input)
+    return decision ? json(decision) : plain(403, 'Forbidden')
   }
 
   private shutdown(): Reply {

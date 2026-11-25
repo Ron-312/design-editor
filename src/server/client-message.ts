@@ -58,9 +58,12 @@ function isClientMessage(value: unknown): value is ClientMessage {
     case 'undo':
     case 'redo':
     case 'unlockStalePush':
+    case 'cancelPush':
       return true
     case 'resolvePending':
       return isString(value.file) && typeof value.keep === 'boolean'
+    case 'startPush':
+      return isOptional(value.canvas, isString)
     case 'revertFile':
       return isString(value.file)
     case 'saveEditorState':

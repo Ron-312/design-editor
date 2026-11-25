@@ -10,6 +10,9 @@ This skill holds no logic. It makes the Artifact tool calls, and every other ste
 move; the skill never picks files itself. The commands are the same in PowerShell, cmd and zsh. Quote
 every path you pass, and never build a command out of shell variables.
 
+The editor's Push button runs the same steps without this skill. Use the skill to settle a conflict, which
+the button only reports, or when the button cannot run.
+
 ## Safety rule
 
 Never push to Ron's "Test Site" canvas or to any other real canvas while testing. Test Site is only

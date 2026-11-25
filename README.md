@@ -8,7 +8,7 @@ canvas's own HTML. There is no conversion and no separate design file, and an un
 leaves a zero-byte diff. When you're done, one command syncs it back to Claude Design.
 
 ```
-/design-pull <canvas link>   →   edit on the canvas   →   /design-push
+/design-pull <canvas link>   →   edit on the canvas   →   Push
 ```
 
 Runs on **macOS and Windows**.
@@ -34,8 +34,9 @@ The builds are not signed with a paid certificate yet:
 - **macOS:** the first time, right-click the app → **Open** → **Open**.
 - **Windows:** on the SmartScreen prompt, click **More info** → **Run anyway**.
 
-Pulling from and pushing to Claude Design still happens in Claude Code (`/design-pull`, `/design-push`);
-the app is the editor in between, and push works while it is open.
+Pulling still happens in Claude Code (`/design-pull`). The **Push** button sends your edits back by itself:
+it runs [Claude Code](https://claude.com/claude-code) in the background, so that must be installed and
+signed in (`claude auth login`). A project pulled before this asks once for its canvas link.
 
 ## Getting started
 
@@ -55,14 +56,11 @@ Then, in Claude Code opened in this folder:
 
 That pulls the canvas into `projects/<slug>/`, caches its assets for offline use, and starts the editor
 on `http://127.0.0.1:5300` (it builds the UI on first start). Edit on the canvas; every change is saved
-straight into the canvas files. When you're done:
-
-```
-/design-push
-```
+straight into the canvas files. When you're done, press **Push**.
 
 Push does a three-way merge with whatever changed in Claude Design meanwhile and stops on any conflict
-instead of overwriting.
+instead of overwriting; run `/design-push` in Claude Code to settle one. The editor does the merging itself.
+Claude Code only fetches the canvas and makes one publish, and the editor refuses any other call.
 
 To run the editor on an already-pulled project yourself: `npm start -- --project projects/<slug>`.
 

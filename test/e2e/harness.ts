@@ -10,6 +10,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { test as base, expect, type FrameLocator, type Locator, type Page } from '@playwright/test'
 import { HTTP_ROUTES, TOKEN_HEADER, type ServerInfo } from '../../src/shared/protocol'
 import { cacheFixtureAssets } from '../pulled-fixture'
+import { FakeClaude } from '../push/fake-claude'
 
 export { expect }
 
@@ -133,13 +134,14 @@ function exited(child: ChildProcess): Promise<void> {
   return new Promise((resolve) => child.once('exit', () => resolve()))
 }
 
-async function launchEditor(root: string): Promise<RunningEditor> {
+async function launchEditor(root: string, claude: FakeClaude): Promise<RunningEditor> {
   const port = await freePortPair()
   // stdin stays open: the editor treats its close as a shutdown.
   const child = spawn(process.execPath, [START_SCRIPT, '--project', root, '--port', String(port), '--dev'], {
     cwd: REPO,
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true,
+    env: { ...process.env, ...claude.env },
   })
   let output = ''
   child.stdout?.on('data', (chunk: Buffer) => (output += chunk.toString()))
@@ -156,7 +158,7 @@ async function launchEditor(root: string): Promise<RunningEditor> {
   return { url: `http://127.0.0.1:${port}`, port, stop }
 }
 
-export const test = base.extend<{ project: E2eProject; editor: RunningEditor }>({
+export const test = base.extend<{ project: E2eProject; claude: FakeClaude; editor: RunningEditor }>({
   // Playwright reads a fixture's dependencies from its first argument, which must be an object pattern.
   // eslint-disable-next-line no-empty-pattern
   project: async ({}, use) => {
@@ -164,8 +166,14 @@ export const test = base.extend<{ project: E2eProject; editor: RunningEditor }>(
     await use(project)
     remove()
   },
-  editor: async ({ project }, use) => {
-    const editor = await launchEditor(project.root)
+  /** Stands in for the installed `claude`, so no browser test can reach Claude Design. */
+  claude: async ({ project }, use) => {
+    const claude = new FakeClaude(path.join(path.dirname(project.root), 'fake claude'))
+    copyDir(path.join(project.root, 'project'), path.join(claude.remote, 'project'))
+    await use(claude)
+  },
+  editor: async ({ project, claude }, use) => {
+    const editor = await launchEditor(project.root, claude)
     await use(editor)
     await editor.stop()
   },

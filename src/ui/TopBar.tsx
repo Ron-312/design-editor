@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from 'react'
+import { useEffect, useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from 'react'
+import { isCancellable, type PushFailure, type PushOutcome, type PushState, type PushStep } from '../shared/push'
 import type { Board, CanvasLayout, ProjectPath } from '../shared/types'
 import type { CanvasCommands } from './canvas/CanvasView'
 import { fileName } from './DiffPanel'
@@ -187,21 +188,92 @@ function plural(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? '' : 's'}`
 }
 
-function pushStatus(pending: number, pushing: boolean): ReactNode {
-  if (pushing) return 'A push is running now; editing resumes when it finishes.'
-  if (pending === 0) return 'No changes waiting to push yet.'
-  return `${plural(pending, 'change')} waiting to push.`
+const STEP_LABELS: Readonly<Record<PushStep, string>> = {
+  starting: 'Starting Claude Code…',
+  checking: 'Reading the canvas from Claude Design…',
+  merging: 'Merging…',
+  sending: 'Sending your edits…',
+  confirming: 'Checking they arrived…',
 }
 
-export function PushButton({ pending, pushing }: { readonly pending: number; readonly pushing: boolean }) {
+const FAILURE_TITLES: Readonly<Record<PushFailure, string>> = {
+  noClaude: 'Claude Code not found',
+  signedOut: 'Sign in to Claude Code',
+  noCanvas: 'Which canvas?',
+  wrongCanvas: 'Not the same canvas',
+  conflict: 'Changed on both sides',
+  artboards: 'Artboards changed here',
+  cancelled: 'Push cancelled',
+  error: 'Push failed',
+}
+
+type PushedOutcome = Extract<PushOutcome, { kind: 'pushed' }>
+type FailedOutcome = Extract<PushOutcome, { kind: 'failed' }>
+
+function PushedReport({ outcome }: { readonly outcome: PushedOutcome }) {
+  const { title, sent, received } = outcome
+  return (
+    <>
+      <strong>{sent.length > 0 ? `Pushed to ${title}` : 'Up to date'}</strong>
+      {sent.length > 0 ? <p>Sent {sent.map(fileName).join(', ')}.</p> : <p>{title} already has everything here.</p>}
+      {received.length > 0 && <p>Brought in from Claude Design: {received.map(fileName).join(', ')}.</p>}
+    </>
+  )
+}
+
+function FailedReport({ outcome }: { readonly outcome: FailedOutcome }) {
+  return (
+    <>
+      <strong>{FAILURE_TITLES[outcome.reason]}</strong>
+      <p>{outcome.message}</p>
+      {outcome.reason === 'signedOut' && (
+        <p>
+          Run <code className="mono">claude auth login</code> in a terminal, then push again.
+        </p>
+      )}
+      {outcome.reason === 'conflict' && (
+        <p>
+          Run <code className="mono">/design-push</code> in Claude Code to choose which side to keep.
+        </p>
+      )}
+      {outcome.files.length > 0 && <p className="pending">{outcome.files.map(fileName).join(', ')}</p>}
+    </>
+  )
+}
+
+interface PushButtonProps {
+  readonly pending: number
+  /** Another program's push holds the canvas, or this one does. */
+  readonly locked: boolean
+  readonly push: PushState
+  readonly onStart: (canvas?: string) => void
+  readonly onCancel: () => void
+}
+
+/** One press pushes and shows how it goes; it only asks first when the project does not know its canvas. */
+export function PushButton({ pending, locked, push, onStart, onCancel }: PushButtonProps) {
   const anchor = useRef<HTMLDivElement>(null)
   const popover = usePopover(anchor)
+  const [link, setLink] = useState('')
+  const running = push.step !== null
+  const needsLink = push.canvas === null && !running
+
+  function press() {
+    popover.toggle()
+    if (!popover.open && !running && !locked && !needsLink) onStart()
+  }
+
+  function submitLink(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (link.trim()) onStart(link.trim())
+  }
+
   return (
     <div className="anchor" ref={anchor}>
-      <button type="button" className="btn primary" aria-haspopup="dialog" aria-expanded={popover.open} onClick={popover.toggle}>
+      <button type="button" className="btn primary" aria-haspopup="dialog" aria-expanded={popover.open} aria-busy={running} onClick={press}>
         <ShellIcon name="push" />
-        Push
-        {pending > 0 && (
+        {running ? 'Pushing…' : 'Push'}
+        {pending > 0 && !running && (
           <span className="cnt" aria-label={plural(pending, 'change')}>
             {pending}
           </span>
@@ -209,11 +281,31 @@ export function PushButton({ pending, pushing }: { readonly pending: number; rea
       </button>
       {popover.open && (
         <div className="menu push-pop" role="dialog" aria-label="Push">
-          <strong>Push from Claude Code</strong>
-          <p>
-            Run <code className="mono">/design-push</code> in Claude Code to send your edits back to the canvas.
-          </p>
-          <p className="pending">{pushStatus(pending, pushing)}</p>
+          <div role="status">
+            {push.step && <strong>{STEP_LABELS[push.step]}</strong>}
+            {!running && push.outcome?.kind === 'pushed' && <PushedReport outcome={push.outcome} />}
+            {!running && push.outcome?.kind === 'failed' && <FailedReport outcome={push.outcome} />}
+            {!running && locked && <p>Another push is running. Editing resumes when it finishes.</p>}
+            {needsLink && !push.outcome && <p>Paste the claude.ai link of the canvas this project came from. It is asked once.</p>}
+          </div>
+          {isCancellable(push.step) && (
+            <button type="button" className="btn ghost" onClick={onCancel}>
+              Cancel
+            </button>
+          )}
+          {needsLink && !locked && (
+            <form onSubmit={submitLink}>
+              <input style={MENU_FIELD} name="canvas" aria-label="Canvas link" placeholder="https://claude.ai/artifact/…" autoFocus value={link} onChange={(event) => setLink(event.currentTarget.value)} />
+              <button type="submit" className="btn primary">
+                Push
+              </button>
+            </form>
+          )}
+          {!running && !needsLink && !locked && push.outcome?.kind === 'failed' && (
+            <button type="button" className="btn primary" onClick={() => onStart()}>
+              Try again
+            </button>
+          )}
         </div>
       )}
     </div>

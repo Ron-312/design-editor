@@ -532,19 +532,25 @@ describe('top bar', () => {
     expect(store.getState().interact).toBe(false)
   })
 
-  it('Push counts the waiting changes and says to run /design-push in Claude Code, sending nothing itself', async () => {
+  it('Push counts the waiting changes, starts the push, and counts none once it ended well', async () => {
     const shell = await openHome()
+    await receive(shell.socket, { type: 'pushState', state: { canvas: 'https://claude.ai/artifact/abc', step: null, outcome: null } })
     await editAndAck(shell, radiusRecord('12px', '16px'))
     await editAndAck(shell, radiusRecord('16px', '20px'))
-    const sentBefore = shell.socket.sent.length
-
     const push = buttonNamed(topBar(shell.container), /^Push/)
     expect(text(push.querySelector('.cnt'))).toBe('2')
+
     await click(push)
 
-    expect(text(pushDialog(shell.container))).toContain('Run /design-push in Claude Code')
-    expect(text(pushDialog(shell.container))).toContain('2 changes waiting to push')
-    expect(shell.socket.sent).toHaveLength(sentBefore)
+    expect(shell.socket.sent.at(-1)).toEqual({ type: 'startPush' })
+    await receive(shell.socket, { type: 'pushState', state: { canvas: 'https://claude.ai/artifact/abc', step: 'sending', outcome: null } })
+    expect(text(pushDialog(shell.container))).toContain('Sending your edits')
+    await receive(shell.socket, {
+      type: 'pushState',
+      state: { canvas: 'https://claude.ai/artifact/abc', step: null, outcome: { kind: 'pushed', title: 'Test Site', sent: [home], received: [] } },
+    })
+    expect(text(pushDialog(shell.container))).toContain('Pushed to Test Site')
+    expect(push.querySelector('.cnt')).toBeNull()
 
     act(() => {
       document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
@@ -553,12 +559,21 @@ describe('top bar', () => {
     expect(pushDialog(shell.container)).toBeNull()
   })
 
-  it('Push says when there is nothing to push yet', async () => {
-    const { container } = await openHome()
+  it('a push that failed keeps its changes counted, and Cancel asks the server to stop', async () => {
+    const shell = await openHome()
+    await editAndAck(shell, radiusRecord('12px', '16px'))
+    await receive(shell.socket, { type: 'pushState', state: { canvas: 'https://claude.ai/artifact/abc', step: 'checking', outcome: null } })
+    const push = buttonNamed(topBar(shell.container), /^Push/)
+    await click(push)
 
-    await click(buttonNamed(topBar(container), /^Push/))
+    await click(buttonNamed(pushDialog(shell.container)!, /^Cancel$/))
 
-    expect(text(pushDialog(container))).toContain('No changes waiting to push yet')
+    expect(shell.socket.sent.at(-1)).toEqual({ type: 'cancelPush' })
+    await receive(shell.socket, {
+      type: 'pushState',
+      state: { canvas: 'https://claude.ai/artifact/abc', step: null, outcome: { kind: 'failed', reason: 'cancelled', message: 'Cancelled.', files: [] } },
+    })
+    expect(text(push.querySelector('.cnt'))).toBe('1')
   })
 })
 

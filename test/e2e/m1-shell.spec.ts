@@ -157,21 +157,6 @@ test.describe("M1: the mockup's canvas chrome", () => {
     await expect(page.locator('[data-board-label]')).toHaveText(/home\.dc\.html\s*1280 × 900/)
   })
 
-  test('Push only says to run /design-push in Claude Code, with the count of waiting changes', async ({ page, editor, project }) => {
-    await goOffline(page)
-    await openEditor(page, editor)
-    const before = project.status()
-
-    await page.locator('header').getByRole('button', { name: /^Push/ }).click()
-
-    const dialog = page.getByRole('dialog', { name: 'Push' })
-    await expect(dialog).toContainText('Run /design-push in Claude Code')
-    await expect(dialog).toContainText('No changes waiting to push yet')
-    expect(project.status()).toBe(before)
-    await page.keyboard.press('Escape')
-    await expect(dialog).toBeHidden()
-  })
-
   test('the dock pans with the hand tool, and shows the tools still to come as disabled', async ({ page, editor }) => {
     await goOffline(page)
     await openEditor(page, editor)
