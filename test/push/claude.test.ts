@@ -47,15 +47,26 @@ describe('claudeEnv', () => {
 })
 
 describe('claudeArgs', () => {
-  const args = claudeArgs('/x/settings.json')
+  const args = claudeArgs('.editor/push/settings.json', 'https://claude.ai/artifact/abc')
   const valueOf = (flag: string) => args[args.indexOf(flag) + 1]
 
-  it('gives Claude only the Artifact tool, denies whatever the hook does not allow, and loads no user settings', () => {
-    expect(valueOf('--tools')).toBe('Artifact')
+  it('gives Claude only Artifact and Read, denies whatever the hook does not allow, and loads no user settings', () => {
+    expect(valueOf('--tools')).toBe('Artifact,Read')
     expect(valueOf('--permission-mode')).toBe('dontAsk')
     expect(valueOf('--setting-sources')).toBe('')
     expect(args).toContain('--strict-mcp-config')
+    expect(args).toContain('--no-chrome')
     expect(args).not.toContain('--allowedTools')
     expect(args).not.toContain('--dangerously-skip-permissions')
+  })
+
+  it('starts a normal session, which is the only kind with the Artifact tool', () => {
+    expect(args).not.toContain('-p')
+    expect(args).not.toContain('--print')
+  })
+
+  it('ends with a prompt no shell reads anything into', () => {
+    expect(args.at(-1)).toMatch(/^[A-Za-z0-9 .,:/-]+$/)
+    expect(args.at(-1)).toContain('https://claude.ai/artifact/abc')
   })
 })

@@ -1,6 +1,6 @@
 import type WebSocket from 'ws'
 import { acquirePushLock, isPushLockLive, releasePushLock, renewPushLock } from '../core/push-lock'
-import type { HookReply } from '../push/guard'
+import type { HookEvent, HookReply } from '../push/conversation'
 import { PushRunner } from '../push/push-runner'
 import { findStoredPath } from '../shared/paths'
 import { withReplacedIds, type BoardIndex, type ClientMessage, type DesignToken, type EditorState, type ServerMessage } from '../shared/protocol'
@@ -86,13 +86,17 @@ export class EditSession {
     this.frameBase = frameBase
   }
 
-  /** Where Claude Code asks whether a push's Artifact call is the expected one. */
+  /** Where the push's Claude Code session reports each call and asks for the next. */
   servePushGuardAt(url: string): void {
     this.pusher.serveGuardAt(url)
   }
 
-  decidePushCall(secret: string | undefined, toolName: unknown, input: unknown): HookReply | null {
-    return this.pusher.decide(secret, toolName, input)
+  knowsPushSecret(secret: string | undefined): boolean {
+    return this.pusher.knowsSecret(secret)
+  }
+
+  receivePushHook(event: HookEvent): Promise<HookReply> {
+    return this.pusher.receiveHook(event)
   }
 
   get editorState(): EditorState {

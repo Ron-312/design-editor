@@ -2,6 +2,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'n
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { CLAUDE_OVERRIDE } from '../../src/push/claude'
+import { TERMINAL_OVERRIDE } from '../../src/push/terminal'
 
 const SCRIPT = fileURLToPath(new URL('./fake-claude-cli.mjs', import.meta.url))
 
@@ -14,7 +15,6 @@ export interface FakeBehaviour {
   readonly hang?: boolean
   readonly talkOnly?: boolean
   readonly twice?: boolean
-  readonly apiError?: string
   /** Changed inputs tried before the one that was asked for. */
   readonly strays?: readonly Record<string, unknown>[]
 }
@@ -35,7 +35,7 @@ export class FakeClaude {
   }
 
   get env(): Record<string, string> {
-    return { [CLAUDE_OVERRIDE]: this.command, FAKE_CLAUDE_HOME: this.home }
+    return { [CLAUDE_OVERRIDE]: this.command, [TERMINAL_OVERRIDE]: 'none', FAKE_CLAUDE_HOME: this.home }
   }
 
   behave(behaviour: FakeBehaviour): void {
@@ -44,6 +44,10 @@ export class FakeClaude {
 
   calls(): { action: string; allowed: boolean }[] {
     return this.lines('calls.log') as { action: string; allowed: boolean }[]
+  }
+
+  reads(): { file: string; allowed: boolean }[] {
+    return this.lines('reads.log') as { file: string; allowed: boolean }[]
   }
 
   publishes(): Record<string, unknown>[] {

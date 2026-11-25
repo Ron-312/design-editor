@@ -253,6 +253,14 @@ describe('the Push button', () => {
     expect(text()).toContain('Test Site already has everything here')
   })
 
+  it('says only what came in when nothing was sent', () => {
+    const { container, text } = mountPush({ ...idle, outcome: { kind: 'pushed', title: 'Test Site', sent: [], received: ['project/card.dc.html' as ProjectPath] } })
+    click(button(container, 'Push'))
+
+    expect(text()).toContain('Brought in from Claude Design: card.dc.html')
+    expect(text()).not.toContain('already has everything')
+  })
+
   it('never starts a second push while one runs, whoever runs it', () => {
     const own = mountPush({ ...idle, step: 'checking' }, { locked: true })
     click(button(own.container, 'Push'))
@@ -266,7 +274,7 @@ describe('the Push button', () => {
     expect(other.text()).toContain('Another push is running')
   })
 
-  it.each(['starting', 'checking', 'merging'] as const)('can be cancelled while %s', (step) => {
+  it.each(['starting', 'opening', 'checking', 'merging'] as const)('can be cancelled while %s', (step) => {
     const { container, onCancel } = mountPush({ ...idle, step })
     click(button(container, 'Push'))
 
@@ -280,6 +288,13 @@ describe('the Push button', () => {
     click(button(container, 'Push'))
 
     expect(text()).not.toContain('Cancel')
+  })
+
+  it('says what the window that opens will ask', () => {
+    const { container, text } = mountPush({ ...idle, step: 'opening' })
+    click(button(container, 'Push'))
+
+    expect(text()).toContain('trust this folder')
   })
 
   it('says how to sign in, and tries again on request', () => {

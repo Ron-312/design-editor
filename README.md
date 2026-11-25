@@ -34,9 +34,10 @@ The builds are not signed with a paid certificate yet:
 - **macOS:** the first time, right-click the app → **Open** → **Open**.
 - **Windows:** on the SmartScreen prompt, click **More info** → **Run anyway**.
 
-Pulling still happens in Claude Code (`/design-pull`). The **Push** button sends your edits back by itself:
-it runs [Claude Code](https://claude.com/claude-code) in the background, so that must be installed and
-signed in (`claude auth login`). A project pulled before this asks once for its canvas link.
+Pulling still happens in Claude Code (`/design-pull`). The **Push** button sends your edits back:
+it opens a terminal window running [Claude Code](https://claude.com/claude-code), which must be installed and
+signed in (`claude auth login`), and closes it when the push is done. The first push of a folder asks you to
+trust it. A project pulled before this asks once for its canvas link.
 
 ## Getting started
 
@@ -60,7 +61,8 @@ straight into the canvas files. When you're done, press **Push**.
 
 Push does a three-way merge with whatever changed in Claude Design meanwhile and stops on any conflict
 instead of overwriting; run `/design-push` in Claude Code to settle one. The editor does the merging itself.
-Claude Code only fetches the canvas and makes one publish, and the editor refuses any other call.
+Claude Code only fetches the canvas, reads the files being sent and makes one publish, and the editor
+refuses any other call.
 
 To run the editor on an already-pulled project yourself: `npm start -- --project projects/<slug>`.
 

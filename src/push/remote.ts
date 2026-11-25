@@ -3,8 +3,9 @@ import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { isPortablePath, toNativePath } from '../shared/paths'
 import type { ProjectPath } from '../shared/types'
-import { PushError, type CallResult, type Claude } from './claude'
-import type { ArtifactInput, PushGuard } from './guard'
+import type { CallResult, Conversation } from './conversation'
+import { PushError } from './errors'
+import type { ArtifactInput } from './guard'
 
 export interface RemoteFile {
   readonly path: string
@@ -45,13 +46,20 @@ function unreadable(what: string): PushError {
   return new PushError('error', `Claude Code's answer had no ${what}, so nothing was sent. A newer Claude Code may have changed its format.`)
 }
 
-/** The canvas on Claude Design, reached only through calls the guard expects one at a time. */
+/** The canvas on Claude Design, reached only through Claude Code's Artifact calls, one at a time. */
 export class RemoteCanvas {
   constructor(
-    private readonly claude: Claude,
-    private readonly guard: PushGuard,
+    private readonly conversation: Conversation,
     private readonly url: string,
   ) {}
+
+  /**
+   * Must come first: a publish is refused unless this version was looked at, so a change made after this call is
+   * never overwritten, and reading the files alone does not count.
+   */
+  async look(): Promise<void> {
+    await this.required({ action: 'read', url: this.url })
+  }
 
   /** Every `project/*` file with its checksum. */
   async list(): Promise<RemoteFile[]> {
@@ -93,9 +101,13 @@ export class RemoteCanvas {
     }
   }
 
-  /** The one publish; the caller compares checksums afterwards rather than trusting this answer. */
-  publish(root: string, files: Readonly<Record<string, string>>): Promise<CallResult> {
-    return this.call({ action: 'publish', url: this.url, root, files })
+  /** The one publish of `files` under `root`; the caller compares checksums afterwards rather than trusting this answer. */
+  publish(projectDir: string, root: string, files: readonly ProjectPath[]): Promise<CallResult> {
+    const sources = files.map((file) => path.join(projectDir, ...root.split('/'), ...file.split('/')))
+    const others = Object.fromEntries(files.slice(1).map((file) => [file, file]))
+    const input = { action: 'publish', url: this.url, root, file_path: sources[0]!, ...(files.length > 1 ? { files: others } : {}) }
+    this.conversation.guard.expectPublish(input, sources)
+    return this.conversation.call(input, sources)
   }
 
   private savedIn(read: unknown): SavedFile[] {
@@ -105,18 +117,9 @@ export class RemoteCanvas {
   }
 
   private async required(input: ArtifactInput): Promise<CallResult> {
-    const result = await this.call(input)
+    const result = await this.conversation.call(input)
     if (result.failed) throw new PushError('error', `Claude Design refused: ${firstLine(result.text)}`)
     return result
-  }
-
-  private async call(input: ArtifactInput): Promise<CallResult> {
-    this.guard.expect(input)
-    try {
-      return await this.claude.call(input)
-    } finally {
-      this.guard.expect(null)
-    }
   }
 }
 

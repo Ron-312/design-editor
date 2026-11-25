@@ -1,68 +1,87 @@
+import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { PushGuard, type ArtifactInput } from '../../src/push/guard'
 
-const URL = 'https://claude.ai/artifact/abc'
-const PUBLISH: ArtifactInput = { action: 'publish', url: URL, root: '.editor/outbox', files: { 'project/a.dc.html': 'project/a.dc.html' } }
-const READ: ArtifactInput = { action: 'read', url: URL, paths: ['project/a.dc.html', 'project/canvas.json'] }
+const CANVAS = 'https://claude.ai/artifact/abc'
+const SOURCE = path.resolve('/p/.editor/outbox/project/a.dc.html')
+const PUBLISH: ArtifactInput = { action: 'publish', url: CANVAS, root: '.editor/outbox', file_path: SOURCE, files: { 'project/b.dc.html': 'project/b.dc.html' } }
 
-const decisionOf = (guard: PushGuard, input: unknown, tool: unknown = 'Artifact') => guard.decide(tool, input).hookSpecificOutput.permissionDecision
+const allows = (guard: PushGuard, input: unknown, tool: unknown = 'Artifact') => guard.decide(tool, input).allow
 
-function expecting(input: ArtifactInput): PushGuard {
-  const guard = new PushGuard()
-  guard.expect(input)
+function expecting(): PushGuard {
+  const guard = new PushGuard(CANVAS)
+  guard.expectPublish(PUBLISH, [SOURCE])
   return guard
 }
 
 describe('PushGuard', () => {
   it('allows the exact publish that was asked for, once', () => {
-    const guard = expecting(PUBLISH)
+    const guard = expecting()
 
-    expect(decisionOf(guard, structuredClone(PUBLISH))).toBe('allow')
-    expect(decisionOf(guard, structuredClone(PUBLISH))).toBe('deny')
+    expect(allows(guard, structuredClone(PUBLISH))).toBe(true)
+    expect(allows(guard, structuredClone(PUBLISH))).toBe(false)
   })
 
   it('allows a publish that leaves out the default action', () => {
-    expect(decisionOf(expecting(PUBLISH), { url: URL, root: '.editor/outbox', files: { 'project/a.dc.html': 'project/a.dc.html' } })).toBe('allow')
+    expect(allows(expecting(), Object.fromEntries(Object.entries(PUBLISH).filter(([key]) => key !== 'action')))).toBe(true)
   })
 
   it.each<[string, Record<string, unknown>]>([
     ['another canvas', { url: 'https://claude.ai/artifact/other' }],
-    ['another source file', { files: { 'project/a.dc.html': '/etc/passwd' } }],
-    ['an extra file', { files: { 'project/a.dc.html': 'project/a.dc.html', 'project/b.dc.html': 'project/b.dc.html' } }],
+    ['another source file', { file_path: '/etc/passwd' }],
+    ['an extra file', { files: { 'project/b.dc.html': 'project/b.dc.html', 'project/c.dc.html': 'project/c.dc.html' } }],
     ['another root', { root: '/' }],
     ['a forced overwrite', { force: true }],
     ['new capabilities', { capabilities: { db: {} } }],
     ['a delete', { action: 'delete' }],
+    ['a pin', { action: 'pin' }],
   ])('denies the publish with %s', (_label, change) => {
-    expect(decisionOf(expecting(PUBLISH), { ...PUBLISH, ...change })).toBe('deny')
+    expect(allows(expecting(), { ...PUBLISH, ...change })).toBe(false)
   })
 
-  it('denies a publish while a read is expected, and a read of other paths', () => {
-    expect(decisionOf(expecting(READ), PUBLISH)).toBe('deny')
-    expect(decisionOf(expecting(READ), { ...READ, paths: ['project/secret'] })).toBe('deny')
+  it('denies any publish before one is expected', () => {
+    expect(allows(new PushGuard(CANVAS), PUBLISH)).toBe(false)
   })
 
-  it('allows the expected read again and in any path order', () => {
-    const guard = expecting(READ)
+  it.each<[string, Record<string, unknown>]>([
+    ['reading the canvas', { action: 'read', url: CANVAS }],
+    ['reading its files', { action: 'read', url: CANVAS, paths: ['project/a.dc.html'] }],
+    ['listing it', { action: 'list', url: CANVAS, scope: 'files' }],
+  ])('allows %s at any time', (_label, input) => {
+    expect(allows(new PushGuard(CANVAS), input)).toBe(true)
+  })
 
-    expect(decisionOf(guard, { ...READ, paths: ['project/canvas.json', 'project/a.dc.html'] })).toBe('allow')
-    expect(decisionOf(guard, READ)).toBe('allow')
+  it.each<[string, Record<string, unknown>]>([
+    ['reading another canvas', { action: 'read', url: 'https://claude.ai/artifact/other' }],
+    ['saving a read somewhere else', { action: 'read', url: CANVAS, path: 'project/a.dc.html', out_dir: '/Users/x' }],
+    ['listing every artifact', { action: 'list' }],
+  ])('denies %s', (_label, input) => {
+    expect(allows(new PushGuard(CANVAS), input)).toBe(false)
+  })
+
+  it('lets Claude read only the files being sent', () => {
+    const guard = expecting()
+
+    expect(allows(guard, { file_path: SOURCE }, 'Read')).toBe(true)
+    expect(allows(guard, { file_path: path.join(SOURCE, '..', '..', 'project', 'a.dc.html') }, 'Read')).toBe(true)
+    expect(allows(guard, { file_path: '/etc/passwd' }, 'Read')).toBe(false)
+    expect(allows(guard, { file_path: path.join(SOURCE, '..', 'b.dc.html') }, 'Read')).toBe(false)
+    expect(allows(guard, {}, 'Read')).toBe(false)
   })
 
   it.each([[null], ['text'], [undefined], [[]]])('denies an input that is %j', (input) => {
-    expect(decisionOf(expecting(PUBLISH), input)).toBe('deny')
+    expect(allows(expecting(), input)).toBe(false)
   })
 
-  it('denies every other tool, and everything while no call is expected', () => {
-    expect(decisionOf(expecting(PUBLISH), PUBLISH, 'Bash')).toBe('deny')
-    expect(decisionOf(new PushGuard(), PUBLISH)).toBe('deny')
+  it('denies every other tool', () => {
+    expect(allows(expecting(), PUBLISH, 'Bash')).toBe(false)
   })
 
   it('knows only its own secret', () => {
-    const guard = new PushGuard()
+    const guard = new PushGuard(CANVAS)
 
     expect(guard.hasSecret(guard.secret)).toBe(true)
-    expect(guard.hasSecret(new PushGuard().secret)).toBe(false)
+    expect(guard.hasSecret(new PushGuard(CANVAS).secret)).toBe(false)
     expect(guard.hasSecret('')).toBe(false)
     expect(guard.hasSecret(undefined)).toBe(false)
   })

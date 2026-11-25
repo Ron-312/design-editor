@@ -31,7 +31,8 @@ node tools/edsync.mjs lock --slug <slug>
    holds the lock or the editor did not answer in time: report the message to the user and stop.
    From here on, every way out of this skill runs the unlock in step 6.
 
-2. **Re-read the remote.** List the canvas's files with the Artifact tool (`action: "list"`,
+2. **Re-read the remote.** Read the canvas with the Artifact tool (`action: "read"` and its `url` alone):
+   a publish is refused without it. Then list the canvas's files with the Artifact tool (`action: "list"`,
    `scope: "files"`), then read every `project/*` file plus `project/canvas.json` in one Artifact
    `read` with `paths`. Let the files land in the tool's default scratchpad folder: never point the
    read into the project. The folder the result names is the snapshot folder.
@@ -63,8 +64,9 @@ node tools/edsync.mjs lock --slug <slug> --nonce <nonce>
 
    A non-zero exit means the lock is gone or another push holds it: send nothing, report its message,
    unlock (step 6) and stop. On exit 0 make a single Artifact publish to the canvas `url` with `root` and
-   `files` exactly as classify printed them: one call carrying every changed artboard, never one call
-   per artboard.
+   `files` exactly as classify printed them, except that the first entry's source is passed as its absolute
+   path in `file_path` instead: one call carrying every changed artboard, never one call per artboard. Read
+   each file being sent first.
 
    If the publish is refused because the remote changed since step 2, report the refusal to the user,
    delete the lock with `node tools/edsync.mjs unlock --slug <slug> --nonce <nonce>`, and leave the

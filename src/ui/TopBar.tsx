@@ -189,7 +189,8 @@ function plural(count: number, noun: string): string {
 }
 
 const STEP_LABELS: Readonly<Record<PushStep, string>> = {
-  starting: 'Starting Claude Code…',
+  starting: 'Starting…',
+  opening: 'Waiting for the Claude Code window…',
   checking: 'Reading the canvas from Claude Design…',
   merging: 'Merging…',
   sending: 'Sending your edits…',
@@ -215,7 +216,8 @@ function PushedReport({ outcome }: { readonly outcome: PushedOutcome }) {
   return (
     <>
       <strong>{sent.length > 0 ? `Pushed to ${title}` : 'Up to date'}</strong>
-      {sent.length > 0 ? <p>Sent {sent.map(fileName).join(', ')}.</p> : <p>{title} already has everything here.</p>}
+      {sent.length > 0 && <p>Sent {sent.map(fileName).join(', ')}.</p>}
+      {sent.length + received.length === 0 && <p>{title} already has everything here.</p>}
       {received.length > 0 && <p>Brought in from Claude Design: {received.map(fileName).join(', ')}.</p>}
     </>
   )
@@ -283,6 +285,7 @@ export function PushButton({ pending, locked, push, onStart, onCancel }: PushBut
         <div className="menu push-pop" role="dialog" aria-label="Push">
           <div role="status">
             {push.step && <strong>{STEP_LABELS[push.step]}</strong>}
+            {push.step === 'opening' && <p>A terminal window opens. The first time, it asks you to trust this folder: choose Yes.</p>}
             {!running && push.outcome?.kind === 'pushed' && <PushedReport outcome={push.outcome} />}
             {!running && push.outcome?.kind === 'failed' && <FailedReport outcome={push.outcome} />}
             {!running && locked && <p>Another push is running. Editing resumes when it finishes.</p>}

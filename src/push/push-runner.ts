@@ -1,5 +1,6 @@
-import { mkdir, readFile, rm } from 'node:fs/promises'
+import { mkdir, readFile, realpath, rm } from 'node:fs/promises'
 import path from 'node:path'
+import { setTimeout as delay } from 'node:timers/promises'
 import { atomicWrite } from '../core/atomic-write'
 import { cacheFetched } from '../edsync/cache'
 import { readCanvasLink, saveCanvasLink } from '../edsync/canvas-link'
@@ -10,9 +11,12 @@ import { toNativePath } from '../shared/paths'
 import { CURRENT_RELEASE_FILE, EDITOR_DIR, EDITOR_FILES } from '../shared/protocol'
 import { canvasLink, IDLE_PUSH, isCancellable, type PushOutcome, type PushState, type PushStep } from '../shared/push'
 import type { ProjectPath } from '../shared/types'
-import { assertSignedIn, findClaude, openClaude, PushError, type Claude } from './claude'
-import { GUARD_HEADER, PushGuard, type HookReply } from './guard'
+import { assertSignedIn, claudeArgs, findClaude } from './claude'
+import { Conversation, HOOK_TIMEOUT_S, type HookEvent, type HookReply } from './conversation'
+import { PushError } from './errors'
+import { GUARD_HEADER, PushGuard } from './guard'
 import { firstLine, RemoteCanvas, sha256, type RemoteFile } from './remote'
+import { openTerminal, type TerminalWindow } from './terminal'
 
 export interface PushHost {
   /** Flushes pending edits and locks the canvas; null while another push holds it. */
@@ -23,24 +27,31 @@ export interface PushHost {
 
 const OUTBOX = `${EDITOR_DIR}/outbox`
 const WORK_DIR = `${EDITOR_DIR}/push`
+const SETTINGS_FILE = `${WORK_DIR}/settings.json`
 const ARTBOARD = /\.dc\.html$/
 const MAX_ASSET_ROUNDS = 5
 const OWNER_ONLY = 0o600
-const GUARD_TIMEOUT_S = 10
+const HOOK_EVENTS = ['PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'Stop'] as const
+/** Claude gets this long to say it is done before its window is closed under it. */
+const GOODBYE_MS = 6_000
+const CLOSE_LIMIT_MS = 5_000
 
+const WINDOW_CLOSED = 'The Claude Code window was closed before the push finished.'
+const CANCELLED = 'The push was cancelled. Nothing was sent.'
 const NO_CLAUDE = 'Push needs Claude Code on this computer. Install it from claude.com/claude-code, then push again.'
 const NO_CANVAS = 'This project does not know its canvas yet. Paste its claude.ai link.'
 const WRONG_CANVAS = 'That canvas does not match this project, so nothing was sent. Check the link.'
 const CONFLICT = 'These files changed in Claude Design and here in the same place. Nothing was sent.'
 const ARTBOARDS = 'Artboards can only be added or removed in Claude Design. Nothing was sent.'
 
-/** The push the Push button starts: the same steps as `/design-push`, with Claude Code making only the Artifact calls. */
+/** The push the Push button starts: the same steps as `/design-push`, with a Claude Code window making only the Artifact calls. */
 export class PushRunner {
   private state: PushState = IDLE_PUSH
-  private guard: PushGuard | null = null
-  private claude: Claude | null = null
+  private conversation: Conversation | null = null
+  private window: TerminalWindow | null = null
   private cancelled = false
   private running: Promise<void> | null = null
+  private closing: Promise<void> = Promise.resolve()
   private guardUrl = ''
 
   constructor(
@@ -60,9 +71,12 @@ export class PushRunner {
     return this.state
   }
 
-  /** Null for a secret that is not the running push's, which Claude Code then treats as a denial. */
-  decide(secret: string | undefined, toolName: unknown, input: unknown): HookReply | null {
-    return this.guard?.hasSecret(secret) ? this.guard.decide(toolName, input) : null
+  knowsSecret(secret: string | undefined): boolean {
+    return this.conversation?.guard.hasSecret(secret) === true
+  }
+
+  async receiveHook(event: HookEvent): Promise<HookReply> {
+    return this.conversation?.receive(event) ?? {}
   }
 
   start(pasted?: string): Promise<void> {
@@ -73,14 +87,15 @@ export class PushRunner {
   cancel(): void {
     if (!isCancellable(this.state.step)) return
     this.cancelled = true
-    this.claude?.close()
+    this.conversation?.end(new PushError('cancelled', CANCELLED))
   }
 
   /** A push past cancelling is given up on: its publish may have landed, and the next push then finds it unchanged. */
   async close(): Promise<void> {
     this.cancelled = true
-    this.claude?.close()
+    this.conversation?.end(new PushError('cancelled', CANCELLED))
     await this.running
+    await this.closing
   }
 
   private show(change: Partial<PushState>): void {
@@ -89,13 +104,14 @@ export class PushRunner {
   }
 
   private enter(step: PushStep): void {
-    if (this.cancelled && isCancellable(this.state.step)) throw new PushError('cancelled', 'The push was cancelled. Nothing was sent.')
+    if (this.cancelled && isCancellable(this.state.step)) throw new PushError('cancelled', CANCELLED)
     this.show({ step })
   }
 
   private async run(pasted: string | undefined): Promise<void> {
     this.cancelled = false
     this.show({ step: 'starting', outcome: null })
+    await this.closing
     let nonce: string | null = null
     let outcome: PushOutcome
     try {
@@ -109,10 +125,7 @@ export class PushRunner {
     } catch (error) {
       outcome = failure(error)
     }
-    this.claude?.close()
-    this.claude = null
-    this.guard = null
-    await rm(this.path(WORK_DIR), { recursive: true, force: true }).catch(() => undefined)
+    this.closing = this.closeWindow()
     try {
       if (nonce !== null) await this.host.endPush(nonce)
     } finally {
@@ -128,10 +141,18 @@ export class PushRunner {
 
   private async push(command: string, url: string, isNewLink: boolean, nonce: string): Promise<PushOutcome> {
     const slug = path.basename(this.root)
-    this.guard = new PushGuard()
+    this.enter('opening')
+    const conversation = new Conversation(new PushGuard(url))
+    this.conversation = conversation
+    const settings = await this.writeSettings(conversation.guard)
+    const remote = new RemoteCanvas(conversation, url)
+    // Expected before the window opens, so its first hook finds the call waiting.
+    const firstLook = remote.look()
+    firstLook.catch(() => undefined)
+    this.window = await openTerminal({ dir: path.dirname(settings), command, args: claudeArgs(SETTINGS_FILE, url) })
+    this.window.onClosed(() => conversation.end(new PushError('error', WINDOW_CLOSED)))
+    await firstLook
     this.enter('checking')
-    this.claude = openClaude(command, { cwd: this.root, settingsFile: await this.writeSettings(this.guard) })
-    const remote = new RemoteCanvas(this.claude, this.guard, url)
     const files = await remote.list()
     const { title, dir } = await remote.snapshot(files, this.path(WORK_DIR, 'snapshot'))
     if (isNewLink) await this.adoptLink(url, dir, files)
@@ -154,7 +175,7 @@ export class PushRunner {
 
   /** The checksums Claude Design lists afterwards decide, not the publish's own answer. */
   private async send(remote: RemoteCanvas, sent: readonly ProjectPath[]): Promise<void> {
-    const published = await remote.publish(OUTBOX, Object.fromEntries(sent.map((file) => [file, file])))
+    const published = await remote.publish(await realpath(this.root), OUTBOX, sent)
     this.enter('confirming')
     const landed = new Map((await remote.list()).map((file) => [file.path, file.sha256]))
     for (const file of sent) {
@@ -194,15 +215,33 @@ export class PushRunner {
     }
   }
 
+  /** Runs behind the outcome: Claude says goodbye, its window's process ends, and only then is its folder removed. */
+  private async closeWindow(): Promise<void> {
+    const { conversation, window } = this
+    const wasCancelled = this.cancelled
+    conversation?.end(new PushError('cancelled', CANCELLED))
+    if (window) {
+      const closed = new Promise<void>((resolve) => window.onClosed(resolve))
+      const stopped = new Promise<void>((resolve) => conversation?.onStopped(resolve))
+      if (!wasCancelled) await Promise.race([closed, stopped, delay(GOODBYE_MS)])
+      window.close()
+      await Promise.race([closed, delay(CLOSE_LIMIT_MS)])
+    }
+    this.window = null
+    this.conversation = null
+    await rm(this.path(WORK_DIR), { recursive: true, force: true }).catch(() => undefined)
+  }
+
   private path(...parts: string[]): string {
     return path.join(this.root, ...parts.flatMap((part) => part.split('/')))
   }
 
   /** In a file, since command-line arguments are visible to every process of every user. */
   private async writeSettings(guard: PushGuard): Promise<string> {
-    const hook = { type: 'http', url: this.guardUrl, headers: { [GUARD_HEADER]: guard.secret }, timeout: GUARD_TIMEOUT_S }
-    const settings = { hooks: { PreToolUse: [{ matcher: '*', hooks: [hook] }] } }
-    const file = this.path(WORK_DIR, 'settings.json')
+    const hook = { type: 'http', url: this.guardUrl, headers: { [GUARD_HEADER]: guard.secret }, timeout: HOOK_TIMEOUT_S }
+    const settings = { hooks: Object.fromEntries(HOOK_EVENTS.map((name) => [name, [{ matcher: '*', hooks: [hook] }]])) }
+    const file = this.path(SETTINGS_FILE)
+    await rm(path.dirname(file), { recursive: true, force: true })
     await mkdir(path.dirname(file), { recursive: true })
     await atomicWrite(file, Buffer.from(JSON.stringify(settings)), { mode: OWNER_ONLY })
     return file

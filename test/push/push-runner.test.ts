@@ -105,9 +105,9 @@ describe('the Push button’s push', () => {
     expect(remoteText(HOME)).toBe(workspace.local(HOME).toString('utf8'))
     expect(workspace.status()).toEqual([])
     expect(await readPushLock(workspace.projectDir)).toBeNull()
-    expect(existsSync(path.join(workspace.projectDir, '.editor', 'push'))).toBe(false)
+    await until(() => !existsSync(path.join(workspace.projectDir, '.editor', 'push')))
     expect(existsSync(path.join(workspace.projectDir, '.editor', 'outbox'))).toBe(false)
-    expect(steps()).toEqual(expect.arrayContaining(['starting', 'checking', 'merging', 'sending', 'confirming', null]))
+    expect(steps()).toEqual(expect.arrayContaining(['starting', 'opening', 'checking', 'merging', 'sending', 'confirming', null]))
   })
 
   it('makes one publish of only the changed files, through the outbox', async () => {
@@ -115,8 +115,22 @@ describe('the Push button’s push', () => {
 
     await push()
 
-    expect(claude.publishes()).toEqual([{ action: 'publish', url: LINK, root: '.editor/outbox', files: { [HOME]: HOME } }])
-    expect(claude.started().cwd).toBe(realpathSync.native(workspace.projectDir))
+    const source = path.join(realpathSync.native(workspace.projectDir), '.editor', 'outbox', ...HOME.split('/'))
+    expect(claude.publishes()).toEqual([{ action: 'publish', url: LINK, root: '.editor/outbox', file_path: source }])
+    expect(claude.reads()).toEqual([{ file: source, allowed: true }])
+    expect(realpathSync.native(claude.started().cwd)).toBe(realpathSync.native(workspace.projectDir))
+  })
+
+  it('sends several files in the one publish, each read by Claude first', async () => {
+    workspace.editLocal(HOME, EDITS.homeTitle)
+    workspace.editLocal(CARD, EDITS.cardText)
+
+    expect(await push()).toMatchObject({ kind: 'pushed', sent: [CARD, HOME] })
+
+    expect(claude.publishes()).toHaveLength(1)
+    expect(claude.reads().map((read) => path.basename(read.file))).toEqual(['card.dc.html', 'home.dc.html'])
+    expect(remoteText(CARD)).toBe(workspace.local(CARD).toString('utf8'))
+    expect(remoteText(HOME)).toBe(workspace.local(HOME).toString('utf8'))
   })
 
   it('publishes nothing when both sides already agree', async () => {
@@ -181,11 +195,11 @@ describe('the Push button’s push', () => {
 describe('what Claude may do during a push', () => {
   it('denies calls that differ from the one asked for, whatever made Claude try them', async () => {
     workspace.editLocal(HOME, EDITS.homeTitle)
-    claude.behave({ strays: [{ action: 'delete' }, { url: 'https://claude.ai/artifact/Another' }, { action: 'publish', files: { [HOME]: '/etc/passwd' } }] })
+    claude.behave({ strays: [{ action: 'delete' }, { url: 'https://claude.ai/artifact/Another' }, { action: 'publish', file_path: '/etc/passwd' }] })
 
     expect(await push()).toMatchObject({ kind: 'pushed', sent: [HOME] })
 
-    expect(claude.calls().filter((call) => call.allowed).map((call) => call.action)).toEqual(['list', 'read', 'publish', 'list'])
+    expect(claude.calls().filter((call) => call.allowed).map((call) => call.action)).toEqual(['read', 'list', 'read', 'publish', 'list'])
     expect(claude.publishes()).toHaveLength(1)
   })
 
@@ -232,18 +246,6 @@ describe('when a push cannot finish', () => {
     expect(claude.wasStarted()).toBe(false)
   })
 
-  it('says to sign in when the sign-in turns out to be expired', async () => {
-    claude.behave({ apiError: 'Failed to authenticate: OAuth session expired and could not be refreshed' })
-
-    expect(await push()).toMatchObject({ kind: 'failed', reason: 'signedOut' })
-  })
-
-  it('passes on any other error Claude ends with', async () => {
-    claude.behave({ apiError: 'API Error: overloaded' })
-
-    expect(await push()).toMatchObject({ kind: 'failed', reason: 'error', message: 'API Error: overloaded' })
-  })
-
   it('says when Claude Code is not installed', async () => {
     vi.stubEnv('DESIGN_EDITOR_CLAUDE', path.join(sandbox, 'nowhere', 'claude'))
 
@@ -251,7 +253,7 @@ describe('when a push cannot finish', () => {
   })
 
   it.each([
-    ['crashes', { crash: true }],
+    ['’s window is closed', { crash: true }],
     ['answers without the call', { talkOnly: true }],
     ['reads only some of the files', { partialRead: true }],
     ['is refused the publish', { refusePublish: true }],
@@ -281,6 +283,12 @@ describe('when a push cannot finish', () => {
     claude.behave({})
 
     expect(await push()).toMatchObject({ kind: 'pushed', sent: [HOME] })
+  })
+
+  it('says the window was closed when it was', async () => {
+    claude.behave({ crash: true })
+
+    expect(await push()).toMatchObject({ message: expect.stringContaining('window was closed') })
   })
 
   it('can be cancelled while it waits on Claude, sending nothing', async () => {

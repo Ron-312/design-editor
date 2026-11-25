@@ -16,7 +16,8 @@ import {
   WS_TOKEN_PARAM,
   type PushEndRequest,
 } from '../../shared/protocol'
-import { GUARD_HEADER, type HookReply } from '../../push/guard'
+import type { HookEvent, HookReply } from '../../push/conversation'
+import { GUARD_HEADER } from '../../push/guard'
 import { contentTypeOf } from './blob-cache'
 
 /** The editor page reads the per-launch token from this meta tag; project documents never carry it. */
@@ -27,8 +28,8 @@ export interface EditorEndpoints {
   /** `nonce` is the caller's own, so a caller that gave up waiting can still end the push it asked for. */
   beginPush(nonce?: string): Promise<string | null>
   endPush(nonce: string): Promise<boolean>
-  /** Null when `secret` is not the running push's. */
-  decidePushCall(secret: string | undefined, toolName: unknown, input: unknown): HookReply | null
+  knowsPushSecret(secret: string | undefined): boolean
+  receivePushHook(event: HookEvent): Promise<HookReply>
 }
 
 export interface EditorServerOptions {
@@ -50,8 +51,8 @@ export interface EditorServer {
 const VITE_CONFIG = fileURLToPath(new URL('../../../vite.config.ts', import.meta.url))
 const INDEX_HTML = 'index.html'
 const MAX_BODY_BYTES = 4096
-/** A hook call carries the tool's whole input, which for a publish lists every file. */
-const MAX_HOOK_BODY_BYTES = 256 * 1024
+/** After a read, a hook call carries the text of the files read. */
+const MAX_HOOK_BODY_BYTES = 64 * 1024 * 1024
 
 interface Reply {
   readonly status: number
@@ -121,7 +122,7 @@ function nonceOf(body: string): string | null {
   }
 }
 
-function hookCallOf(body: string): { tool_name?: unknown; tool_input?: unknown } {
+function hookEventOf(body: string): HookEvent {
   try {
     const call: unknown = JSON.parse(body)
     return typeof call === 'object' && call !== null ? call : {}
@@ -203,9 +204,8 @@ class EditorRoutes {
   private async pushGuard(request: http.IncomingMessage): Promise<Reply> {
     if (request.method !== 'POST') return plain(405, 'Method not allowed')
     const secret = request.headers[GUARD_HEADER]
-    const { tool_name: toolName, tool_input: input } = hookCallOf(await readBody(request, MAX_HOOK_BODY_BYTES))
-    const decision = this.endpoints.decidePushCall(typeof secret === 'string' ? secret : undefined, toolName, input)
-    return decision ? json(decision) : plain(403, 'Forbidden')
+    if (!this.endpoints.knowsPushSecret(typeof secret === 'string' ? secret : undefined)) return plain(403, 'Forbidden')
+    return json(await this.endpoints.receivePushHook(hookEventOf(await readBody(request, MAX_HOOK_BODY_BYTES))))
   }
 
   private shutdown(): Reply {

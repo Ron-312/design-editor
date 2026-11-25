@@ -296,19 +296,26 @@ button can be added after v1 by running `claude -p "/design-push"` without chang
 
 **Push button (after v1, `src/push/`).** The button runs the push inside the editor, not a skill session: the
 editor takes the lock, classifies, merges and commits with the same functions as `edsync`
-(`src/edsync/push-steps.ts`), and one `claude -p` process makes only the Artifact calls (list, read, one
-publish, list). What answers the attack-surface concern above:
+(`src/edsync/push-steps.ts`), and one Claude Code session makes only the Artifact calls. That session is a
+normal one in a terminal window the user sees: Claude Code has no Artifact tool under `claude -p` (its docs, and
+measured 2026-11-25; `enableArtifact` does not bring it back, and posing as another client is not an option).
+The editor steers it through HTTP hooks: each `PostToolUse` is answered, once the editor is ready, with the next
+exact call, and `Stop` sends Claude back to a call it skipped. What the live test showed a push needs: a read of
+the canvas `url` alone before anything else (the server refuses a publish without it, and so also refuses one
+over a change made since), `file_path` beside `root` and `files`, and Claude reading each file before it
+publishes it. What answers the attack-surface concern above:
 - Only the token- and origin-guarded editor ws can start it (`startPush`).
-- Claude gets the Artifact tool alone, no user settings, skills or MCP servers, in `dontAsk` mode with nothing
-  pre-allowed. A `PreToolUse` HTTP hook asks the editor about each call, and the editor allows only the exact
-  input it is waiting for, a publish once (`PushGuard`). A hook that fails leaves the call denied (measured).
+- Claude gets the Artifact and Read tools, no user settings, skills or MCP servers, in `dontAsk` mode with nothing
+  pre-allowed. `PreToolUse` asks the editor about each call (`PushGuard`): looking at that one canvas, reading the
+  files being sent, and one publish with exactly the expected input, once. A hook that fails leaves the call denied.
 - The hook has its own per-push secret, kept in an owner-only file rather than in the arguments.
 - Files are compared by checksum: a read that is short or altered stops the push, and after the publish the
   remote's listed checksums decide whether it landed, not what Claude says.
 - `.editor/canvas.json` holds the canvas link (`edsync ingest --url`). A link pasted into the editor is kept only
   when the canvas has every artboard of the project and at least one still equal to the pulled bytes, since
   merging with the wrong canvas would replace the project's files.
-(decided: Ron, 2026-11-25: "Yes, build it")
+- A closed window ends the push: on macOS the launcher's pid is watched, on Windows `start /wait` is.
+(decided: Ron, 2026-11-25: "Yes, build it", then "Yes, rebuild it" for the visible session)
 
 - **`/design-pull <link or name>`**
   1. Fetches the project into `projects/<slug>/`.

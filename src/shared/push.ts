@@ -1,6 +1,6 @@
 import type { ProjectPath } from './types'
 
-export type PushStep = 'starting' | 'checking' | 'merging' | 'sending' | 'confirming'
+export type PushStep = 'starting' | 'opening' | 'checking' | 'merging' | 'sending' | 'confirming'
 
 export type PushFailure =
   | 'noClaude'
@@ -29,7 +29,7 @@ export const IDLE_PUSH: PushState = { canvas: null, step: null, outcome: null }
 
 /** Once the publish may have left, stopping Claude would leave what landed unknown. */
 export function isCancellable(step: PushStep | null): boolean {
-  return step === 'starting' || step === 'checking' || step === 'merging'
+  return step === 'starting' || step === 'opening' || step === 'checking' || step === 'merging'
 }
 
 const CANVAS_LINK = /^https:\/\/claude\.ai\/(?:code\/)?artifact\/[A-Za-z0-9-]+$/
