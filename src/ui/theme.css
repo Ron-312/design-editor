@@ -195,7 +195,7 @@ html.light .theme-ico .moon{display:block}
 
 /* ============ Toasts ============ */
 .toasts{position:absolute;right:16px;bottom:16px;display:grid;gap:8px;justify-items:end;pointer-events:none}
-.toast{pointer-events:auto;width:344px;padding:12px;border-radius:var(--r-lg);background:var(--panel);box-shadow:var(--pop-shadow);display:grid;grid-template-columns:24px 1fr auto;gap:0 12px;align-items:center}
+.toast{pointer-events:auto;width:344px;padding:12px;border-radius:var(--r-lg);background:var(--panel);box-shadow:var(--pop-shadow);display:grid;grid-template-columns:24px minmax(0,1fr) auto;gap:0 12px;align-items:center}
 .toast .ok{width:24px;height:24px;border-radius:50%;background:color-mix(in srgb,var(--ok) 18%,transparent);color:var(--ok);display:grid;place-items:center}
 .toast .ok svg{width:14px;height:14px}
 .toast.error .ok{background:color-mix(in srgb,var(--measure) 18%,transparent);color:var(--measure)}
